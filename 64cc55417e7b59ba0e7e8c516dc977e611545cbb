@@ -1,0 +1,55 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "6b22818b_d4994a23",
+        "filename": "service/java/com/android/server/wifi/WifiServiceImpl.java",
+        "patchSetId": 1
+      },
+      "lineNbr": 1038,
+      "author": {
+        "id": 1000313
+      },
+      "writtenOn": "2015-02-13T19:44:53Z",
+      "side": 1,
+      "message": "wifi service tell us, this success",
+      "revId": "64cc55417e7b59ba0e7e8c516dc977e611545cbb",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "6b22818b_948fd2d5",
+        "filename": "service/java/com/android/server/wifi/WifiStateMachine.java",
+        "patchSetId": 1
+      },
+      "lineNbr": 2208,
+      "author": {
+        "id": 1000313
+      },
+      "writtenOn": "2015-02-13T19:44:53Z",
+      "side": 1,
+      "message": "this always return my locations country e.g Indonesia (ID)",
+      "revId": "64cc55417e7b59ba0e7e8c516dc977e611545cbb",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "6b22818b_b494ceec",
+        "filename": "service/java/com/android/server/wifi/WifiStateMachine.java",
+        "patchSetId": 1
+      },
+      "lineNbr": 5269,
+      "author": {
+        "id": 1000313
+      },
+      "writtenOn": "2015-02-13T19:44:53Z",
+      "side": 1,
+      "message": "success change country code see my comment\nhttps://gerrit.omnirom.org/#/c/12017/1/service/java/com/android/server/wifi/WifiServiceImpl.java",
+      "revId": "64cc55417e7b59ba0e7e8c516dc977e611545cbb",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}
