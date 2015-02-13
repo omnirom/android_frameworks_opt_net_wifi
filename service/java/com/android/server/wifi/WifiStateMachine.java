@@ -395,6 +395,9 @@ public class WifiStateMachine extends StateMachine {
     /* Tracks current frequency mode */
     private AtomicInteger mFrequencyBand = new AtomicInteger(WifiManager.WIFI_FREQUENCY_BAND_AUTO);
 
+    /* Tracks current country code */
+    private String mCountryCode = "GB";
+
     /* Tracks if we are filtering Multicast v4 packets. Default is to filter. */
     private AtomicBoolean mFilteringMulticastV4Packets = new AtomicBoolean(true);
 
@@ -2334,6 +2337,13 @@ public class WifiStateMachine extends StateMachine {
         } else {
             sendMessage(CMD_SET_COUNTRY_CODE, countryCodeSequence, persist ? 1 : 0, countryCode);
         }
+    }
+
+    /**
+     * Returns the operational country code
+     */
+    public String getCountryCode() {
+        return mCountryCode;
     }
 
     /**
@@ -5485,7 +5495,7 @@ public class WifiStateMachine extends StateMachine {
                     if (mLastSetCountryCode == null
                             || country.equals(mLastSetCountryCode) == false) {
                         if (mWifiNative.setCountryCode(country)) {
-                            mLastSetCountryCode = country;
+                            mLastSetCountryCode = mCountryCode = country;
                         } else {
                             loge("Failed to set country code " + country);
                         }
