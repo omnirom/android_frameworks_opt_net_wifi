@@ -1733,31 +1733,6 @@ public class WifiAutoJoinController {
                 weakRssiBailCount -= 1;
         }
 
-        long lastUnwanted =
-                System.currentTimeMillis()
-                        - mWifiConfigStore.lastUnwantedNetworkDisconnectTimestamp;
-        if (candidate == null
-                && lastSelectedConfiguration == null
-                && currentConfiguration == null
-                && didBailDueToWeakRssi
-                && (mWifiConfigStore.lastUnwantedNetworkDisconnectTimestamp == 0
-                    || lastUnwanted > (1000 * 60 * 60 * 24 * 7))
-                ) {
-            // We are bailing out of autojoin although we are seeing a weak configuration, and
-            // - we didn't find another valid candidate
-            // - we are not connected
-            // - without a user network selection choice
-            // - ConnectivityService has not triggered an unwanted network disconnect
-            //       on this device for a week (hence most likely there is no SIM card or cellular)
-            // If all those conditions are met, then boost the RSSI of the weak networks
-            // that we are seeing so as we will eventually pick one
-            if (weakRssiBailCount < 10)
-                weakRssiBailCount += 1;
-        } else {
-            if (weakRssiBailCount > 0)
-                weakRssiBailCount -= 1;
-        }
-
         /**
          *  If candidate is found, check the state of the connection so as
          *  to decide if we should be acting on this candidate and switching over
