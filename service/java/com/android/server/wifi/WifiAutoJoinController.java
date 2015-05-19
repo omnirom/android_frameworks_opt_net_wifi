@@ -1532,14 +1532,24 @@ public class WifiAutoJoinController {
                 if (now > config.lastRoamingFailure
                         && (now - config.lastRoamingFailure)
                         < config.roamingFailureBlackListTimeMilli) {
-                    if (DBG) {
-                        logDbg("compareNetwork not switching to " + config.configKey()
-                                + " from current " + currentConfiguration.configKey()
-                                + " because it is blacklisted due to roam failure, "
-                                + " blacklist remain time = "
-                                + (now - config.lastRoamingFailure) + " ms");
+                    if (!mWifiConfigStore.isAggressiveBlacklisting()) {
+                        if (DBG) {
+                            logDbg("compareNetwork would blacklist switching to " + config.configKey()
+                                    + " from current " + currentConfiguration.configKey()
+                                    + " due to roam failure, "
+                                    + " blacklist remain time = "
+                                    + (now - config.lastRoamingFailure) + " ms");
+                        }
+                    } else {
+                        if (DBG) {
+                            logDbg("compareNetwork not switching to " + config.configKey()
+                                    + " from current " + currentConfiguration.configKey()
+                                    + " because it is blacklisted due to roam failure, "
+                                    + " blacklist remain time = "
+                                    + (now - config.lastRoamingFailure) + " ms");
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
 

@@ -1998,7 +1998,7 @@ public class WifiConfigStore extends IpConfigStore {
                     if (key.startsWith(NUM_AUTH_FAILURES_KEY)) {
                         String num = key.replace(NUM_AUTH_FAILURES_KEY, "");
                         num = num.replace(SEPARATOR_KEY, "");
-                        config.numIpConfigFailures = Integer.parseInt(num);
+                        config.numAuthFailures = Integer.parseInt(num);
                     }
 
                     if (key.startsWith(SCORER_OVERRIDE_KEY)) {
@@ -4054,31 +4054,31 @@ public class WifiConfigStore extends IpConfigStore {
                                 loge("DHCP failure, blacklist " + config.configKey() + " "
                                         + Integer.toString(config.networkId)
                                         + " num failures " + config.numIpConfigFailures);
-                            }
 
-                            // Also blacklist the BSSId if we find it
-                            ScanResult result = null;
-                            String bssidDbg = "";
-                            if (config.scanResultCache != null && BSSID != null) {
-                                result = config.scanResultCache.get(BSSID);
-                            }
-                            if (result != null) {
-                                result.numIpConfigFailures ++;
-                                bssidDbg = BSSID + " ipfail=" + result.numIpConfigFailures;
-                                if (result.numIpConfigFailures > 3) {
-                                    // Tell supplicant to stop trying this BSSID
-                                    mWifiNative.addToBlacklist(BSSID);
-                                    result.setAutoJoinStatus(ScanResult.AUTO_JOIN_DISABLED);
+                                // Also blacklist the BSSId if we find it
+                                ScanResult result = null;
+                                String bssidDbg = "";
+                                if (config.scanResultCache != null && BSSID != null) {
+                                    result = config.scanResultCache.get(BSSID);
                                 }
-                            }
+                                if (result != null) {
+                                    result.numIpConfigFailures ++;
+                                    bssidDbg = BSSID + " ipfail=" + result.numIpConfigFailures;
+                                    if (result.numIpConfigFailures > 3) {
+                                        // Tell supplicant to stop trying this BSSID
+                                        mWifiNative.addToBlacklist(BSSID);
+                                        result.setAutoJoinStatus(ScanResult.AUTO_JOIN_DISABLED);
+                                    }
+                                }
 
-                            if (DBG) {
-                                loge("blacklisted " + config.configKey() + " to "
-                                        + config.autoJoinStatus
-                                        + " due to IP config failures, count="
-                                        + config.numIpConfigFailures
-                                        + " disableReason=" + config.disableReason
-                                        + " " + bssidDbg);
+                                if (DBG) {
+                                    loge("blacklisted " + config.configKey() + " to "
+                                            + config.autoJoinStatus
+                                            + " due to IP config failures, count="
+                                            + config.numIpConfigFailures
+                                            + " disableReason=" + config.disableReason
+                                            + " " + bssidDbg);
+                                }
                             }
                         } else if (message.contains("CONN_FAILED")) {
                             config.numConnectionFailures++;
@@ -4269,4 +4269,9 @@ public class WifiConfigStore extends IpConfigStore {
         }
     }
 
+    public boolean isAggressiveBlacklisting() {
+        return Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.WIFI_AGGRESIVE_BLACKLIST,
+                1) == 1;
+    }
 }
