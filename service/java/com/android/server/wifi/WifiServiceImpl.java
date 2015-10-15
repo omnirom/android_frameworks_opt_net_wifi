@@ -1113,12 +1113,13 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         }
     }
 
-    /**
-     * Get the operational country code
+     /**
+     * Get the country code
+     * @return ISO 3166 country code.
      */
     public String getCountryCode() {
         enforceConnectivityInternalPermission();
-        String country = mWifiStateMachine.getCurrentCountryCode();
+        String country = mWifiStateMachine.getCountryCode();
         return country;
     }
 
