@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "b8f5b13e_b293e101",
+        "filename": "service/java/com/android/server/wifi/WifiServiceImpl.java",
+        "patchSetId": 2
+      },
+      "lineNbr": 1121,
+      "author": {
+        "id": 1000174
+      },
+      "writtenOn": "2015-11-23T23:01:33Z",
+      "side": 0,
+      "message": "Why delete this? On the link you gave Current is still there.",
+      "range": {
+        "startLine": 1121,
+        "startChar": 43,
+        "endLine": 1121,
+        "endChar": 64
+      },
+      "revId": "2c665eceb75f6124b2ed3f1921167a758d4cd972",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}
