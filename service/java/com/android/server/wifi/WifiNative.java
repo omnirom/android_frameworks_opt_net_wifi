@@ -805,8 +805,9 @@ public class WifiNative {
         if (enable) {
             ret = doBooleanCommand("SET pno 1");
         } else {
-            return false;
+            ret = doBooleanCommand("SET pno 0");
         }
+        return ret;
     }
 
     public void enableAutoConnect(boolean enable) {
