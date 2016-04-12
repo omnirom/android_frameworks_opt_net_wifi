@@ -807,6 +807,7 @@ public class WifiNative {
         } else {
             return false;
         }
+        return ret;
     }
 
     public void enableAutoConnect(boolean enable) {
