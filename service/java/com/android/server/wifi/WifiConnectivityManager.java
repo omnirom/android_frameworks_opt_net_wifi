@@ -150,6 +150,7 @@ public class WifiConnectivityManager {
     private long mLastPeriodicSingleScanTimeStamp = RESET_TIME_STAMP;
     private boolean mPnoScanStarted = false;
     private boolean mPeriodicScanTimerSet = false;
+    private boolean mWaitForFullBandScanResults = false;
 
     // PNO settings
     private int mMin5GHzRssi;
@@ -226,6 +227,7 @@ public class WifiConnectivityManager {
                 mStateMachine.isSupplicantTransientState());
         mWifiLastResortWatchdog.updateAvailableNetworks(
                 mQualifiedNetworkSelector.getFilteredScanDetails());
+        mWifiMetrics.countScanResults(scanDetails);
         if (candidate != null) {
             localLog(listenerName + ": QNS candidate-" + candidate.SSID);
             connectToNetwork(candidate);
@@ -324,7 +326,19 @@ public class WifiConnectivityManager {
         public void onResults(WifiScanner.ScanData[] results) {
             if (!mWifiEnabled || !mWifiConnectivityManagerEnabled) {
                 clearScanDetails();
+                mWaitForFullBandScanResults = false;
                 return;
+            }
+
+            // Full band scan results only.
+            if (mWaitForFullBandScanResults) {
+                if (!results[0].isAllChannelsScanned()) {
+                    localLog("AllSingleScanListener waiting for full band scan results.");
+                    clearScanDetails();
+                    return;
+                } else {
+                    mWaitForFullBandScanResults = false;
+                }
             }
 
             boolean wasConnectAttempted = handleScanResults(mScanDetails, "AllSingleScanListener");
@@ -510,7 +524,7 @@ public class WifiConnectivityManager {
     public WifiConnectivityManager(Context context, WifiStateMachine stateMachine,
                 WifiScanner scanner, WifiConfigManager configManager, WifiInfo wifiInfo,
                 WifiQualifiedNetworkSelector qualifiedNetworkSelector,
-                WifiInjector wifiInjector, Looper looper) {
+                WifiInjector wifiInjector, Looper looper, boolean enable) {
         mStateMachine = stateMachine;
         mScanner = scanner;
         mConfigManager = configManager;
@@ -545,7 +559,10 @@ public class WifiConnectivityManager {
         // Register for all single scan results
         mScanner.registerScanListener(mAllSingleScanListener);
 
-        Log.i(TAG, "ConnectivityScanManager initialized ");
+        mWifiConnectivityManagerEnabled = enable;
+
+        Log.i(TAG, "ConnectivityScanManager initialized and "
+                + (enable ? "enabled" : "disabled"));
     }
 
     /**
@@ -1074,7 +1091,8 @@ public class WifiConnectivityManager {
     public void forceConnectivityScan() {
         Log.i(TAG, "forceConnectivityScan");
 
-        startConnectivityScan(SCAN_IMMEDIATELY);
+        mWaitForFullBandScanResults = true;
+        startSingleScan(true);
     }
 
     /**
@@ -1118,6 +1136,9 @@ public class WifiConnectivityManager {
             stopConnectivityScan();
             resetLastPeriodicSingleScanTimeStamp();
             mLastConnectionAttemptBssid = null;
+            mWaitForFullBandScanResults = false;
+        } else if (mWifiConnectivityManagerEnabled) {
+           startConnectivityScan(SCAN_IMMEDIATELY);
         }
     }
 
@@ -1133,6 +1154,9 @@ public class WifiConnectivityManager {
             stopConnectivityScan();
             resetLastPeriodicSingleScanTimeStamp();
             mLastConnectionAttemptBssid = null;
+            mWaitForFullBandScanResults = false;
+        } else if (mWifiEnabled) {
+           startConnectivityScan(SCAN_IMMEDIATELY);
         }
     }
 
