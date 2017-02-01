@@ -973,7 +973,7 @@ bool isTxLevelStatsPresent(wifi_radio_stat *radio_stats) {
         if(radio_stats->tx_time_per_levels != 0 && radio_stats->num_tx_levels > 0) {
             return true;
         } else {
-            ALOGE("Ignoring invalid tx_level info in radio_stats");
+            ALOGV("Ignoring invalid tx_level info in radio_stats");
         }
     }
     return false;
