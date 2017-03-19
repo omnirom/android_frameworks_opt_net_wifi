@@ -33,6 +33,7 @@ import android.os.INetworkManagementService;
 import android.os.RemoteException;
 import android.net.wifi.WifiDppConfig;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.SparseArray;
@@ -116,8 +117,9 @@ public class WifiNative {
         /** Type of ifaces possible */
         public static final int IFACE_TYPE_AP = 0;
         public static final int IFACE_TYPE_STA = 1;
+        public static final int IFACE_TYPE_FST = 2;
 
-        @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA})
+        @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA, IFACE_TYPE_FST})
         @Retention(RetentionPolicy.SOURCE)
         public @interface IfaceType{}
 
@@ -148,7 +150,8 @@ public class WifiNative {
                 .append(",")
                 .append("Id=").append(id)
                 .append(",")
-                .append("Type=").append(type == IFACE_TYPE_STA ? "STA" : "AP")
+                .append("Type=").append(type == IFACE_TYPE_STA ? "STA" :
+                                        type == IFACE_TYPE_AP ? "AP" : "FST")
                 .append("}");
             return sb.toString();
         }
@@ -405,6 +408,7 @@ public class WifiNative {
             }
             stopSupplicantIfNecessary();
             stopHalAndWificondIfNecessary();
+            removeFstInterface();
         }
     }
 
@@ -428,6 +432,7 @@ public class WifiNative {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopHalAndWificondIfNecessary();
+            removeFstInterface();
         }
     }
 
@@ -834,6 +839,85 @@ public class WifiNative {
         }
     }
 
+    private boolean setupFstInterface(@NonNull Iface iface)
+    {
+        int fstEnabled = SystemProperties.getInt("persist.vendor.fst.rate.upgrade.en", 0);
+        Log.d(TAG, "fst " + ((fstEnabled == 1) ? "enabled" : "disabled"));
+        if (fstEnabled != 1) {
+            Log.d(TAG, "FST disabled, not creating FST interface");
+            return true;
+        }
+        boolean hasOther = mIfaceMgr.hasAnyIfaceOfType(iface.type == Iface.IFACE_TYPE_STA ?
+                                                       Iface.IFACE_TYPE_AP : Iface.IFACE_TYPE_STA);
+        if (hasOther) {
+            Log.e(TAG, "FST not supported in STA/SAP concurrency");
+            return false;
+        }
+        Iface fstIface = mIfaceMgr.findAnyIfaceOfType(iface.IFACE_TYPE_FST);
+        if (fstIface != null) {
+            Log.e(TAG, "FST interface already added");
+            return false;
+        }
+        String defaultFstInterfaceName = "bond0"; // interface used for fst
+        String fstInterfaceName = SystemProperties.get("persist.vendor.fst.data.interface",
+                defaultFstInterfaceName);
+
+        fstIface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_FST);
+        if (fstIface == null) {
+            Log.e(TAG, "Failed to allocate FST interface");
+            return false;
+        }
+        fstIface.name = fstInterfaceName;
+        fstIface.externalListener = iface.externalListener;
+        iface.externalListener = new InterfaceCallback() {
+            public void onDestroyed(String ifaceName) {
+                /* nothing */
+            }
+            public void onDown(String ifaceName) {
+                /* nothing */
+            }
+            public void onUp(String ifaceName) {
+                /* nothing */
+            }
+        };
+        iface.networkObserver = new NetworkObserverInternal(iface.id);
+        if (!registerNetworkObserver(iface.networkObserver)) {
+            Log.e(TAG, "Failed to register network observer on " + fstIface);
+            iface.externalListener = fstIface.externalListener;
+            teardownInterface(fstIface.name);
+            return false;
+        }
+        return true;
+    }
+
+    private void removeFstInterface() {
+        Iface iface = mIfaceMgr.findAnyIfaceOfType(Iface.IFACE_TYPE_FST);
+        if (iface == null) {
+            return;
+        }
+        mIfaceMgr.removeIface(iface.id);
+        // the FST bonding interface is never destroyed
+        // make sure it is just brought down
+        try {
+            mNwManagementService.setInterfaceDown(iface.name);
+            mNwManagementService.clearInterfaceAddresses(iface.name);
+        } catch (RemoteException re) {
+            Log.e(TAG, "Unable to change interface settings: " + re);
+        } catch (IllegalStateException ie) {
+            Log.e(TAG, "Unable to change interface settings: " + ie);
+        }
+    }
+
+    public String getFstDataInterfaceName() {
+        synchronized(mLock) {
+            Iface iface = mIfaceMgr.findAnyIfaceOfType(Iface.IFACE_TYPE_FST);
+            if (iface != null) {
+                return iface.name;
+            }
+            return null;
+        }
+    }
+
     /**
      * Setup an interface for Client mode operations.
      *
@@ -869,6 +953,12 @@ public class WifiNative {
                 Log.e(TAG, "Failed to create STA iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToHal();
+                return null;
+            }
+            if (!setupFstInterface(iface)) {
+                Log.e(TAG, "Failed to setup fst interface from: " + iface);
+                teardownInterface(iface.name);
+                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToWificond();
                 return null;
             }
             if (mWificondControl.setupInterfaceForClientMode(iface.name) == null) {
@@ -926,6 +1016,12 @@ public class WifiNative {
                 Log.e(TAG, "Failed to create AP iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
+                return null;
+            }
+            if (!setupFstInterface(iface)) {
+                Log.e(TAG, "Failed to setup fst interface from: " + iface);
+                teardownInterface(iface.name);
+                mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToWificond();
                 return null;
             }
             if (mWificondControl.setupInterfaceForSoftApMode(iface.name) == null) {
