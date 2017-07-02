@@ -4968,6 +4968,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                                     WifiLastResortWatchdog.FAILURE_CODE_ASSOCIATION);
                     break;
                 case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
+                    reasonCode = message.arg2;
+                    if (reasonCode == WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD) {
+                        Intent intent = new Intent(WifiManager.ACTION_AUTH_PASSWORD_WRONG);
+                        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+                    }
                     mWifiDiagnostics.captureBugReportData(
                             WifiDiagnostics.REPORT_REASON_AUTH_FAILURE);
                     mSupplicantStateTracker.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT);
