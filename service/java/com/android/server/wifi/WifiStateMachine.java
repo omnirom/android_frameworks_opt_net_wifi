@@ -197,6 +197,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
+    private boolean mDisableAdbNetworkOnDisconnect = false;
     private final String mPrimaryDeviceType;
     private final Clock mClock;
     private final PropertyService mPropertyService;
@@ -1121,6 +1122,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     }
                 });
 
+        mContext.getContentResolver().registerContentObserver(Settings.System.getUriFor(
+                Settings.System.DISABLE_ADB_NETWORK_ON_DISCONNECT), false,
+                new ContentObserver(getHandler()) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        updateAdbNetworkSettings();
+                    }
+                });
+
         mContext.registerReceiver(
                 new BroadcastReceiver() {
                     @Override
@@ -1220,6 +1230,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mVerboseLoggingLevel = mFacade.getIntegerSetting(
                 mContext, Settings.Global.WIFI_VERBOSE_LOGGING_ENABLED, 0);
         updateLoggingLevel();
+        updateAdbNetworkSettings();
     }
 
     class IpManagerCallback extends IpManager.Callback {
@@ -3622,6 +3633,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mLastBssid = null;
         registerDisconnected();
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
+
+        /* Disable ADB over network */
+        handleAdbNetworkOnDisconnect();
     }
 
     private void handleSupplicantConnectionLoss(boolean killSupplicant) {
@@ -8347,5 +8361,30 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
      */
     private boolean hasConnectionRequests() {
         return mConnectionReqCount > 0 || mUntrustedReqCount > 0;
+    }
+
+    private boolean isAdbEnabled() {
+        return Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.ADB_ENABLED, 0) > 0;
+    }
+
+    private boolean isAdbNetworkEnabled() {
+        return Settings.Secure.getInt(mContext.getContentResolver(),
+                Settings.Secure.ADB_PORT, 0) > 0;
+    }
+
+    private void handleAdbNetworkOnDisconnect() {
+        if (mDisableAdbNetworkOnDisconnect) {
+            if (isAdbEnabled() && isAdbNetworkEnabled()) {
+                Settings.Secure.putIntForUser(mContext.getContentResolver(),
+                        Settings.Secure.ADB_PORT, -1,
+                        UserHandle.USER_CURRENT);
+            }
+        }
+    }
+
+    private void updateAdbNetworkSettings() {
+        mDisableAdbNetworkOnDisconnect = Settings.System.getIntForUser(mContext.getContentResolver(),
+                Settings.System.DISABLE_ADB_NETWORK_ON_DISCONNECT, 1, UserHandle.USER_CURRENT) != 0;
     }
 }
