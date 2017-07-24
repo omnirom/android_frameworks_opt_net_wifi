@@ -221,6 +221,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
+    private boolean mDisableAdbNetworkOnDisconnect = false;
     private final String mPrimaryDeviceType;
     private final Clock mClock;
     private final PropertyService mPropertyService;
@@ -1012,6 +1013,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     }
                 });
 
+        mContext.getContentResolver().registerContentObserver(Settings.System.getUriFor(
+                Settings.System.DISABLE_ADB_NETWORK_ON_DISCONNECT), false,
+                new ContentObserver(getHandler()) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        updateAdbNetworkSettings();
+                    }
+                });
+
         mContext.registerReceiver(
                 new BroadcastReceiver() {
                     @Override
@@ -1134,6 +1144,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_SCAN_AVAILABLE, WIFI_STATE_DISABLED);
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        updateAdbNetworkSettings();
     }
 
     class IpManagerCallback extends IpManager.Callback {
@@ -3336,6 +3347,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mLastBssid = null;
         registerDisconnected();
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
+
+        /* Disable ADB over network */
+        handleAdbNetworkOnDisconnect();
     }
 
     private void handleSupplicantConnectionLoss(boolean killSupplicant) {
@@ -7350,5 +7364,30 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         boolean result = (resultMsg.arg1 != FAILURE);
         resultMsg.recycle();
         return result;
+    }
+
+    private boolean isAdbEnabled() {
+        return Settings.Global.getInt(mContext.getContentResolver(),
+                Settings.Global.ADB_ENABLED, 0) > 0;
+    }
+
+    private boolean isAdbNetworkEnabled() {
+        return Settings.Secure.getIntForUser(mContext.getContentResolver(),
+                Settings.Secure.ADB_PORT, 0, UserHandle.USER_CURRENT) > 0;
+    }
+
+    private void handleAdbNetworkOnDisconnect() {
+        if (mDisableAdbNetworkOnDisconnect) {
+            if (isAdbEnabled() && isAdbNetworkEnabled()) {
+                Settings.Secure.putIntForUser(mContext.getContentResolver(),
+                        Settings.Secure.ADB_PORT, -1,
+                        UserHandle.USER_CURRENT);
+            }
+        }
+    }
+
+    private void updateAdbNetworkSettings() {
+        mDisableAdbNetworkOnDisconnect = Settings.System.getIntForUser(mContext.getContentResolver(),
+                Settings.System.DISABLE_ADB_NETWORK_ON_DISCONNECT, 1, UserHandle.USER_CURRENT) != 0;
     }
 }
