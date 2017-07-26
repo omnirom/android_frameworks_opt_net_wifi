@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "8f22196e_8da2627f",
+        "filename": "service/java/com/android/server/wifi/WifiStateMachine.java",
+        "patchSetId": 2
+      },
+      "lineNbr": 8372,
+      "author": {
+        "id": 1000026
+      },
+      "writtenOn": "2017-07-26T20:57:15Z",
+      "side": 1,
+      "message": "should be getIntForUser - allthough its questionable to have all of this user specific - but now since it is in secure we must keep it conistent",
+      "revId": "c0e9ec0693c02d6cbe8a3de57a09171902720f2d",
+      "serverId": "56841c99-7c94-43d4-bf0b-cb4707e66d55",
+      "unresolved": false
+    }
+  ]
+}
