@@ -189,6 +189,7 @@ public class WifiStateMachine extends StateMachine {
     private ConnectivityManager mCm;
     private BaseWifiDiagnostics mWifiDiagnostics;
     private ScanRequestProxy mScanRequestProxy;
+    private WifiP2pServiceImpl wifiP2pServiceImpl;
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
@@ -1122,6 +1123,8 @@ public class WifiStateMachine extends StateMachine {
         mCountryCode.enableVerboseLogging(verbose);
         mWifiScoreReport.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiDiagnostics.startLogging(mVerboseLoggingEnabled);
+        if (wifiP2pServiceImpl != null)
+            wifiP2pServiceImpl.enableVerboseLogging(verbose);
         mWifiMonitor.enableVerboseLogging(verbose);
         mWifiNative.enableVerboseLogging(verbose);
         mWifiConfigManager.enableVerboseLogging(verbose);
@@ -3204,7 +3207,7 @@ public class WifiStateMachine extends StateMachine {
         // First set up Wifi Direct
         if (mP2pSupported) {
             IBinder s1 = mFacade.getService(Context.WIFI_P2P_SERVICE);
-            WifiP2pServiceImpl wifiP2pServiceImpl =
+            wifiP2pServiceImpl =
                     (WifiP2pServiceImpl) IWifiP2pManager.Stub.asInterface(s1);
 
             if (wifiP2pServiceImpl != null) {
