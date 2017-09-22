@@ -1089,6 +1089,11 @@ public class WifiStateMachine extends StateMachine {
         mIpClient.stop();
     }
 
+    public void setWifiDiagnostics(BaseWifiDiagnostics WifiDiagnostics) {
+        mWifiDiagnostics = WifiDiagnostics;
+    }
+
+
     PendingIntent getPrivateBroadcast(String action, int requestCode) {
         Intent intent = new Intent(action, null);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
