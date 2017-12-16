@@ -138,7 +138,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class WifiServiceImpl extends IWifiManager.Stub {
     private static final String TAG = "WifiService";
-    private static final boolean DBG = true;
+    private static final boolean DBG = false;
     private static final boolean VDBG = false;
 
     // Dumpsys argument to enable/disable disconnect on IP reachability failures.
@@ -852,7 +852,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public int getWifiEnabledState() {
         enforceAccessPermission();
-        mLog.info("getWifiEnabledState uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("getWifiEnabledState uid=%").c(Binder.getCallingUid()).flush();
         return mWifiStateMachine.syncGetWifiState();
     }
 
@@ -1440,7 +1440,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public int getSupportedFeatures() {
         enforceAccessPermission();
-        mLog.info("getSupportedFeatures uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("getSupportedFeatures uid=%").c(Binder.getCallingUid()).flush();
         if (mWifiStateMachineChannel != null) {
             return mWifiStateMachine.syncGetSupportedFeatures(mWifiStateMachineChannel);
         } else {
@@ -1452,7 +1452,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public void requestActivityInfo(ResultReceiver result) {
         Bundle bundle = new Bundle();
-        mLog.info("requestActivityInfo uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("requestActivityInfo uid=%").c(Binder.getCallingUid()).flush();
         bundle.putParcelable(BatteryStats.RESULT_RECEIVER_CONTROLLER_KEY, reportActivityInfo());
         result.send(0, bundle);
     }
@@ -1463,7 +1463,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public WifiActivityEnergyInfo reportActivityInfo() {
         enforceAccessPermission();
-        mLog.info("reportActivityInfo uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("reportActivityInfo uid=%").c(Binder.getCallingUid()).flush();
         if ((getSupportedFeatures() & WifiManager.WIFI_FEATURE_LINK_LAYER_STATS) == 0) {
             return null;
         }
@@ -1536,7 +1536,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public ParceledListSlice<WifiConfiguration> getConfiguredNetworks() {
         enforceAccessPermission();
-        mLog.info("getConfiguredNetworks uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("getConfiguredNetworks uid=%").c(Binder.getCallingUid()).flush();
         if (mWifiStateMachineChannel != null) {
             List<WifiConfiguration> configs = mWifiStateMachine.syncGetConfiguredNetworks(
                     Binder.getCallingUid(), mWifiStateMachineChannel);
@@ -1744,7 +1744,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public WifiInfo getConnectionInfo(String callingPackage) {
         enforceAccessPermission();
-        mLog.info("getConnectionInfo uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("getConnectionInfo uid=%").c(Binder.getCallingUid()).flush();
         /*
          * Make sure we have the latest information, by sending
          * a status request to the supplicant.
@@ -2326,7 +2326,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     @Override
     public boolean acquireWifiLock(IBinder binder, int lockMode, String tag, WorkSource ws) {
-        mLog.info("acquireWifiLock uid=% lockMode=%")
+        mLog.trace("acquireWifiLock uid=% lockMode=%")
                 .c(Binder.getCallingUid())
                 .c(lockMode).flush();
         if (mWifiLockManager.acquireWifiLock(lockMode, tag, binder, ws)) {
@@ -2344,7 +2344,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     @Override
     public boolean releaseWifiLock(IBinder binder) {
-        mLog.info("releaseWifiLock uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("releaseWifiLock uid=%").c(Binder.getCallingUid()).flush();
         if (mWifiLockManager.releaseWifiLock(binder)) {
             mWifiController.sendMessage(CMD_LOCKS_CHANGED);
             return true;
@@ -2548,7 +2548,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @Override
     public Network getCurrentNetwork() {
         enforceAccessPermission();
-        mLog.info("getCurrentNetwork uid=%").c(Binder.getCallingUid()).flush();
+        mLog.trace("getCurrentNetwork uid=%").c(Binder.getCallingUid()).flush();
         return mWifiStateMachine.getCurrentNetwork();
     }
 
