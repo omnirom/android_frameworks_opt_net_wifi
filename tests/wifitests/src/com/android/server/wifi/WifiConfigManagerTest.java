@@ -796,7 +796,7 @@ public class WifiConfigManagerTest {
 
     /**
      * Verifies the updation of network's connectUid using
-     * {@link WifiConfigManager#checkAndUpdateLastConnectUid(int, int)}.
+     * {@link WifiConfigManager#updateLastConnectUid(int, int)}.
      */
     @Test
     public void testUpdateLastConnectUid() throws Exception {
@@ -805,20 +805,10 @@ public class WifiConfigManagerTest {
         NetworkUpdateResult result = verifyAddNetworkToWifiConfigManager(openNetwork);
 
         assertTrue(
-                mWifiConfigManager.checkAndUpdateLastConnectUid(
+                mWifiConfigManager.updateLastConnectUid(
                         result.getNetworkId(), TEST_CREATOR_UID));
         WifiConfiguration retrievedNetwork =
                 mWifiConfigManager.getConfiguredNetwork(result.getNetworkId());
-        assertEquals(TEST_CREATOR_UID, retrievedNetwork.lastConnectUid);
-
-        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
-
-        // Now try to update the last connect UID with |TEST_UPDATE_UID|, it should fail and
-        // the lastConnectUid should remain the same.
-        assertFalse(
-                mWifiConfigManager.checkAndUpdateLastConnectUid(
-                        result.getNetworkId(), TEST_UPDATE_UID));
-        retrievedNetwork = mWifiConfigManager.getConfiguredNetwork(result.getNetworkId());
         assertEquals(TEST_CREATOR_UID, retrievedNetwork.lastConnectUid);
     }
 
@@ -867,7 +857,7 @@ public class WifiConfigManagerTest {
      * This invokes {@link WifiConfigManager#enableNetwork(int, boolean, int)},
      * {@link WifiConfigManager#disableNetwork(int, int)},
      * {@link WifiConfigManager#updateNetworkSelectionStatus(int, int)} and
-     * {@link WifiConfigManager#checkAndUpdateLastConnectUid(int, int)}.
+     * {@link WifiConfigManager#updateLastConnectUid(int, int)}.
      */
     @Test
     public void testChangeConfigurationWithInvalidNetworkId() {
@@ -880,7 +870,7 @@ public class WifiConfigManagerTest {
         assertFalse(mWifiConfigManager.disableNetwork(result.getNetworkId() + 1, TEST_CREATOR_UID));
         assertFalse(mWifiConfigManager.updateNetworkSelectionStatus(
                 result.getNetworkId() + 1, NetworkSelectionStatus.DISABLED_BY_WIFI_MANAGER));
-        assertFalse(mWifiConfigManager.checkAndUpdateLastConnectUid(
+        assertFalse(mWifiConfigManager.updateLastConnectUid(
                 result.getNetworkId() + 1, TEST_CREATOR_UID));
     }
 
@@ -2890,11 +2880,6 @@ public class WifiConfigManagerTest {
         verifyAddNetworkToWifiConfigManager(network2);
         verifyAddNetworkToWifiConfigManager(network3);
 
-        // Enable all of them.
-        assertTrue(mWifiConfigManager.enableNetwork(network1.networkId, false, TEST_CREATOR_UID));
-        assertTrue(mWifiConfigManager.enableNetwork(network2.networkId, false, TEST_CREATOR_UID));
-        assertTrue(mWifiConfigManager.enableNetwork(network3.networkId, false, TEST_CREATOR_UID));
-
         // Now set scan results in 2 of them to set the corresponding
         // {@link NetworkSelectionStatus#mSeenInLastQualifiedNetworkSelection} field.
         assertTrue(mWifiConfigManager.setNetworkCandidateScanResult(
@@ -2913,15 +2898,6 @@ public class WifiConfigManagerTest {
         assertEquals(network3.SSID, hiddenNetworks.get(0).ssid);
         assertEquals(network1.SSID, hiddenNetworks.get(1).ssid);
         assertEquals(network2.SSID, hiddenNetworks.get(2).ssid);
-
-        // Now permanently disable |network3|. This should remove network 3 from the list.
-        assertTrue(mWifiConfigManager.disableNetwork(network3.networkId, TEST_CREATOR_UID));
-
-        // Retrieve the hidden network list again & verify the order of the networks returned.
-        hiddenNetworks = mWifiConfigManager.retrieveHiddenNetworkList();
-        assertEquals(2, hiddenNetworks.size());
-        assertEquals(network1.SSID, hiddenNetworks.get(0).ssid);
-        assertEquals(network2.SSID, hiddenNetworks.get(1).ssid);
     }
 
     /**

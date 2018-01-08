@@ -76,9 +76,8 @@ import java.util.TreeSet;
  */
 public class WifiAwareDataPathStateManager {
     private static final String TAG = "WifiAwareDataPathStMgr";
-
-    private static final boolean DBG = false;
     private static final boolean VDBG = false; // STOPSHIP if true
+    /* package */ boolean mDbg = false;
 
     private static final String AWARE_INTERFACE_PREFIX = "aware_data";
     private static final String NETWORK_TAG = "WIFI_AWARE_FACTORY";
@@ -122,6 +121,7 @@ public class WifiAwareDataPathStateManager {
         sNetworkCapabilitiesFilter
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
         sNetworkCapabilitiesFilter.setNetworkSpecifier(new MatchAllNetworkSpecifier());
@@ -203,6 +203,7 @@ public class WifiAwareDataPathStateManager {
             String name = AWARE_INTERFACE_PREFIX + i;
             mMgr.deleteDataPathInterface(name);
         }
+        mMgr.releaseAwareInterface();
     }
 
     /**
@@ -349,8 +350,8 @@ public class WifiAwareDataPathStateManager {
         if (nnri == null) {
             Log.w(TAG, "onDataPathRequest: can't find a request with specified pubSubId=" + pubSubId
                     + ", mac=" + String.valueOf(HexEncoding.encode(mac)));
-            if (DBG) {
-                Log.d(TAG, "onDataPathRequest: network request cache = " + mNetworkRequestsCache);
+            if (VDBG) {
+                Log.v(TAG, "onDataPathRequest: network request cache = " + mNetworkRequestsCache);
             }
             mMgr.respondToDataPathRequest(false, ndpId, "", null, null, false);
             return null;
@@ -407,8 +408,8 @@ public class WifiAwareDataPathStateManager {
         if (nnri == null) {
             Log.w(TAG, "onRespondToDataPathRequest: can't find a request with specified ndpId="
                     + ndpId);
-            if (DBG) {
-                Log.d(TAG, "onRespondToDataPathRequest: network request cache = "
+            if (VDBG) {
+                Log.v(TAG, "onRespondToDataPathRequest: network request cache = "
                         + mNetworkRequestsCache);
             }
             return;
@@ -530,8 +531,8 @@ public class WifiAwareDataPathStateManager {
             nnri.startTimestamp = SystemClock.elapsedRealtime(); // update time-stamp for duration
             mAwareMetrics.recordNdpCreation(nnri.uid, mNetworkRequestsCache);
         } else {
-            if (DBG) {
-                Log.d(TAG, "onDataPathConfirm: data-path for networkSpecifier=" + networkSpecifier
+            if (VDBG) {
+                Log.v(TAG, "onDataPathConfirm: data-path for networkSpecifier=" + networkSpecifier
                         + " rejected - reason=" + reason);
             }
             mNetworkRequestsCache.remove(networkSpecifier);
@@ -554,8 +555,8 @@ public class WifiAwareDataPathStateManager {
         Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation> nnriE =
                 getNetworkRequestByNdpId(ndpId);
         if (nnriE == null) {
-            if (DBG) {
-                Log.d(TAG, "onDataPathEnd: network request not found for ndpId=" + ndpId);
+            if (VDBG) {
+                Log.v(TAG, "onDataPathEnd: network request not found for ndpId=" + ndpId);
             }
             return;
         }
@@ -589,12 +590,12 @@ public class WifiAwareDataPathStateManager {
      * - i.e. when we're proceeding with data-path setup).
      */
     public void handleDataPathTimeout(NetworkSpecifier networkSpecifier) {
-        if (VDBG) Log.v(TAG, "handleDataPathTimeout: networkSpecifier=" + networkSpecifier);
+        if (mDbg) Log.v(TAG, "handleDataPathTimeout: networkSpecifier=" + networkSpecifier);
 
         AwareNetworkRequestInformation nnri = mNetworkRequestsCache.remove(networkSpecifier);
         if (nnri == null) {
-            if (DBG) {
-                Log.d(TAG,
+            if (mDbg) {
+                Log.v(TAG,
                         "handleDataPathTimeout: network request not found for networkSpecifier="
                                 + networkSpecifier);
             }
@@ -659,8 +660,8 @@ public class WifiAwareDataPathStateManager {
             // look up specifier - are we being called again?
             AwareNetworkRequestInformation nnri = mNetworkRequestsCache.get(networkSpecifier);
             if (nnri != null) {
-                if (DBG) {
-                    Log.d(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request
+                if (VDBG) {
+                    Log.v(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request
                             + " - already in cache with state=" + nnri.state);
                 }
 
@@ -727,8 +728,8 @@ public class WifiAwareDataPathStateManager {
             }
 
             if (nnri.state != AwareNetworkRequestInformation.STATE_IDLE) {
-                if (DBG) {
-                    Log.d(TAG, "WifiAwareNetworkFactory.needNetworkFor: networkRequest="
+                if (VDBG) {
+                    Log.v(TAG, "WifiAwareNetworkFactory.needNetworkFor: networkRequest="
                             + networkRequest + " - already in progress");
                     // TODO: understand how/when can be called again/while in progress (seems
                     // to be related to score re-calculation after a network agent is created)

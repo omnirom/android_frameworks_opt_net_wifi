@@ -17,14 +17,11 @@
 package com.android.server.wifi;
 
 import android.annotation.NonNull;
-import android.net.wifi.IApInterface;
-import android.net.wifi.IWificond;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.os.INetworkManagementService;
 import android.os.Looper;
 import android.os.Message;
-import android.os.RemoteException;
 import android.util.Log;
 
 import com.android.internal.util.Protocol;
@@ -47,11 +44,12 @@ public class WifiStateMachinePrime {
 
     private final WifiInjector mWifiInjector;
     private final Looper mLooper;
+    private final WifiNative mWifiNative;
     private final INetworkManagementService mNMService;
 
-    private IWificond mWificond;
-
     private Queue<SoftApModeConfiguration> mApConfigQueue = new ConcurrentLinkedQueue<>();
+
+    private String mInterfaceName;
 
     /* The base for wifi message types */
     static final int BASE = Protocol.BASE_WIFI;
@@ -67,22 +65,17 @@ public class WifiStateMachinePrime {
 
     WifiStateMachinePrime(WifiInjector wifiInjector,
                           Looper looper,
+                          WifiNative wifiNative,
                           INetworkManagementService nmService) {
         mWifiInjector = wifiInjector;
         mLooper = looper;
+        mWifiNative = wifiNative;
         mNMService = nmService;
 
-        // Clean up existing interfaces in wificond.
-        // This ensures that the framework and wificond are in a consistent state after a framework
-        // restart.
-        try {
-            mWificond = mWifiInjector.makeWificond();
-            if (mWificond != null) {
-                mWificond.tearDownInterfaces();
-            }
-        } catch (RemoteException e) {
-            Log.e(TAG, "wificond died during framework startup");
-        }
+        mInterfaceName = mWifiNative.getInterfaceName();
+
+        // make sure we do not have leftover state in the event of a restart
+        mWifiNative.tearDown();
     }
 
     /**
@@ -211,23 +204,14 @@ public class WifiStateMachinePrime {
             return HANDLED;
         }
 
-        private void tearDownInterfaces() {
-            if (mWificond != null) {
-                try {
-                    mWificond.tearDownInterfaces();
-                } catch (RemoteException e) {
-                    // There is very little we can do here
-                    Log.e(TAG, "Failed to tear down interfaces via wificond");
-                }
-                mWificond = null;
-            }
-            return;
+        private void cleanup() {
+            mWifiNative.disableSupplicant();
+            mWifiNative.tearDown();
         }
 
         class ClientModeState extends State {
             @Override
             public void enter() {
-                mWificond = mWifiInjector.makeWificond();
             }
 
             @Override
@@ -240,7 +224,7 @@ public class WifiStateMachinePrime {
 
             @Override
             public void exit() {
-                tearDownInterfaces();
+                cleanup();
             }
         }
 
@@ -266,33 +250,18 @@ public class WifiStateMachinePrime {
         }
 
         class SoftAPModeState extends State {
-            IApInterface mApInterface = null;
-            String mIfaceName = null;
 
             @Override
             public void enter() {
+                // For now - need to clean up from other mode management in WSM
+                cleanup();
+
                 final Message message = mModeStateMachine.getCurrentMessage();
                 if (message.what != ModeStateMachine.CMD_START_SOFT_AP_MODE) {
                     Log.d(TAG, "Entering SoftAPMode (idle)");
                     return;
                 }
 
-                // Continue with setup since we are changing modes
-                mApInterface = null;
-
-                try {
-                    mWificond = mWifiInjector.makeWificond();
-                    mApInterface = mWificond.createApInterface(
-                            mWifiInjector.getWifiNative().getInterfaceName());
-                    mIfaceName = mApInterface.getInterfaceName();
-                } catch (RemoteException e) {
-                    initializationFailed(
-                            "Could not get IApInterface instance or its name from wificond");
-                    return;
-                } catch (NullPointerException e) {
-                    initializationFailed("wificond failure when initializing softap mode");
-                    return;
-                }
                 mModeStateMachine.transitionTo(mSoftAPModeActiveState);
             }
 
@@ -310,9 +279,8 @@ public class WifiStateMachinePrime {
                         // not in active state, nothing to stop.
                         break;
                     case CMD_START_AP_FAILURE:
-                        // remove the saved config for the start attempt
-                        mApConfigQueue.poll();
-                        Log.e(TAG, "Failed to start SoftApMode.  Wait for next mode command.");
+                        // with interface management in softapmanager, no setup failures can be seen
+                        // here
                         break;
                     case CMD_AP_STOPPED:
                         Log.d(TAG, "SoftApModeActiveState stopped.  Wait for next mode command.");
@@ -325,15 +293,9 @@ public class WifiStateMachinePrime {
 
             @Override
             public void exit() {
-                tearDownInterfaces();
-            }
-
-            protected IApInterface getInterface() {
-                return mApInterface;
-            }
-
-            protected String getInterfaceName() {
-                return mIfaceName;
+                // while in transition, cleanup is done on entering states.  in the future, each
+                // mode will clean up their own state on exit
+                //cleanup();
             }
 
             private void initializationFailed(String message) {
@@ -345,8 +307,9 @@ public class WifiStateMachinePrime {
         class WifiDisabledState extends State {
             @Override
             public void enter() {
-                // make sure everything is torn down
                 Log.d(TAG, "Entering WifiDisabledState");
+                // make sure everything is torn down
+                cleanup();
             }
 
             @Override
@@ -415,9 +378,8 @@ public class WifiStateMachinePrime {
                     config = null;
                 }
                 this.mActiveModeManager = mWifiInjector.makeSoftApManager(mNMService,
-                        new SoftApListener(), ((SoftAPModeState) mSoftAPModeState).getInterface(),
-                        ((SoftAPModeState) mSoftAPModeState).getInterfaceName(), softApModeConfig);
-                mActiveModeManager.start();
+                        new SoftApListener(), softApModeConfig);
+                this.mActiveModeManager.start();
             }
 
             @Override

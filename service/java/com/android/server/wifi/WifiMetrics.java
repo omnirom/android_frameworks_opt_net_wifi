@@ -42,8 +42,10 @@ import com.android.server.wifi.hotspot2.Utils;
 import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
 import com.android.server.wifi.nano.WifiMetricsProto.PnoScanMetrics;
+import com.android.server.wifi.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent.ConfigInfo;
+import com.android.server.wifi.nano.WifiMetricsProto.WpsMetrics;
 import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.ScanResultUtil;
 
@@ -95,11 +97,14 @@ public class WifiMetrics {
     public static final int MAX_TOTAL_PASSPOINT_UNIQUE_ESS_BUCKET = 20;
     public static final int MAX_PASSPOINT_APS_PER_UNIQUE_ESS_BUCKET = 50;
     private static final int CONNECT_TO_NETWORK_NOTIFICATION_ACTION_KEY_MULTIPLIER = 1000;
+    // Max limit for number of soft AP related events, extra events will be dropped.
+    private static final int MAX_NUM_SOFT_AP_EVENTS = 256;
     private Clock mClock;
     private boolean mScreenOn;
     private int mWifiState;
     private WifiAwareMetrics mWifiAwareMetrics;
     private final PnoScanMetrics mPnoScanMetrics = new PnoScanMetrics();
+    private final WpsMetrics mWpsMetrics = new WpsMetrics();
     private Handler mHandler;
     private WifiConfigManager mWifiConfigManager;
     private WifiNetworkSelector mWifiNetworkSelector;
@@ -170,6 +175,10 @@ public class WifiMetrics {
     private boolean mIsWifiNetworksAvailableNotificationOn = false;
     private int mNumOpenNetworkConnectMessageFailedToSend = 0;
     private int mNumOpenNetworkRecommendationUpdates = 0;
+    /** List of soft AP events related to number of connected clients in tethered mode */
+    private final List<SoftApConnectedClientsEvent> mSoftApEventListTethered = new ArrayList<>();
+    /** List of soft AP events related to number of connected clients in local only mode */
+    private final List<SoftApConnectedClientsEvent> mSoftApEventListLocalOnly = new ArrayList<>();
 
     private final SparseIntArray mObservedHotspotR1ApInScanHistogram = new SparseIntArray();
     private final SparseIntArray mObservedHotspotR2ApInScanHistogram = new SparseIntArray();
@@ -479,6 +488,78 @@ public class WifiMetrics {
     public void incrementPnoFoundNetworkEventCount() {
         synchronized (mLock) {
             mPnoScanMetrics.numPnoFoundNetworkEvents++;
+        }
+    }
+
+    /**
+     * Increment total number of wps connection attempts
+     */
+    public void incrementWpsAttemptCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsAttempts++;
+        }
+    }
+
+    /**
+     * Increment total number of wps connection success
+     */
+    public void incrementWpsSuccessCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsSuccess++;
+        }
+    }
+
+    /**
+     * Increment total number of wps failure on start
+     */
+    public void incrementWpsStartFailureCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsStartFailure++;
+        }
+    }
+
+    /**
+     * Increment total number of wps overlap failure
+     */
+    public void incrementWpsOverlapFailureCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsOverlapFailure++;
+        }
+    }
+
+    /**
+     * Increment total number of wps timeout failure
+     */
+    public void incrementWpsTimeoutFailureCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsTimeoutFailure++;
+        }
+    }
+
+    /**
+     * Increment total number of other wps failure during connection
+     */
+    public void incrementWpsOtherConnectionFailureCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsOtherConnectionFailure++;
+        }
+    }
+
+    /**
+     * Increment total number of supplicant failure after wps
+     */
+    public void incrementWpsSupplicantFailureCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsSupplicantFailure++;
+        }
+    }
+
+    /**
+     * Increment total number of wps cancellation
+     */
+    public void incrementWpsCancellationCount() {
+        synchronized (mLock) {
+            mWpsMetrics.numWpsCancellation++;
         }
     }
 
@@ -1127,6 +1208,53 @@ public class WifiMetrics {
     }
 
     /**
+     * Adds a record indicating the current up state of soft AP
+     */
+    public void addSoftApUpChangedEvent(boolean isUp, int mode) {
+        SoftApConnectedClientsEvent event = new SoftApConnectedClientsEvent();
+        event.eventType = isUp ? SoftApConnectedClientsEvent.SOFT_AP_UP :
+                SoftApConnectedClientsEvent.SOFT_AP_DOWN;
+        event.numConnectedClients = 0;
+        addSoftApConnectedClientsEvent(event, mode);
+    }
+
+    /**
+     * Adds a record for current number of associated stations to soft AP
+     */
+    public void addSoftApNumAssociatedStationsChangedEvent(int numStations, int mode) {
+        SoftApConnectedClientsEvent event = new SoftApConnectedClientsEvent();
+        event.eventType = SoftApConnectedClientsEvent.NUM_CLIENTS_CHANGED;
+        event.numConnectedClients = numStations;
+        addSoftApConnectedClientsEvent(event, mode);
+    }
+
+    /**
+     * Adds a record to the corresponding event list based on mode param
+     */
+    private void addSoftApConnectedClientsEvent(SoftApConnectedClientsEvent event, int mode) {
+        synchronized (mLock) {
+            List<SoftApConnectedClientsEvent> softApEventList;
+            switch (mode) {
+                case WifiManager.IFACE_IP_MODE_TETHERED:
+                    softApEventList = mSoftApEventListTethered;
+                    break;
+                case WifiManager.IFACE_IP_MODE_LOCAL_ONLY:
+                    softApEventList = mSoftApEventListLocalOnly;
+                    break;
+                default:
+                    return;
+            }
+
+            if (softApEventList.size() > MAX_NUM_SOFT_AP_EVENTS) {
+                return;
+            }
+
+            event.timeStampMillis = mClock.getWallClockMillis();
+            softApEventList.add(event);
+        }
+    }
+
+    /**
      * Increment number of times the HAL crashed.
      */
     public void incrementNumHalCrashes() {
@@ -1655,6 +1783,40 @@ public class WifiMetrics {
                         + mObservedHotspotR1ApsPerEssInScanHistogram);
                 pw.println("mWifiLogProto.observedHotspotR2ApsPerEssInScanHistogram="
                         + mObservedHotspotR2ApsPerEssInScanHistogram);
+
+                pw.println("mSoftApTetheredEvents:");
+                for (SoftApConnectedClientsEvent event : mSoftApEventListTethered) {
+                    StringBuilder eventLine = new StringBuilder();
+                    eventLine.append("event_type=" + event.eventType);
+                    eventLine.append(",time_stamp_millis=" + event.timeStampMillis);
+                    eventLine.append(",num_connected_clients=" + event.numConnectedClients);
+                    pw.println(eventLine.toString());
+                }
+                pw.println("mSoftApLocalOnlyEvents:");
+                for (SoftApConnectedClientsEvent event : mSoftApEventListLocalOnly) {
+                    StringBuilder eventLine = new StringBuilder();
+                    eventLine.append("event_type=" + event.eventType);
+                    eventLine.append(",time_stamp_millis=" + event.timeStampMillis);
+                    eventLine.append(",num_connected_clients=" + event.numConnectedClients);
+                    pw.println(eventLine.toString());
+                }
+
+                pw.println("mWpsMetrics.numWpsAttempts="
+                        + mWpsMetrics.numWpsAttempts);
+                pw.println("mWpsMetrics.numWpsSuccess="
+                        + mWpsMetrics.numWpsSuccess);
+                pw.println("mWpsMetrics.numWpsStartFailure="
+                        + mWpsMetrics.numWpsStartFailure);
+                pw.println("mWpsMetrics.numWpsOverlapFailure="
+                        + mWpsMetrics.numWpsOverlapFailure);
+                pw.println("mWpsMetrics.numWpsTimeoutFailure="
+                        + mWpsMetrics.numWpsTimeoutFailure);
+                pw.println("mWpsMetrics.numWpsOtherConnectionFailure="
+                        + mWpsMetrics.numWpsOtherConnectionFailure);
+                pw.println("mWpsMetrics.numWpsSupplicantFailure="
+                        + mWpsMetrics.numWpsSupplicantFailure);
+                pw.println("mWpsMetrics.numWpsCancellation="
+                        + mWpsMetrics.numWpsCancellation);
             }
         }
     }
@@ -1927,6 +2089,19 @@ public class WifiMetrics {
             mWifiLogProto.observedHotspotR2ApsPerEssInScanHistogram =
                     makeNumConnectableNetworksBucketArray(
                             mObservedHotspotR2ApsPerEssInScanHistogram);
+
+            if (mSoftApEventListTethered.size() > 0) {
+                mWifiLogProto.softApConnectedClientsEventsTethered =
+                        mSoftApEventListTethered.toArray(
+                        mWifiLogProto.softApConnectedClientsEventsTethered);
+            }
+            if (mSoftApEventListLocalOnly.size() > 0) {
+                mWifiLogProto.softApConnectedClientsEventsLocalOnly =
+                        mSoftApEventListLocalOnly.toArray(
+                        mWifiLogProto.softApConnectedClientsEventsLocalOnly);
+            }
+
+            mWifiLogProto.wpsMetrics = mWpsMetrics;
         }
     }
 
@@ -1987,6 +2162,9 @@ public class WifiMetrics {
             mObservedHotspotR2EssInScanHistogram.clear();
             mObservedHotspotR1ApsPerEssInScanHistogram.clear();
             mObservedHotspotR2ApsPerEssInScanHistogram.clear();
+            mSoftApEventListTethered.clear();
+            mSoftApEventListLocalOnly.clear();
+            mWpsMetrics.clear();
         }
     }
 

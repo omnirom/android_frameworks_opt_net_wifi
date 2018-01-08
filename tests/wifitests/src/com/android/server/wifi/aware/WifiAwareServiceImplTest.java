@@ -19,9 +19,11 @@ package com.android.server.wifi.aware;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -41,10 +43,13 @@ import android.net.wifi.aware.SubscribeConfig;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.test.TestLooper;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
 
+import com.android.server.wifi.FrameworkFacade;
+import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 
 import org.junit.Before;
@@ -68,6 +73,8 @@ public class WifiAwareServiceImplTest {
 
     private WifiAwareServiceImplSpy mDut;
     private int mDefaultUid = 1500;
+    private String mPackageName = "some.package";
+    private TestLooper mMockLooper;
 
     @Mock
     private Context mContextMock;
@@ -86,7 +93,10 @@ public class WifiAwareServiceImplTest {
     @Mock
     private IWifiAwareDiscoverySessionCallback mSessionCallbackMock;
     @Mock private WifiAwareMetrics mAwareMetricsMock;
+    @Mock private WifiPermissionsUtil mWifiPermissionsUtil;
     @Mock private WifiPermissionsWrapper mPermissionsWrapperMock;
+    @Mock
+    FrameworkFacade mFrameworkFacade;
 
     /**
      * Using instead of spy to avoid native crash failures - possibly due to
@@ -115,17 +125,26 @@ public class WifiAwareServiceImplTest {
     @Before
     public void setup() throws Exception {
         MockitoAnnotations.initMocks(this);
+        mMockLooper = new TestLooper();
+
+        when(mHandlerThreadMock.getLooper()).thenReturn(mMockLooper.getLooper());
+        doNothing().when(mFrameworkFacade).registerContentObserver(eq(mContextMock), any(),
+                anyBoolean(), any());
 
         when(mContextMock.getApplicationContext()).thenReturn(mContextMock);
         when(mContextMock.getPackageManager()).thenReturn(mPackageManagerMock);
         when(mPackageManagerMock.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE))
+                .thenReturn(true);
+        when(mPackageManagerMock.hasSystemFeature(PackageManager.FEATURE_WIFI_RTT))
                 .thenReturn(true);
         when(mAwareStateManagerMock.getCharacteristics()).thenReturn(getCharacteristics());
 
         mDut = new WifiAwareServiceImplSpy(mContextMock);
         mDut.fakeUid = mDefaultUid;
         mDut.start(mHandlerThreadMock, mAwareStateManagerMock, mWifiAwareShellCommandMock,
-                mAwareMetricsMock, mPermissionsWrapperMock);
+                mAwareMetricsMock, mWifiPermissionsUtil, mPermissionsWrapperMock, mFrameworkFacade,
+                mock(WifiAwareNativeManager.class), mock(WifiAwareNativeApi.class),
+                mock(WifiAwareNativeCallback.class));
         verify(mAwareStateManagerMock).start(eq(mContextMock), any(), eq(mAwareMetricsMock),
                 eq(mPermissionsWrapperMock));
     }
@@ -231,11 +250,46 @@ public class WifiAwareServiceImplTest {
 
         PublishConfig publishConfig = new PublishConfig.Builder().setServiceName("valid.value")
                 .build();
-        mDut.publish(clientId, publishConfig, mSessionCallbackMock);
+        mDut.publish(mPackageName, clientId, publishConfig, mSessionCallbackMock);
 
         verify(mAwareStateManagerMock).publish(clientId, publishConfig, mSessionCallbackMock);
         assertTrue("SecurityException for invalid access from wrong UID thrown", failsAsExpected);
     }
+
+    /**
+     * Validate that the RTT feature support is checked when attempting a Publish with ranging.
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testFailOnPublishRangingWithoutRttFeature() throws Exception {
+        when(mPackageManagerMock.hasSystemFeature(PackageManager.FEATURE_WIFI_RTT)).thenReturn(
+                false);
+
+        PublishConfig publishConfig = new PublishConfig.Builder().setServiceName("something.valid")
+                .setRangingEnabled(true).build();
+        int clientId = doConnect();
+        IWifiAwareDiscoverySessionCallback mockCallback = mock(
+                IWifiAwareDiscoverySessionCallback.class);
+
+        mDut.publish(mPackageName, clientId, publishConfig, mockCallback);
+    }
+
+    /**
+     * Validate that the RTT feature support is checked when attempting a Subscribe with ranging.
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testFailOnSubscribeRangingWithoutRttFeature() throws Exception {
+        when(mPackageManagerMock.hasSystemFeature(PackageManager.FEATURE_WIFI_RTT)).thenReturn(
+                false);
+
+        SubscribeConfig subscribeConfig = new SubscribeConfig.Builder().setServiceName(
+                "something.valid").setMaxDistanceMm(100).build();
+        int clientId = doConnect();
+        IWifiAwareDiscoverySessionCallback mockCallback = mock(
+                IWifiAwareDiscoverySessionCallback.class);
+
+        mDut.subscribe(mPackageName, clientId, subscribeConfig, mockCallback);
+    }
+
 
     /**
      * Validates that on binder death we get a disconnect().
@@ -295,12 +349,12 @@ public class WifiAwareServiceImplTest {
     @Test
     public void testPublish() {
         PublishConfig publishConfig = new PublishConfig.Builder().setServiceName("something.valid")
-                .build();
+                .setRangingEnabled(true).build();
         int clientId = doConnect();
         IWifiAwareDiscoverySessionCallback mockCallback = mock(
                 IWifiAwareDiscoverySessionCallback.class);
 
-        mDut.publish(clientId, publishConfig, mockCallback);
+        mDut.publish(mPackageName, clientId, publishConfig, mockCallback);
 
         verify(mAwareStateManagerMock).publish(clientId, publishConfig, mockCallback);
     }
@@ -390,12 +444,12 @@ public class WifiAwareServiceImplTest {
     @Test
     public void testSubscribe() {
         SubscribeConfig subscribeConfig = new SubscribeConfig.Builder()
-                .setServiceName("something.valid").build();
+                .setServiceName("something.valid").setMaxDistanceMm(100).build();
         int clientId = doConnect();
         IWifiAwareDiscoverySessionCallback mockCallback = mock(
                 IWifiAwareDiscoverySessionCallback.class);
 
-        mDut.subscribe(clientId, subscribeConfig, mockCallback);
+        mDut.subscribe(mPackageName, clientId, subscribeConfig, mockCallback);
 
         verify(mAwareStateManagerMock).subscribe(clientId, subscribeConfig, mockCallback);
     }
@@ -576,12 +630,12 @@ public class WifiAwareServiceImplTest {
         // caught by the Builder. Want to test whether service side will catch invalidly
         // constructed configs.
         PublishConfig publishConfig = new PublishConfig(serviceName.getBytes(), ssi, matchFilter,
-                PublishConfig.PUBLISH_TYPE_UNSOLICITED, 0, true);
+                PublishConfig.PUBLISH_TYPE_UNSOLICITED, 0, true, false);
         int clientId = doConnect();
         IWifiAwareDiscoverySessionCallback mockCallback = mock(
                 IWifiAwareDiscoverySessionCallback.class);
 
-        mDut.publish(clientId, publishConfig, mockCallback);
+        mDut.publish(mPackageName, clientId, publishConfig, mockCallback);
 
         verify(mAwareStateManagerMock).publish(clientId, publishConfig, mockCallback);
     }
@@ -592,12 +646,12 @@ public class WifiAwareServiceImplTest {
         // caught by the Builder. Want to test whether service side will catch invalidly
         // constructed configs.
         SubscribeConfig subscribeConfig = new SubscribeConfig(serviceName.getBytes(), ssi,
-                matchFilter, SubscribeConfig.SUBSCRIBE_TYPE_PASSIVE, 0, true);
+                matchFilter, SubscribeConfig.SUBSCRIBE_TYPE_PASSIVE, 0, true, false, 0, false, 0);
         int clientId = doConnect();
         IWifiAwareDiscoverySessionCallback mockCallback = mock(
                 IWifiAwareDiscoverySessionCallback.class);
 
-        mDut.subscribe(clientId, subscribeConfig, mockCallback);
+        mDut.subscribe(mPackageName, clientId, subscribeConfig, mockCallback);
 
         verify(mAwareStateManagerMock).subscribe(clientId, subscribeConfig, mockCallback);
     }

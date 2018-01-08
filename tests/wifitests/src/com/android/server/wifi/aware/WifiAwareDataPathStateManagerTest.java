@@ -1213,12 +1213,12 @@ public class WifiAwareDataPathStateManagerTest {
         if (doPublish) {
             sessionCaptor.getValue().publish(publishConfig, mockSessionCallback,
                     mMockLooperHandler);
-            inOrderS.verify(mockAwareService).publish(eq(clientId), eq(publishConfig),
+            inOrderS.verify(mockAwareService).publish(any(), eq(clientId), eq(publishConfig),
                     sessionProxyCallback.capture());
         } else {
             sessionCaptor.getValue().subscribe(subscribeConfig, mockSessionCallback,
                     mMockLooperHandler);
-            inOrderS.verify(mockAwareService).subscribe(eq(clientId), eq(subscribeConfig),
+            inOrderS.verify(mockAwareService).subscribe(any(), eq(clientId), eq(subscribeConfig),
                     sessionProxyCallback.capture());
         }
         sessionProxyCallback.getValue().onSessionStarted(sessionId);
@@ -1285,8 +1285,9 @@ public class WifiAwareDataPathStateManagerTest {
         NetworkCapabilities nc = new NetworkCapabilities();
         nc.clearAll();
         nc.addTransportType(NetworkCapabilities.TRANSPORT_WIFI_AWARE);
-        nc.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).addCapability(
-                NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+        nc.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING);
         nc.setNetworkSpecifier(ns);
         nc.setLinkUpstreamBandwidthKbps(1);
         nc.setLinkDownstreamBandwidthKbps(1);

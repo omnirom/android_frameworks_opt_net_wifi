@@ -59,7 +59,7 @@ LOCAL_JACK_FLAGS := --multi-dex native
 # since neither is declared a static java library.
 LOCAL_STATIC_JAVA_LIBRARIES := \
 	android-support-test \
-	mockito-target-minus-junit4 \
+	mockito-target-inline-minus-junit4 \
 	frameworks-base-testutils \
 	services \
 	wifi-service \
@@ -68,7 +68,9 @@ LOCAL_JAVA_LIBRARIES := \
 	android.test.runner \
 	wifi-service \
 	services \
-	android.hidl.manager-V1.0-java
+	android.hidl.manager-V1.0-java \
+	android.test.base \
+	android.test.mock
 
 # These must be explicitly included because they are not normally accessible
 # from apps.
@@ -108,6 +110,7 @@ LOCAL_JNI_SHARED_LIBRARIES := \
 	libunwindstack \
 	libutils \
 	libvndksupport \
+	libdexmakerjvmtiagent \
 
 ifdef WPA_SUPPLICANT_VERSION
 LOCAL_JNI_SHARED_LIBRARIES += libwpa_client
