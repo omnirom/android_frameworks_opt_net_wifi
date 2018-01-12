@@ -146,7 +146,6 @@ int wifi_load_driver() {
   if (is_wifi_driver_loaded()) {
     return 0;
   }
-
   if (insmod(DRIVER_MODULE_PATH, DRIVER_MODULE_ARG) < 0) return -1;
 #endif
 
@@ -156,6 +155,13 @@ int wifi_load_driver() {
   }
 
   if (wifi_change_driver_state(WIFI_DRIVER_STATE_ON) < 0) return -1;
+#endif
+#ifdef WIFI_DRIVER_LOAD_DELAY
+  int count = 20; /* wait at most 10 seconds for completion */
+  while (count-- > 0) {
+      if (is_wifi_driver_loaded()) break;
+      usleep(500000);
+  }
 #endif
   property_set(DRIVER_PROP_NAME, "ok");
   return 0;

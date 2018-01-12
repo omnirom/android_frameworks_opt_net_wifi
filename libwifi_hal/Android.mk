@@ -59,7 +59,9 @@ endif
 ifdef WIFI_DRIVER_STATE_OFF
 wifi_hal_cflags += -DWIFI_DRIVER_STATE_OFF=\"$(WIFI_DRIVER_STATE_OFF)\"
 endif
-
+ifdef WIFI_DRIVER_LOAD_DELAY
+wifi_hal_cflags += -DWIFI_DRIVER_LOAD_DELAY
+endif
 # Common code shared between the HALs.
 # ============================================================
 include $(CLEAR_VARS)
