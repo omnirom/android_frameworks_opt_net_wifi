@@ -26,6 +26,7 @@ import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiScanner;
+import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.WifiScanner.PnoSettings;
 import android.net.wifi.WifiScanner.ScanSettings;
 import android.os.Handler;
@@ -147,6 +148,7 @@ public class WifiConnectivityManager {
     private boolean mWifiEnabled = false;
     private boolean mWifiConnectivityManagerEnabled = true;
     private boolean mScreenOn = false;
+    private int mMiracastMode = WifiP2pManager.MIRACAST_DISABLED;
     private int mWifiState = WIFI_STATE_UNKNOWN;
     private boolean mUntrustedConnectionAllowed = false;
     private int mScanRestartCount = 0;
@@ -857,6 +859,17 @@ public class WifiConnectivityManager {
             return;
         }
 
+        // Any scans will impact wifi performance including WFD performance,
+        // So at least ignore scans triggered internally by ConnectivityManager
+        // when WFD session is active. We still allow connectivity scans initiated
+        // by other work source.
+        if (WIFI_WORK_SOURCE.equals(workSource) &&
+            (mMiracastMode == WifiP2pManager.MIRACAST_SOURCE ||
+            mMiracastMode == WifiP2pManager.MIRACAST_SINK)) {
+            Log.d(TAG,"ignore connectivity scan, MiracastMode:" + mMiracastMode);
+            return;
+        }
+
         mPnoScanListener.resetLowRssiNetworkRetryDelay();
 
         ScanSettings settings = new ScanSettings();
@@ -1048,6 +1061,15 @@ public class WifiConnectivityManager {
         mOpenNetworkNotifier.handleScreenStateChanged(screenOn);
 
         startConnectivityScan(SCAN_ON_SCHEDULE);
+    }
+
+    /**
+     * Save current miracast mode, it will be used to ignore
+     * connectivity scan during the time when miracast is enabled.
+     */
+    public void saveMiracastMode(int mode) {
+        Log.d(TAG,"saveMiracastMode: mode=" + mode);
+        mMiracastMode = mode;
     }
 
     /**
