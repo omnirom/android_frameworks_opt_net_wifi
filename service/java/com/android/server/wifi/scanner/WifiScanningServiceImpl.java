@@ -16,13 +16,15 @@
 
 package com.android.server.wifi.scanner;
 
+import static android.content.pm.PackageManager.PERMISSION_DENIED;
+import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+
 import android.Manifest;
 import android.app.AlarmManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.PackageManager;
 import android.net.wifi.IWifiScanner;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
@@ -323,29 +325,24 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         mClientHandler.setWifiLog(log);
     }
 
-    private static boolean isWorkSourceValid(WorkSource workSource) {
-        return workSource != null && workSource.size() > 0 && workSource.get(0) >= 0;
-    }
-
     private WorkSource computeWorkSource(ClientInfo ci, WorkSource requestedWorkSource) {
         if (requestedWorkSource != null) {
-            if (isWorkSourceValid(requestedWorkSource)) {
-                // Wifi currently doesn't use names, so need to clear names out of the
-                // supplied WorkSource to allow future WorkSource combining.
-                requestedWorkSource.clearNames();
+            requestedWorkSource.clearNames();
+
+            if (!requestedWorkSource.isEmpty()) {
                 return requestedWorkSource;
-            } else {
-                loge("Got invalid work source request: " + requestedWorkSource.toString() +
-                        " from " + ci);
             }
         }
-        WorkSource callingWorkSource = new WorkSource(ci.getUid());
-        if (isWorkSourceValid(callingWorkSource)) {
-            return callingWorkSource;
-        } else {
-            loge("Client has invalid work source: " + callingWorkSource);
-            return new WorkSource();
+
+        if (ci.getUid() > 0) {
+            return new WorkSource(ci.getUid());
         }
+
+        // We can't construct a sensible WorkSource because the one supplied to us was empty and
+        // we don't have a valid UID for the given client.
+        loge("Unable to compute workSource for client: " + ci + ", requested: "
+                + requestedWorkSource);
+        return new WorkSource();
     }
 
     private class RequestInfo<T> {
@@ -603,7 +600,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                                 scanParams.getParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY);
                         WorkSource workSource =
                                 scanParams.getParcelable(WifiScanner.SCAN_PARAMS_WORK_SOURCE_KEY);
-                        if (validateScanRequest(ci, handler, scanSettings, workSource)) {
+                        if (validateScanRequest(ci, handler, scanSettings)) {
                             logScanRequest("addSingleScanRequest", ci, handler, workSource,
                                     scanSettings, null);
                             replySucceeded(msg);
@@ -709,8 +706,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             }
         }
 
-        boolean validateScanRequest(ClientInfo ci, int handler, ScanSettings settings,
-                WorkSource workSource) {
+        boolean validateScanRequest(ClientInfo ci, int handler, ScanSettings settings) {
             if (ci == null) {
                 Log.d(TAG, "Failing single scan request ClientInfo not found " + handler);
                 return false;
@@ -718,6 +714,20 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             if (settings.band == WifiScanner.WIFI_BAND_UNSPECIFIED) {
                 if (settings.channels == null || settings.channels.length == 0) {
                     Log.d(TAG, "Failing single scan because channel list was empty");
+                    return false;
+                }
+            }
+            if (mContext.checkPermission(
+                    Manifest.permission.NETWORK_STACK, UNKNOWN_PID, ci.getUid())
+                    == PERMISSION_DENIED) {
+                if (!ArrayUtils.isEmpty(settings.hiddenNetworks)) {
+                    Log.e(TAG, "Failing single scan because app " + ci.getUid()
+                            + " does not have permission to set hidden networks");
+                    return false;
+                }
+                if (settings.type != WifiScanner.TYPE_LOW_LATENCY) {
+                    Log.e(TAG, "Failing single scan because app " + ci.getUid()
+                            + " does not have permission to set type");
                     return false;
                 }
             }
@@ -1751,7 +1761,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         // This has to be implemented by subclasses to report events back to clients.
         public abstract void reportEvent(int what, int arg1, int arg2, Object obj);
 
-        // TODO(b/27903217): Blame scan on provided work source
+        // TODO(b/27903217, 71530998): This is dead code. Should this be wired up ?
         private void reportBatchedScanStart() {
             if (mUid == 0)
                 return;
@@ -1765,6 +1775,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             }
         }
 
+        // TODO(b/27903217, 71530998): This is dead code. Should this be wired up ?
         private void reportBatchedScanStop() {
             if (mUid == 0)
                 return;
@@ -1791,7 +1802,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             return totalScanDurationPerHour / ChannelHelper.SCAN_PERIOD_PER_CHANNEL_MS;
         }
 
-        public void reportScanWorkUpdate() {
+        // TODO(b/27903217, 71530998): This is dead code. Should this be wired up ?
+        private void reportScanWorkUpdate() {
             if (mScanWorkReported) {
                 reportBatchedScanStop();
                 mScanWorkReported = false;
@@ -1963,7 +1975,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     @Override
     protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.DUMP)
-                != PackageManager.PERMISSION_GRANTED) {
+                != PERMISSION_GRANTED) {
             pw.println("Permission Denial: can't dump WifiScanner from from pid="
                     + Binder.getCallingPid()
                     + ", uid=" + Binder.getCallingUid()
