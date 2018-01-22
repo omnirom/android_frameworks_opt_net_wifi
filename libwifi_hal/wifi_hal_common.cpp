@@ -42,6 +42,9 @@ extern "C" int delete_module(const char *, unsigned int);
 #endif
 
 static const char DRIVER_PROP_NAME[] = "wlan.driver.status";
+#ifdef WIFI_DRIVER_LOAD_DELAY
+static const char DRIVER_INIT_PROP_NAME[] = "wlan.driver.init";
+#endif
 #ifdef WIFI_DRIVER_MODULE_PATH
 static const char DRIVER_MODULE_NAME[] = WIFI_DRIVER_MODULE_NAME;
 static const char DRIVER_MODULE_TAG[] = WIFI_DRIVER_MODULE_NAME " ";
@@ -142,6 +145,9 @@ int is_wifi_driver_loaded() {
 }
 
 int wifi_load_driver() {
+#ifdef WIFI_DRIVER_LOAD_DELAY
+  char driver_init_status[PROPERTY_VALUE_MAX];
+#endif
 #ifdef WIFI_DRIVER_MODULE_PATH
   if (is_wifi_driver_loaded()) {
     return 0;
@@ -157,11 +163,20 @@ int wifi_load_driver() {
   if (wifi_change_driver_state(WIFI_DRIVER_STATE_ON) < 0) return -1;
 #endif
 #ifdef WIFI_DRIVER_LOAD_DELAY
+  // initial load done?
+  if (property_get(DRIVER_INIT_PROP_NAME, driver_init_status, NULL) > 0 &&
+      !strcmp(driver_init_status, "ok")) {
+    property_set(DRIVER_PROP_NAME, "ok");
+    return 0;
+  }
+
   int count = 20; /* wait at most 10 seconds for completion */
   while (count-- > 0) {
       if (is_wifi_driver_loaded()) break;
       usleep(500000);
   }
+  // never wait again
+  property_set(DRIVER_INIT_PROP_NAME, "ok");
 #endif
   property_set(DRIVER_PROP_NAME, "ok");
   return 0;
