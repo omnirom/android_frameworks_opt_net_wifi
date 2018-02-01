@@ -17,6 +17,7 @@
 package com.android.server.wifi;
 
 import android.annotation.NonNull;
+import android.net.MacAddress;
 import android.net.wifi.IApInterface;
 import android.net.wifi.IApInterfaceEventCallback;
 import android.net.wifi.IClientInterface;
@@ -25,7 +26,6 @@ import android.net.wifi.IScanEvent;
 import android.net.wifi.IWifiScannerImpl;
 import android.net.wifi.IWificond;
 import android.net.wifi.ScanResult;
-import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
 import android.os.Binder;
@@ -43,9 +43,9 @@ import com.android.server.wifi.wificond.HiddenNetwork;
 import com.android.server.wifi.wificond.NativeScanResult;
 import com.android.server.wifi.wificond.PnoNetwork;
 import com.android.server.wifi.wificond.PnoSettings;
+import com.android.server.wifi.wificond.RadioChainInfo;
 import com.android.server.wifi.wificond.SingleScanSettings;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -180,28 +180,17 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
-     * Registers a death notification for wificond.
+     * Initializes wificond & registers a death notification for wificond.
+     * This method clears any existing state in wificond daemon.
+     *
      * @return Returns true on success.
      */
-    public boolean registerDeathHandler(@NonNull WifiNative.WificondDeathEventHandler handler) {
+    public boolean initialize(@NonNull WifiNative.WificondDeathEventHandler handler) {
         if (mDeathEventHandler != null) {
             Log.e(TAG, "Death handler already present");
-            return false;
         }
         mDeathEventHandler = handler;
-        return true;
-    }
-
-    /**
-     * Deregisters a death notification for wificond.
-     * @return Returns true on success.
-     */
-    public boolean deregisterDeathHandler() {
-        if (mDeathEventHandler == null) {
-            Log.e(TAG, "No Death handler present");
-            return false;
-        }
-        mDeathEventHandler = null;
+        tearDownInterfaces();
         return true;
     }
 
@@ -211,7 +200,9 @@ public class WificondControl implements IBinder.DeathRecipient {
      */
     private boolean retrieveWificondAndRegisterForDeath() {
         if (mWificond != null) {
-            Log.d(TAG, "Wificond handle already retrieved");
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "Wificond handle already retrieved");
+            }
             // We already have a wificond handle.
             return true;
         }
@@ -545,15 +536,28 @@ public class WificondControl implements IBinder.DeathRecipient {
 
                 ScanDetail scanDetail = new ScanDetail(networkDetail, wifiSsid, bssid, flags,
                         result.signalMbm / 100, result.frequency, result.tsf, ies, null);
+                ScanResult scanResult = scanDetail.getScanResult();
                 // Update carrier network info if this AP's SSID is associated with a carrier Wi-Fi
                 // network and it uses EAP.
                 if (ScanResultUtil.isScanResultForEapNetwork(scanDetail.getScanResult())
                         && mCarrierNetworkConfig.isCarrierNetwork(wifiSsid.toString())) {
-                    scanDetail.getScanResult().isCarrierAp = true;
-                    scanDetail.getScanResult().carrierApEapType =
+                    scanResult.isCarrierAp = true;
+                    scanResult.carrierApEapType =
                             mCarrierNetworkConfig.getNetworkEapType(wifiSsid.toString());
-                    scanDetail.getScanResult().carrierName =
+                    scanResult.carrierName =
                             mCarrierNetworkConfig.getCarrierName(wifiSsid.toString());
+                }
+                // Fill up the radio chain info.
+                if (result.radioChainInfos != null) {
+                    scanResult.radioChainInfos =
+                        new ScanResult.RadioChainInfo[result.radioChainInfos.size()];
+                    int idx = 0;
+                    for (RadioChainInfo nativeRadioChainInfo : result.radioChainInfos) {
+                        scanResult.radioChainInfos[idx] = new ScanResult.RadioChainInfo();
+                        scanResult.radioChainInfos[idx].id = nativeRadioChainInfo.chainId;
+                        scanResult.radioChainInfos[idx].level = nativeRadioChainInfo.level;
+                        idx++;
+                    }
                 }
                 results.add(scanDetail);
             }
@@ -568,13 +572,31 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
+     * Return scan type for the parcelable {@link SingleScanSettings}
+     */
+    private static int getScanType(int scanType) {
+        switch (scanType) {
+            case WifiNative.SCAN_TYPE_LOW_LATENCY:
+                return IWifiScannerImpl.SCAN_TYPE_LOW_SPAN;
+            case WifiNative.SCAN_TYPE_LOW_POWER:
+                return IWifiScannerImpl.SCAN_TYPE_LOW_POWER;
+            case WifiNative.SCAN_TYPE_HIGH_ACCURACY:
+                return IWifiScannerImpl.SCAN_TYPE_HIGH_ACCURACY;
+            default:
+                throw new IllegalArgumentException("Invalid scan type " + scanType);
+        }
+    }
+
+    /**
      * Start a scan using wificond for the given parameters.
      * @param ifaceName Name of the interface.
+     * @param scanType Type of scan to perform.
      * @param freqs list of frequencies to scan for, if null scan all supported channels.
      * @param hiddenNetworkSSIDs List of hidden networks to be scanned for.
      * @return Returns true on success.
      */
     public boolean scan(@NonNull String ifaceName,
+                        int scanType,
                         Set<Integer> freqs,
                         Set<String> hiddenNetworkSSIDs) {
         IWifiScannerImpl scannerImpl = getScannerImpl(ifaceName);
@@ -583,6 +605,12 @@ public class WificondControl implements IBinder.DeathRecipient {
             return false;
         }
         SingleScanSettings settings = new SingleScanSettings();
+        try {
+            settings.scanType = getScanType(scanType);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "Invalid scan type ", e);
+            return false;
+        }
         settings.channelSettings  = new ArrayList<>();
         settings.hiddenNetworks  = new ArrayList<>();
 
@@ -736,40 +764,24 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
-     * Start Soft AP operation using the provided configuration.
+     * Start hostapd
+     * TODO(b/71513606): Move this to a global operation.
      *
      * @param ifaceName Name of the interface.
-     * @param config Configuration to use for the soft ap created.
      * @param listener Callback for AP events.
      * @return true on success, false otherwise.
      */
-    public boolean startSoftAp(@NonNull String ifaceName,
-                               WifiConfiguration config,
+    public boolean startHostapd(@NonNull String ifaceName,
                                SoftApListener listener) {
         IApInterface iface = getApInterface(ifaceName);
         if (iface == null) {
             Log.e(TAG, "No valid ap interface handler");
             return false;
         }
-        int encryptionType = getIApInterfaceEncryptionType(config);
         try {
-            // TODO(b/67745880) Note that config.SSID is intended to be either a
-            // hex string or "double quoted".
-            // However, it seems that whatever is handing us these configurations does not obey
-            // this convention.
-            boolean success = iface.writeHostapdConfig(
-                    config.SSID.getBytes(StandardCharsets.UTF_8), config.hiddenSSID,
-                    config.apChannel, encryptionType,
-                    (config.preSharedKey != null)
-                            ? config.preSharedKey.getBytes(StandardCharsets.UTF_8)
-                            : new byte[0]);
-            if (!success) {
-                Log.e(TAG, "Failed to write hostapd configuration");
-                return false;
-            }
             IApInterfaceEventCallback  callback = new ApInterfaceEventCallback(listener);
             mApInterfaceListeners.put(ifaceName, callback);
-            success = iface.startHostapd(callback);
+            boolean success = iface.startHostapd(callback);
             if (!success) {
                 Log.e(TAG, "Failed to start hostapd.");
                 return false;
@@ -782,12 +794,13 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
-     * Stop the ongoing Soft AP operation.
+     * Stop hostapd
+     * TODO(b/71513606): Move this to a global operation.
      *
      * @param ifaceName Name of the interface.
      * @return true on success, false otherwise.
      */
-    public boolean stopSoftAp(@NonNull String ifaceName) {
+    public boolean stopHostapd(@NonNull String ifaceName) {
         IApInterface iface = getApInterface(ifaceName);
         if (iface == null) {
             Log.e(TAG, "No valid ap interface handler");
@@ -807,25 +820,27 @@ public class WificondControl implements IBinder.DeathRecipient {
         return true;
     }
 
-    private static int getIApInterfaceEncryptionType(WifiConfiguration localConfig) {
-        int encryptionType;
-        switch (localConfig.getAuthType()) {
-            case WifiConfiguration.KeyMgmt.NONE:
-                encryptionType = IApInterface.ENCRYPTION_TYPE_NONE;
-                break;
-            case WifiConfiguration.KeyMgmt.WPA_PSK:
-                encryptionType = IApInterface.ENCRYPTION_TYPE_WPA;
-                break;
-            case WifiConfiguration.KeyMgmt.WPA2_PSK:
-                encryptionType = IApInterface.ENCRYPTION_TYPE_WPA2;
-                break;
-            default:
-                // We really shouldn't default to None, but this was how NetworkManagementService
-                // used to do this.
-                encryptionType = IApInterface.ENCRYPTION_TYPE_NONE;
-                break;
+    /**
+     * Set Mac address on the given interface
+     * @param interfaceName Name of the interface.
+     * @param mac Mac address to change into
+     * @return true on success, false otherwise.
+     */
+    public boolean setMacAddress(@NonNull String interfaceName, @NonNull MacAddress mac) {
+        IClientInterface mClientInterface = getClientInterface(interfaceName);
+        if (mClientInterface == null) {
+            Log.e(TAG, "No valid wificond client interface handler");
+            return false;
         }
-        return encryptionType;
+        byte[] macByteArray = mac.toByteArray();
+
+        try {
+            mClientInterface.setMacAddress(macByteArray);
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to setMacAddress due to remote exception");
+            return false;
+        }
+        return true;
     }
 
     /**

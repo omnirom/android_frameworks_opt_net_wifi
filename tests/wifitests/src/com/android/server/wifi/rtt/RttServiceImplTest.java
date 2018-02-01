@@ -207,7 +207,7 @@ public class RttServiceImplTest {
                 BroadcastReceiver.class);
         verify(mockContext, times(2)).registerReceiver(bcastRxCaptor.capture(),
                 any(IntentFilter.class));
-        verify(mockNative).start();
+        verify(mockNative).start(any());
         mPowerBcastReceiver = bcastRxCaptor.getAllValues().get(0);
         mLocationModeReceiver = bcastRxCaptor.getAllValues().get(1);
 
@@ -307,7 +307,8 @@ public class RttServiceImplTest {
         results.first.remove(results.first.size() - 1);
         RangingResult removed = results.second.remove(results.second.size() - 1);
         results.second.add(
-                new RangingResult(RangingResult.STATUS_FAIL, removed.getPeerHandle(), 0, 0, 0, 0));
+                new RangingResult(RangingResult.STATUS_FAIL, removed.getPeerHandle(), 0, 0, 0, null,
+                        null, 0));
         mDut.onRangingResults(mIntCaptor.getValue(), results.first);
         mMockLooper.dispatchAll();
 
@@ -515,12 +516,15 @@ public class RttServiceImplTest {
         int uid1 = 10;
         int uid2 = 20;
         int uid3 = 30;
+        int uid4 = 40;
         WorkSource worksourceRequest = new WorkSource(uid1);
         worksourceRequest.add(uid2);
         worksourceRequest.add(uid3);
+        worksourceRequest.createWorkChain().addNode(uid4, "foo");
         WorkSource worksourceCancel = new WorkSource(uid2);
         worksourceCancel.add(uid3);
         worksourceCancel.add(uid1);
+        worksourceCancel.createWorkChain().addNode(uid4, "foo");
 
         RangingRequest request = RttTestUtils.getDummyRangingRequest((byte) 0);
         Pair<List<RttResult>, List<RangingResult>> results = RttTestUtils.getDummyRangingResults(
@@ -560,7 +564,7 @@ public class RttServiceImplTest {
         int uid3 = 30;
         WorkSource worksourceRequest = new WorkSource(uid1);
         worksourceRequest.add(uid2);
-        worksourceRequest.add(uid3);
+        worksourceRequest.createWorkChain().addNode(uid3, null);
         WorkSource worksourceCancel = new WorkSource(uid1);
         worksourceCancel.add(uid2);
 
@@ -637,11 +641,13 @@ public class RttServiceImplTest {
         results.first.remove(2); // remove a direct AWARE request
         RangingResult removed = results.second.remove(2);
         results.second.add(
-                new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, 0));
+                new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, null,
+                        null, 0));
         results.first.remove(0); // remove an AP request
         removed = results.second.remove(0);
         results.second.add(
-                new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, 0));
+                new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, null,
+                        null, 0));
 
         // (1) request ranging operation
         mDut.startRanging(mockIbinder, mPackageName, null, request, mockCallback);
@@ -817,9 +823,28 @@ public class RttServiceImplTest {
      */
     @Test
     public void testRangingThrottleBackgroundWorkSources() throws Exception {
-        WorkSource wsReq1 = new WorkSource(10);
-        WorkSource wsReq2 = new WorkSource(10);
-        wsReq2.add(20);
+        runTestRangingThrottleBackgroundWorkSources(false);
+    }
+
+    @Test
+    public void testRangingThrottleBackgroundChainedWorkSources() throws Exception {
+        runTestRangingThrottleBackgroundWorkSources(true);
+    }
+
+    private void runTestRangingThrottleBackgroundWorkSources(boolean isChained) throws Exception {
+        final WorkSource wsReq1 = new WorkSource();
+        final WorkSource wsReq2 = new WorkSource();
+        if (isChained) {
+            wsReq1.createWorkChain().addNode(10, "foo");
+
+            wsReq2.createWorkChain().addNode(10, "foo");
+            wsReq2.createWorkChain().addNode(20, "bar");
+        } else {
+            wsReq1.add(10);
+
+            wsReq2.add(10);
+            wsReq2.add(20);
+        }
 
         RangingRequest request1 = RttTestUtils.getDummyRangingRequest((byte) 1);
         RangingRequest request2 = RttTestUtils.getDummyRangingRequest((byte) 2);
@@ -885,7 +910,7 @@ public class RttServiceImplTest {
      */
     @Test
     public void testRejectFloodingRequestsSingleUid() throws Exception {
-        runFloodRequestsTest(true);
+        runFloodRequestsTest(true, false);
     }
 
     /**
@@ -894,7 +919,12 @@ public class RttServiceImplTest {
      */
     @Test
     public void testRejectFloodingRequestsIdenticalWorksources() throws Exception {
-        runFloodRequestsTest(false);
+        runFloodRequestsTest(false, false);
+    }
+
+    @Test
+    public void testRejectFloodingRequestsIdenticalChainedWorksources() throws Exception {
+        runFloodRequestsTest(false, true);
     }
 
     /**
@@ -941,15 +971,22 @@ public class RttServiceImplTest {
      * - Flood service with requests: using same ID or same WorkSource
      * - Provide results (to clear queue) and execute another test: validate succeeds
      */
-    private void runFloodRequestsTest(boolean useUids) throws Exception {
+    private void runFloodRequestsTest(boolean useUids, boolean useChainedWorkSources)
+            throws Exception {
         RangingRequest request = RttTestUtils.getDummyRangingRequest((byte) 1);
         Pair<List<RttResult>, List<RangingResult>> result = RttTestUtils.getDummyRangingResults(
                 request);
 
         WorkSource ws = new WorkSource();
-        ws.add(10);
-        ws.add(20);
-        ws.add(30);
+        if (useChainedWorkSources) {
+            ws.createWorkChain().addNode(10, "foo");
+            ws.createWorkChain().addNode(20, "bar");
+            ws.createWorkChain().addNode(30, "baz");
+        } else {
+            ws.add(10);
+            ws.add(20);
+            ws.add(30);
+        }
 
         InOrder cbInorder = inOrder(mockCallback);
         InOrder nativeInorder = inOrder(mockNative);

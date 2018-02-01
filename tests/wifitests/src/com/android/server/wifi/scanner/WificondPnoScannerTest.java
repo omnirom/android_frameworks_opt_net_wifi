@@ -27,7 +27,7 @@ import android.content.Context;
 import android.net.wifi.WifiScanner;
 import android.os.SystemClock;
 import android.os.test.TestLooper;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import com.android.internal.R;
 import com.android.server.wifi.Clock;
@@ -51,6 +51,7 @@ import java.util.Set;
  */
 @SmallTest
 public class WificondPnoScannerTest {
+    private static final String IFACE_NAME = "a_test_interface_name";
 
     @Mock Context mContext;
     TestAlarmManager mAlarmManager;
@@ -75,7 +76,7 @@ public class WificondPnoScannerTest {
                 new int[]{5150, 5175},
                 new int[]{5600, 5650});
 
-        when(mWifiNative.getInterfaceName()).thenReturn("a_test_interface_name");
+        when(mWifiNative.getClientInterfaceName()).thenReturn(IFACE_NAME);
         when(mContext.getSystemService(Context.ALARM_SERVICE))
                 .thenReturn(mAlarmManager.getAlarmManager());
         when(mContext.getResources()).thenReturn(mResources);
@@ -118,10 +119,10 @@ public class WificondPnoScannerTest {
         startSuccessfulPnoScan(null, pnoSettings, null, pnoEventHandler);
 
         // Fail the PNO stop.
-        when(mWifiNative.stopPnoScan()).thenReturn(false);
+        when(mWifiNative.stopPnoScan(IFACE_NAME)).thenReturn(false);
         assertTrue(mScanner.resetHwPnoList());
         mLooper.dispatchAll();
-        verify(mWifiNative).stopPnoScan();
+        verify(mWifiNative).stopPnoScan(IFACE_NAME);
 
         // Add a new PNO scan request and ensure it runs successfully.
         startSuccessfulPnoScan(null, pnoSettings, null, pnoEventHandler);
@@ -134,7 +135,7 @@ public class WificondPnoScannerTest {
 
     private void createScannerWithHwPnoScanSupport() {
         mResources.setBoolean(R.bool.config_wifi_background_scan_support, true);
-        mScanner = new WificondScannerImpl(mContext, mWifiNative, mWifiMonitor,
+        mScanner = new WificondScannerImpl(mContext, IFACE_NAME, mWifiNative, mWifiMonitor,
                 new WificondChannelHelper(mWifiNative), mLooper.getLooper(), mClock);
     }
 
@@ -174,11 +175,11 @@ public class WificondPnoScannerTest {
     private void startSuccessfulPnoScan(WifiNative.ScanSettings scanSettings,
             WifiNative.PnoSettings pnoSettings, WifiNative.ScanEventHandler scanEventHandler,
             WifiNative.PnoEventHandler pnoEventHandler) {
-        reset(mWifiNative);
         // Scans succeed
-        when(mWifiNative.scan(any(), any(Set.class))).thenReturn(true);
-        when(mWifiNative.startPnoScan(any(WifiNative.PnoSettings.class))).thenReturn(true);
-        when(mWifiNative.stopPnoScan()).thenReturn(true);
+        when(mWifiNative.scan(eq(IFACE_NAME), anyInt(), any(), any(Set.class))).thenReturn(true);
+        when(mWifiNative.startPnoScan(eq(IFACE_NAME), any(WifiNative.PnoSettings.class)))
+                .thenReturn(true);
+        when(mWifiNative.stopPnoScan(IFACE_NAME)).thenReturn(true);
 
         assertTrue(mScanner.setHwPnoList(pnoSettings, pnoEventHandler));
     }
@@ -195,7 +196,7 @@ public class WificondPnoScannerTest {
     private void expectHwDisconnectedPnoScanStart(InOrder order,
             WifiNative.PnoSettings pnoSettings) {
         // Verify  HW PNO scan started
-        order.verify(mWifiNative).startPnoScan(any(WifiNative.PnoSettings.class));
+        order.verify(mWifiNative).startPnoScan(any(), any(WifiNative.PnoSettings.class));
     }
 
     /**
@@ -209,12 +210,13 @@ public class WificondPnoScannerTest {
         expectHwDisconnectedPnoScanStart(order, pnoSettings);
 
         // Setup scan results
-        when(mWifiNative.getPnoScanResults()).thenReturn(scanResults.getScanDetailArrayList());
-        when(mWifiNative.getScanResults()).thenReturn(scanResults.getScanDetailArrayList());
+        when(mWifiNative.getPnoScanResults(IFACE_NAME))
+                .thenReturn(scanResults.getScanDetailArrayList());
+        when(mWifiNative.getScanResults(IFACE_NAME))
+                .thenReturn(scanResults.getScanDetailArrayList());
 
         // Notify scan has finished
-        mWifiMonitor.sendMessage(mWifiNative.getInterfaceName(),
-                                 WifiMonitor.PNO_SCAN_RESULTS_EVENT);
+        mWifiMonitor.sendMessage(IFACE_NAME, WifiMonitor.PNO_SCAN_RESULTS_EVENT);
         assertEquals("dispatch message after results event", 1, mLooper.dispatchAll());
 
         order.verify(eventHandler).onPnoNetworkFound(scanResults.getRawScanResults());

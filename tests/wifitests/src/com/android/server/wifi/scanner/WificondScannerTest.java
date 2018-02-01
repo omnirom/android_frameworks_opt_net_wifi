@@ -23,7 +23,7 @@ import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
 import android.net.wifi.WifiScanner;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
@@ -49,8 +49,9 @@ public class WificondScannerTest extends BaseWifiScannerImplTest {
                 new int[]{2400, 2450},
                 new int[]{5150, 5175},
                 new int[]{5600, 5650});
-        mScanner = new WificondScannerImpl(mContext, mWifiNative, mWifiMonitor,
-                new WificondChannelHelper(mWifiNative), mLooper.getLooper(), mClock);
+        mScanner = new WificondScannerImpl(mContext, BaseWifiScannerImplTest.IFACE_NAME,
+                mWifiNative, mWifiMonitor, new WificondChannelHelper(mWifiNative),
+                mLooper.getLooper(), mClock);
     }
 
     /**
@@ -66,8 +67,8 @@ public class WificondScannerTest extends BaseWifiScannerImplTest {
         when(channelHelper.createChannelCollection()).thenReturn(channelCollection);
         when(channelCollection.isEmpty()).thenReturn(true);
 
-        mScanner = new WificondScannerImpl(mContext, mWifiNative, mWifiMonitor,
-                channelHelper, mLooper.getLooper(), mClock);
+        mScanner = new WificondScannerImpl(mContext, BaseWifiScannerImplTest.IFACE_NAME,
+                mWifiNative, mWifiMonitor, channelHelper, mLooper.getLooper(), mClock);
 
         WifiNative.ScanSettings settings = new NativeScanSettingsBuilder()
                 .withBasePeriod(10000) // ms
@@ -81,7 +82,7 @@ public class WificondScannerTest extends BaseWifiScannerImplTest {
         mLooper.dispatchAll();
 
         // No scan is issued to WifiNative.
-        verify(mWifiNative, never()).scan(any(), any(Set.class));
+        verify(mWifiNative, never()).scan(any(), anyInt(), any(), any(Set.class));
         // A scan failed event must be reported.
         verify(eventHandler).onScanStatus(WifiNative.WIFI_SCAN_FAILED);
     }

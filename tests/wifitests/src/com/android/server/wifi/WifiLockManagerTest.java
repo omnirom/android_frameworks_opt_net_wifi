@@ -25,7 +25,7 @@ import android.net.wifi.WifiManager;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.WorkSource;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 
 import com.android.internal.app.IBatteryStats;
 
@@ -259,8 +259,8 @@ public class WifiLockManagerTest {
 
         mWifiLockManager.updateWifiLockWorkSource(mBinder, updated);
         InOrder inOrder = inOrder(mBatteryStats);
-        inOrder.verify(mBatteryStats).noteFullWifiLockReleasedFromSource(mChainedWorkSource);
         inOrder.verify(mBatteryStats).noteFullWifiLockAcquiredFromSource(eq(updated));
+        inOrder.verify(mBatteryStats).noteFullWifiLockReleasedFromSource(mChainedWorkSource);
 
         releaseWifiLockSuccessful(mBinder);
     }
@@ -280,8 +280,8 @@ public class WifiLockManagerTest {
 
         mWifiLockManager.updateWifiLockWorkSource(mBinder, newWorkSource);
         InOrder inOrder = inOrder(mBatteryStats);
-        inOrder.verify(mBatteryStats).noteFullWifiLockReleasedFromSource(mWorkSource);
         inOrder.verify(mBatteryStats).noteFullWifiLockAcquiredFromSource(eq(newWorkSource));
+        inOrder.verify(mBatteryStats).noteFullWifiLockReleasedFromSource(mWorkSource);
     }
 
     /**
@@ -299,8 +299,8 @@ public class WifiLockManagerTest {
 
         mWifiLockManager.updateWifiLockWorkSource(mBinder, null);
         InOrder inOrder = inOrder(mBatteryStats);
-        inOrder.verify(mBatteryStats).noteFullWifiLockReleasedFromSource(mWorkSource);
         inOrder.verify(mBatteryStats).noteFullWifiLockAcquiredFromSource(eq(newWorkSource));
+        inOrder.verify(mBatteryStats).noteFullWifiLockReleasedFromSource(mWorkSource);
     }
 
     /**
