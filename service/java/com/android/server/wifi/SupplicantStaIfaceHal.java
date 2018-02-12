@@ -71,6 +71,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -517,6 +518,23 @@ public class SupplicantStaIfaceHal {
     }
 
     /**
+     * Terminate the supplicant daemon.
+     */
+    public void terminate() {
+        synchronized (mLock) {
+            final String methodStr = "terminate";
+            if (!checkSupplicantAndLogFailure(methodStr)) return;
+            try {
+                if (isV1_1()) {
+                    getSupplicantMockableV1_1().terminate();
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+        }
+    }
+
+    /**
      * Wrapper functions to access static HAL methods, created to be mockable in unit tests
      */
     protected IServiceManager getServiceManagerMockable() throws RemoteException {
@@ -527,15 +545,25 @@ public class SupplicantStaIfaceHal {
 
     protected ISupplicant getSupplicantMockable() throws RemoteException {
         synchronized (mLock) {
-            return ISupplicant.getService();
+            try {
+                return ISupplicant.getService();
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "Failed to get ISupplicant", e);
+                return null;
+            }
         }
     }
 
     protected android.hardware.wifi.supplicant.V1_1.ISupplicant getSupplicantMockableV1_1()
             throws RemoteException {
         synchronized (mLock) {
-            return android.hardware.wifi.supplicant.V1_1.ISupplicant.castFrom(
-                    ISupplicant.getService());
+            try {
+                return android.hardware.wifi.supplicant.V1_1.ISupplicant.castFrom(
+                        ISupplicant.getService());
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "Failed to get ISupplicant", e);
+                return null;
+            }
         }
     }
 
@@ -863,17 +891,18 @@ public class SupplicantStaIfaceHal {
      * Send the eap identity response for the currently configured network.
      *
      * @param ifaceName Name of the interface.
-     * @param identityStr String to send.
+     * @param identity identity used for EAP-Identity
+     * @param encryptedIdentity encrypted identity used for EAP-AKA/EAP-SIM
      * @return true if succeeds, false otherwise.
      */
     public boolean sendCurrentNetworkEapIdentityResponse(
-            @NonNull String ifaceName, String identityStr) {
+            @NonNull String ifaceName, @NonNull String identity, String encryptedIdentity) {
         synchronized (mLock) {
             SupplicantStaNetworkHal networkHandle =
                     checkSupplicantStaNetworkAndLogFailure(
                             ifaceName, "sendCurrentNetworkEapIdentityResponse");
             if (networkHandle == null) return false;
-            return networkHandle.sendNetworkEapIdentityResponse(identityStr);
+            return networkHandle.sendNetworkEapIdentityResponse(identity, encryptedIdentity);
         }
     }
 
@@ -2133,8 +2162,7 @@ public class SupplicantStaIfaceHal {
             final String methodStr) {
         synchronized (mLock) {
             if (status.code != SupplicantStatusCode.SUCCESS) {
-                Log.e(TAG, "ISupplicantStaIface." + methodStr + " failed: "
-                        + supplicantStatusCodeToString(status.code) + ", " + status.debugMessage);
+                Log.e(TAG, "ISupplicantStaIface." + methodStr + " failed: " + status);
                 return false;
             } else {
                 if (mVerboseLoggingEnabled) {
@@ -2163,38 +2191,6 @@ public class SupplicantStaIfaceHal {
             Log.e(TAG, "ISupplicantStaIface." + methodStr + " failed with exception", e);
         }
     }
-
-    /**
-     * Converts SupplicantStatus code values to strings for debug logging
-     * TODO(b/34811152) Remove this, or make it more break resistance
-     */
-    public static String supplicantStatusCodeToString(int code) {
-        switch (code) {
-            case 0:
-                return "SUCCESS";
-            case 1:
-                return "FAILURE_UNKNOWN";
-            case 2:
-                return "FAILURE_ARGS_INVALID";
-            case 3:
-                return "FAILURE_IFACE_INVALID";
-            case 4:
-                return "FAILURE_IFACE_UNKNOWN";
-            case 5:
-                return "FAILURE_IFACE_EXISTS";
-            case 6:
-                return "FAILURE_IFACE_DISABLED";
-            case 7:
-                return "FAILURE_IFACE_NOT_DISCONNECTED";
-            case 8:
-                return "FAILURE_NETWORK_INVALID";
-            case 9:
-                return "FAILURE_NETWORK_UNKNOWN";
-            default:
-                return "??? UNKNOWN_CODE";
-        }
-    }
-
 
     /**
      * Converts the Wps config method string to the equivalent enum value.
