@@ -33,8 +33,6 @@ import android.net.wifi.aware.IWifiAwareMacAddressProvider;
 import android.net.wifi.aware.IWifiAwareManager;
 import android.net.wifi.rtt.IRttCallback;
 import android.net.wifi.rtt.IWifiRttManager;
-import android.net.wifi.rtt.LocationCivic;
-import android.net.wifi.rtt.LocationConfigurationInformation;
 import android.net.wifi.rtt.RangingRequest;
 import android.net.wifi.rtt.RangingResult;
 import android.net.wifi.rtt.RangingResultCallback;
@@ -46,6 +44,9 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.RemoteException;
+import android.os.ResultReceiver;
+import android.os.ShellCallback;
+import android.os.ShellCommand;
 import android.os.UserHandle;
 import android.os.WorkSource;
 import android.os.WorkSource.WorkChain;
@@ -78,15 +79,19 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
     private boolean mDbg = false;
 
     private final Context mContext;
+    private final RttShellCommand mShellCommand;
     private Clock mClock;
     private IWifiAwareManager mAwareBinder;
     private RttNative mRttNative;
     private WifiPermissionsUtil mWifiPermissionsUtil;
     private ActivityManager mActivityManager;
     private PowerManager mPowerManager;
+    private LocationManager mLocationManager;
     private FrameworkFacade mFrameworkFacade;
 
     private RttServiceSynchronized mRttServiceSynchronized;
+
+    private static final int CONVERSION_US_TO_MS = 1_000;
 
     /* package */ static final String HAL_RANGING_TIMEOUT_TAG = TAG + " HAL Ranging Timeout";
 
@@ -100,6 +105,102 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
 
     public RttServiceImpl(Context context) {
         mContext = context;
+        mShellCommand = new RttShellCommand();
+        mShellCommand.reset();
+    }
+
+    /*
+     * Shell command: adb shell cmd wifirtt ...
+     */
+
+    // If set to 0: normal behavior, if set to 1: do not allow any caller (including system
+    // callers) privileged API access
+    private static final String CONTROL_PARAM_OVERRIDE_ASSUME_NO_PRIVILEGE_NAME =
+            "override_assume_no_privilege";
+    private static final int CONTROL_PARAM_OVERRIDE_ASSUME_NO_PRIVILEGE_DEFAULT = 0;
+
+    private class RttShellCommand extends ShellCommand {
+        private Map<String, Integer> mControlParams = new HashMap<>();
+
+        @Override
+        public int onCommand(String cmd) {
+            final int uid = Binder.getCallingUid();
+            if (uid != 0) {
+                throw new SecurityException(
+                        "Uid " + uid + " does not have access to wifirtt commands");
+            }
+
+            final PrintWriter pw = getErrPrintWriter();
+            try {
+                if ("reset".equals(cmd)) {
+                    reset();
+                    return 0;
+                } else if ("get".equals(cmd)) {
+                    String name = getNextArgRequired();
+                    if (!mControlParams.containsKey(name)) {
+                        pw.println("Unknown parameter name -- '" + name + "'");
+                        return -1;
+                    }
+                    getOutPrintWriter().println(mControlParams.get(name));
+                    return 0;
+                } else if ("set".equals(cmd)) {
+                    String name = getNextArgRequired();
+                    String valueStr = getNextArgRequired();
+
+                    if (!mControlParams.containsKey(name)) {
+                        pw.println("Unknown parameter name -- '" + name + "'");
+                        return -1;
+                    }
+
+                    try {
+                        mControlParams.put(name, Integer.valueOf(valueStr));
+                        return 0;
+                    } catch (NumberFormatException e) {
+                        pw.println("Can't convert value to integer -- '" + valueStr + "'");
+                        return -1;
+                    }
+                } else {
+                    handleDefaultCommands(cmd);
+                }
+            } catch (Exception e) {
+                pw.println("Exception: " + e);
+            }
+            return -1;
+        }
+
+        @Override
+        public void onHelp() {
+            final PrintWriter pw = getOutPrintWriter();
+
+            pw.println("Wi-Fi RTT (wifirt) commands:");
+            pw.println("  help");
+            pw.println("    Print this help text.");
+            pw.println("  reset");
+            pw.println("    Reset parameters to default values.");
+            pw.println("  get <name>");
+            pw.println("    Get the value of the control parameter.");
+            pw.println("  set <name> <value>");
+            pw.println("    Set the value of the control parameter.");
+            pw.println("  Control parameters:");
+            for (String name : mControlParams.keySet()) {
+                pw.println("    " + name);
+            }
+            pw.println();
+        }
+
+        public int getControlParam(String name) {
+            if (mControlParams.containsKey(name)) {
+                return mControlParams.get(name);
+            }
+
+            Log.wtf(TAG, "getControlParam for unknown variable: " + name);
+            return 0;
+        }
+
+        public void reset() {
+            mControlParams.put(CONTROL_PARAM_OVERRIDE_ASSUME_NO_PRIVILEGE_NAME,
+                    CONTROL_PARAM_OVERRIDE_ASSUME_NO_PRIVILEGE_DEFAULT);
+        }
     }
 
     /*
@@ -128,6 +229,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
 
         mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
         mPowerManager = mContext.getSystemService(PowerManager.class);
+        mLocationManager = (LocationManager) mContext.getSystemService(Context.LOCATION_SERVICE);
         IntentFilter intentFilter = new IntentFilter();
         intentFilter.addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
         mContext.registerReceiver(new BroadcastReceiver() {
@@ -164,10 +266,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             @Override
             public void onReceive(Context context, Intent intent) {
                 if (mDbg) Log.v(TAG, "onReceive: MODE_CHANGED_ACTION: intent=" + intent);
-                int locationMode = mFrameworkFacade.getSecureIntegerSetting(mContext,
-                        Settings.Secure.LOCATION_MODE, Settings.Secure.LOCATION_MODE_OFF);
-                if (locationMode == Settings.Secure.LOCATION_MODE_HIGH_ACCURACY
-                        || locationMode == Settings.Secure.LOCATION_MODE_BATTERY_SAVING) {
+                if (mLocationManager.isLocationEnabled()) {
                     enableIfPossible();
                 } else {
                     disable();
@@ -238,17 +337,20 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
         });
     }
 
+    @Override
+    public void onShellCommand(FileDescriptor in, FileDescriptor out, FileDescriptor err,
+            String[] args, ShellCallback callback, ResultReceiver resultReceiver) {
+        mShellCommand.exec(this, in, out, err, args, callback, resultReceiver);
+    }
+
     /**
      * Binder interface API to indicate whether the API is currently available. This requires an
      * immediate asynchronous response.
      */
     @Override
     public boolean isAvailable() {
-        int locationMode = mFrameworkFacade.getSecureIntegerSetting(mContext,
-                Settings.Secure.LOCATION_MODE, Settings.Secure.LOCATION_MODE_OFF);
-        return mRttNative.isReady() && !mPowerManager.isDeviceIdleMode() && (
-                locationMode == Settings.Secure.LOCATION_MODE_HIGH_ACCURACY
-                        || locationMode == Settings.Secure.LOCATION_MODE_BATTERY_SAVING);
+        return mRttNative.isReady() && !mPowerManager.isDeviceIdleMode()
+                && mLocationManager.isLocationEnabled();
     }
 
     /**
@@ -296,6 +398,9 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             // tags. Clear names so that other operations involving wakesources become simpler.
             workSource.clearNames();
         }
+        boolean isCalledFromPrivilegedContext =
+                checkLocationHardware() && mShellCommand.getControlParam(
+                        CONTROL_PARAM_OVERRIDE_ASSUME_NO_PRIVILEGE_NAME) == 0;
 
         // register for binder death
         IBinder.DeathRecipient dr = new IBinder.DeathRecipient() {
@@ -323,7 +428,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                 sourceToUse = new WorkSource(uid);
             }
             mRttServiceSynchronized.queueRangingRequest(uid, sourceToUse, binder, dr,
-                    callingPackage, request, callback);
+                    callingPackage, request, callback, isCalledFromPrivilegedContext);
         });
     }
 
@@ -369,6 +474,11 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
     private void enforceLocationHardware() {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.LOCATION_HARDWARE,
                 TAG);
+    }
+
+    private boolean checkLocationHardware() {
+        return mContext.checkCallingOrSelfPermission(android.Manifest.permission.LOCATION_HARDWARE)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void sendRttStateChangedBroadcast(boolean enabled) {
@@ -525,7 +635,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
 
         private void queueRangingRequest(int uid, WorkSource workSource, IBinder binder,
                 IBinder.DeathRecipient dr, String callingPackage, RangingRequest request,
-                IRttCallback callback) {
+                IRttCallback callback, boolean isCalledFromPrivilegedContext) {
             if (isRequestorSpamming(workSource)) {
                 Log.w(TAG,
                         "Work source " + workSource + " is spamming, dropping request: " + request);
@@ -547,6 +657,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             newRequest.callingPackage = callingPackage;
             newRequest.request = request;
             newRequest.callback = callback;
+            newRequest.isCalledFromPrivilegedContext = isCalledFromPrivilegedContext;
             mRttRequestQueue.add(newRequest);
 
             if (VDBG) {
@@ -669,7 +780,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             }
 
             nextRequest.cmdId = mNextCommandId++;
-            if (mRttNative.rangeRequest(nextRequest.cmdId, nextRequest.request)) {
+            if (mRttNative.rangeRequest(nextRequest.cmdId, nextRequest.request,
+                    nextRequest.isCalledFromPrivilegedContext)) {
                 mRangingTimeoutMessage.schedule(
                         mClock.getElapsedSinceBootMillis() + HAL_RANGING_TIMEOUT_MS);
             } else {
@@ -894,17 +1006,12 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             }
 
             boolean permissionGranted = mWifiPermissionsUtil.checkCallersLocationPermission(
-                    topOfQueueRequest.callingPackage, topOfQueueRequest.uid);
-            int locationMode = mFrameworkFacade.getSecureIntegerSetting(mContext,
-                    Settings.Secure.LOCATION_MODE, Settings.Secure.LOCATION_MODE_OFF);
-            if (locationMode != Settings.Secure.LOCATION_MODE_HIGH_ACCURACY
-                            && locationMode != Settings.Secure.LOCATION_MODE_BATTERY_SAVING) {
-                permissionGranted = false;
-            }
+                    topOfQueueRequest.callingPackage, topOfQueueRequest.uid)
+                    && mLocationManager.isLocationEnabled();
             try {
                 if (permissionGranted) {
                     List<RangingResult> finalResults = postProcessResults(topOfQueueRequest.request,
-                            results);
+                            results, topOfQueueRequest.isCalledFromPrivilegedContext);
                     if (VDBG) {
                         Log.v(TAG, "RttServiceSynchronized.onRangingResults: finalResults="
                                 + finalResults);
@@ -931,7 +1038,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
          * - Effectively: throws away results which don't match requests
          */
         private List<RangingResult> postProcessResults(RangingRequest request,
-                List<RttResult> results) {
+                List<RttResult> results, boolean isCalledFromPrivilegedContext) {
             Map<MacAddress, RttResult> resultEntries = new HashMap<>();
             for (RttResult result : results) {
                 resultEntries.put(MacAddress.fromBytes(result.addr), result);
@@ -945,40 +1052,43 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                     if (mDbg) {
                         Log.v(TAG, "postProcessResults: missing=" + peer.macAddress);
                     }
+
+                    int errorCode = RangingResult.STATUS_FAIL;
+                    if (!isCalledFromPrivilegedContext) {
+                        if (!peer.supports80211mc) {
+                            errorCode = RangingResult.STATUS_RESPONDER_DOES_NOT_SUPPORT_IEEE80211MC;
+                        }
+                    }
+
                     if (peer.peerHandle == null) {
                         finalResults.add(
-                                new RangingResult(RangingResult.STATUS_FAIL, peer.macAddress, 0, 0,
-                                        0, null, null, 0));
+                                new RangingResult(errorCode, peer.macAddress, 0, 0, 0, null, null,
+                                        0));
                     } else {
                         finalResults.add(
-                                new RangingResult(RangingResult.STATUS_FAIL, peer.peerHandle, 0, 0,
-                                        0, null, null, 0));
+                                new RangingResult(errorCode, peer.peerHandle, 0, 0, 0, null, null,
+                                        0));
                     }
                 } else {
                     int status = resultForRequest.status == RttStatus.SUCCESS
                             ? RangingResult.STATUS_SUCCESS : RangingResult.STATUS_FAIL;
+                    byte[] lci = null;
+                    byte[] lcr = null;
+                    if (isCalledFromPrivilegedContext) {
+                        // should not get results if not privileged - but extra check
+                        lci = NativeUtil.byteArrayFromArrayList(resultForRequest.lci.data);
+                        lcr = NativeUtil.byteArrayFromArrayList(resultForRequest.lcr.data);
+                    }
                     if (peer.peerHandle == null) {
                         finalResults.add(new RangingResult(status, peer.macAddress,
                                 resultForRequest.distanceInMm, resultForRequest.distanceSdInMm,
-                                resultForRequest.rssi,
-                                LocationConfigurationInformation.parseInformationElement(
-                                        resultForRequest.lci.id, NativeUtil.byteArrayFromArrayList(
-                                                resultForRequest.lcr.data)),
-                                LocationCivic.parseInformationElement(resultForRequest.lci.id,
-                                        NativeUtil.byteArrayFromArrayList(
-                                                resultForRequest.lci.data)),
-                                resultForRequest.timeStampInUs));
+                                resultForRequest.rssi / -2, lci, lcr,
+                                resultForRequest.timeStampInUs / CONVERSION_US_TO_MS));
                     } else {
                         finalResults.add(new RangingResult(status, peer.peerHandle,
                                 resultForRequest.distanceInMm, resultForRequest.distanceSdInMm,
-                                resultForRequest.rssi,
-                                LocationConfigurationInformation.parseInformationElement(
-                                        resultForRequest.lci.id, NativeUtil.byteArrayFromArrayList(
-                                                resultForRequest.lci.data)),
-                                LocationCivic.parseInformationElement(resultForRequest.lci.id,
-                                        NativeUtil.byteArrayFromArrayList(
-                                                resultForRequest.lci.data)),
-                                resultForRequest.timeStampInUs));
+                                resultForRequest.rssi / -2, lci, lcr,
+                                resultForRequest.timeStampInUs / CONVERSION_US_TO_MS));
                     }
                 }
             }
@@ -1004,6 +1114,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
         public String callingPackage;
         public RangingRequest request;
         public IRttCallback callback;
+        public boolean isCalledFromPrivilegedContext;
 
         public int cmdId = 0; // uninitialized cmdId value
         public boolean dispatchedToNative = false;
@@ -1016,7 +1127,9 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                     ", dr=").append(dr).append(", callingPackage=").append(callingPackage).append(
                     ", request=").append(request.toString()).append(", callback=").append(
                     callback).append(", cmdId=").append(cmdId).append(
-                    ", peerHandlesTranslated=").append(peerHandlesTranslated).toString();
+                    ", peerHandlesTranslated=").append(peerHandlesTranslated).append(
+                    ", isCalledFromPrivilegedContext=").append(
+                    isCalledFromPrivilegedContext).toString();
         }
     }
 

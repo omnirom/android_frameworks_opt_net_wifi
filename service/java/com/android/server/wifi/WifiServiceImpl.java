@@ -69,6 +69,7 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.LocalOnlyHotspotCallback;
+import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
@@ -729,7 +730,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         if (doScan) {
             // Someone requested a scan while we were idle; do a full scan now.
             // A security check of the caller's identity was made when the request arrived via
-            // Binder.
+            // Binder. Now we'll pass the current process's identity to startScan().
             startScan(null, null, mContext.getOpPackageName());
         }
     }
@@ -801,6 +802,25 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     private void enforceLocationPermission(String pkgName, int uid) {
         mWifiPermissionsUtil.enforceLocationPermission(pkgName, uid);
+    }
+
+    /**
+     * Check if the caller must still pass permission check or if the caller is exempted
+     * from the consent UI via the MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED check.
+     *
+     * Commands from some callers may be exempted from triggering the consent UI when
+     * enabling wifi. This exemption is checked via the MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED
+     * and allows calls to skip the consent UI where it may otherwise be required.
+     *
+     * @hide
+     */
+    private boolean checkWifiPermissionWhenPermissionReviewRequired() {
+        if (!mPermissionReviewRequired) {
+            return false;
+        }
+        int result = mContext.checkCallingPermission(
+                android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED);
+        return result == PackageManager.PERMISSION_GRANTED;
     }
 
     /**
@@ -1050,7 +1070,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             // for softap mode and restart softap with the tethering config.
             if (!mLocalOnlyHotspotRequests.isEmpty()) {
                 mLog.trace("Call to stop Tethering while LOHS is active,"
-                        + " Registered LOHS callers will be updated when softap stopped.");
+                        + " Registered LOHS callers will be updated when softap stopped.").flush();
             }
 
             return stopSoftApInternal();
@@ -1086,7 +1106,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         @Override
         public void onStateChanged(int state, int failureReason) {
             mSoftApState = state;
-            mSoftApNumClients = 0;
 
             Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.values().iterator();
             while (iterator.hasNext()) {
@@ -1266,6 +1285,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      *
      * Callers should already hold the mLocalOnlyHotspotRequests lock.
      */
+    @GuardedBy("mLocalOnlyHotspotRequests")
     private void sendHotspotFailedMessageToAllLOHSRequestInfoEntriesLocked(int arg1) {
         for (LocalOnlyHotspotRequestInfo requestor : mLocalOnlyHotspotRequests.values()) {
             try {
@@ -1286,6 +1306,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      *
      * Callers should already hold the mLocalOnlyHotspotRequests lock.
      */
+    @GuardedBy("mLocalOnlyHotspotRequests")
     private void sendHotspotStoppedMessageToAllLOHSRequestInfoEntriesLocked() {
         for (LocalOnlyHotspotRequestInfo requestor : mLocalOnlyHotspotRequests.values()) {
             try {
@@ -1306,6 +1327,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      *
      * Callers should already hold the mLocalOnlyHotspotRequests lock.
      */
+    @GuardedBy("mLocalOnlyHotspotRequests")
     private void sendHotspotStartedMessageToAllLOHSRequestInfoEntriesLocked() {
         for (LocalOnlyHotspotRequestInfo requestor : mLocalOnlyHotspotRequests.values()) {
             try {
@@ -1374,7 +1396,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                 return LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE;
             }
         } catch (RemoteException e) {
-            mLog.warn("RemoteException during isAppForeground when calling startLOHS");
+            mLog.warn("RemoteException during isAppForeground when calling startLOHS").flush();
             return LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE;
         }
 
@@ -1384,14 +1406,14 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             // check if we are currently tethering
             if (mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_TETHERED)) {
                 // Tethering is enabled, cannot start LocalOnlyHotspot
-                mLog.info("Cannot start localOnlyHotspot when WiFi Tethering is active.");
+                mLog.info("Cannot start localOnlyHotspot when WiFi Tethering is active.").flush();
                 return LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE;
             }
 
             // does this caller already have a request?
             LocalOnlyHotspotRequestInfo request = mLocalOnlyHotspotRequests.get(pid);
             if (request != null) {
-                mLog.trace("caller already has an active request");
+                mLog.trace("caller already has an active request").flush();
                 throw new IllegalStateException(
                         "Caller already has an active LocalOnlyHotspot request");
             }
@@ -1404,7 +1426,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             if (mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_LOCAL_ONLY)) {
                 // LOHS is already active, send out what is running
                 try {
-                    mLog.trace("LOHS already up, trigger onStarted callback");
+                    mLog.trace("LOHS already up, trigger onStarted callback").flush();
                     request.sendHotspotStartedMessage(mLocalOnlyHotspotConfig);
                 } catch (RemoteException e) {
                     return LocalOnlyHotspotCallback.ERROR_GENERIC;
@@ -1429,10 +1451,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public void stopLocalOnlyHotspot() {
-        // don't do a permission check here. if the app has their permission to change the wifi
-        // state revoked, we still want them to be able to stop a previously created hotspot
-        // (otherwise it could cost the user money). When the app created the hotspot, its
-        // permission was checked.
+        // don't do a permission check here. if the app's permission to change the wifi state is
+        // revoked, we still want them to be able to stop a previously created hotspot (otherwise
+        // it could cost the user money). When the app created the hotspot, its permission was
+        // checked.
         final int uid = Binder.getCallingUid();
         final int pid = Binder.getCallingPid();
 
@@ -1457,7 +1479,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
         synchronized (mLocalOnlyHotspotRequests) {
             if (mLocalOnlyHotspotRequests.remove(request.getPid()) == null) {
-                mLog.trace("LocalOnlyHotspotRequestInfo not found to remove");
+                mLog.trace("LocalOnlyHotspotRequestInfo not found to remove").flush();
                 return;
             }
 
@@ -1938,13 +1960,35 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         enforceAccessPermission();
         int uid = Binder.getCallingUid();
         mLog.info("getConnectionInfo uid=%").c(uid).flush();
-        /*
-         * Make sure we have the latest information, by sending
-         * a status request to the supplicant.
-         */
         long ident = Binder.clearCallingIdentity();
         try {
-            WifiInfo result = mWifiStateMachine.syncRequestConnectionInfo(callingPackage, uid);
+            WifiInfo result = mWifiStateMachine.syncRequestConnectionInfo();
+            boolean hideDefaultMacAddress = true;
+            boolean hideBssidAndSsid = true;
+
+            try {
+                if (mWifiInjector.getWifiPermissionsWrapper().getLocalMacAddressPermission(uid)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    hideDefaultMacAddress = false;
+                }
+                if (mWifiPermissionsUtil.canAccessScanResults(
+                        callingPackage,
+                        uid,
+                        Build.VERSION_CODES.O)) {
+                    hideBssidAndSsid = false;
+                }
+            } catch (RemoteException e) {
+                Log.e(TAG, "Error checking receiver permission", e);
+            } catch (SecurityException e) {
+                Log.e(TAG, "Security exception checking receiver permission", e);
+            }
+            if (hideDefaultMacAddress) {
+                result.setMacAddress(WifiInfo.DEFAULT_MAC_ADDRESS);
+            }
+            if (hideBssidAndSsid) {
+                result.setBSSID(WifiInfo.DEFAULT_MAC_ADDRESS);
+                result.setSSID(WifiSsid.createFromHex(null));
+            }
             return result;
         } finally {
             Binder.restoreCallingIdentity(ident);
@@ -2310,7 +2354,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     private boolean startConsentUi(String packageName,
             int callingUid, String intentAction) throws RemoteException {
-        if (UserHandle.getAppId(callingUid) == Process.SYSTEM_UID) {
+        if (UserHandle.getAppId(callingUid) == Process.SYSTEM_UID
+                || checkWifiPermissionWhenPermissionReviewRequired()) {
             return false;
         }
         try {
@@ -2320,7 +2365,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                             PackageManager.MATCH_DEBUG_TRIAGED_MISSING,
                             UserHandle.getUserId(callingUid));
             if (applicationInfo.uid != callingUid) {
-                throw new SecurityException("Package " + callingUid
+                throw new SecurityException("Package " + packageName
                         + " not in uid " + callingUid);
             }
 

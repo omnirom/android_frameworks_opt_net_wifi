@@ -23,7 +23,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyShort;
@@ -40,11 +39,13 @@ import android.app.test.TestAlarmManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.hardware.wifi.V1_0.NanStatusType;
+import android.location.LocationManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkFactory;
 import android.net.NetworkRequest;
 import android.net.NetworkSpecifier;
+import android.net.wifi.WifiManager;
 import android.net.wifi.aware.AttachCallback;
 import android.net.wifi.aware.ConfigRequest;
 import android.net.wifi.aware.DiscoverySession;
@@ -77,6 +78,7 @@ import com.android.server.wifi.util.WifiPermissionsWrapper;
 
 import libcore.util.HexEncoding;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -85,6 +87,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.Spy;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -101,7 +104,8 @@ public class WifiAwareDataPathStateManagerTest {
     private Handler mMockLooperHandler;
     private WifiAwareStateManager mDut;
     @Mock private WifiAwareNativeManager mMockNativeManager;
-    @Mock private WifiAwareNativeApi mMockNative;
+    @Spy private TestUtils.MonitoredWifiAwareNativeApi mMockNative =
+            new TestUtils.MonitoredWifiAwareNativeApi();
     @Mock private Context mMockContext;
     @Mock private ConnectivityManager mMockCm;
     @Mock private INetworkManagementService mMockNwMgt;
@@ -111,6 +115,8 @@ public class WifiAwareDataPathStateManagerTest {
     @Mock private WifiAwareMetrics mAwareMetricsMock;
     @Mock private WifiPermissionsUtil mWifiPermissionsUtil;
     @Mock private WifiPermissionsWrapper mPermissionsWrapperMock;
+    @Mock private LocationManager mLocationManagerMock;
+    @Mock private WifiManager mMockWifiManager;
     TestAlarmManager mAlarmManager;
     private PowerManager mMockPowerManager;
 
@@ -128,6 +134,9 @@ public class WifiAwareDataPathStateManagerTest {
         when(mMockContext.getSystemService(Context.ALARM_SERVICE))
                 .thenReturn(mAlarmManager.getAlarmManager());
 
+        when(mMockContext.getSystemService(Context.WIFI_SERVICE)).thenReturn(mMockWifiManager);
+        when(mMockWifiManager.getWifiState()).thenReturn(WifiManager.WIFI_STATE_ENABLED);
+
         mMockLooper = new TestLooper();
         mMockLooperHandler = new Handler(mMockLooper.getLooper());
 
@@ -139,6 +148,10 @@ public class WifiAwareDataPathStateManagerTest {
         when(mMockContext.getSystemServiceName(PowerManager.class)).thenReturn(
                 Context.POWER_SERVICE);
         when(mMockContext.getSystemService(PowerManager.class)).thenReturn(mMockPowerManager);
+        when(mMockContext.getSystemService(Context.LOCATION_SERVICE)).thenReturn(
+                mLocationManagerMock);
+
+        when(mLocationManagerMock.isLocationEnabled()).thenReturn(true);
 
         // by default pretend to be an old API: i.e. allow Responders configured as *ANY*. This
         // allows older (more extrensive) tests to run.
@@ -151,26 +164,6 @@ public class WifiAwareDataPathStateManagerTest {
         mDut.startLate();
         mMockLooper.dispatchAll();
 
-        when(mMockNative.getCapabilities(anyShort())).thenReturn(true);
-        when(mMockNative.enableAndConfigure(anyShort(), any(), anyBoolean(),
-                anyBoolean(), anyBoolean(), anyBoolean())).thenReturn(true);
-        when(mMockNative.disable(anyShort())).thenReturn(true);
-        when(mMockNative.publish(anyShort(), anyByte(), any())).thenReturn(true);
-        when(mMockNative.subscribe(anyShort(), anyByte(), any()))
-                .thenReturn(true);
-        when(mMockNative.sendMessage(anyShort(), anyByte(), anyInt(), any(),
-                any(), anyInt())).thenReturn(true);
-        when(mMockNative.stopPublish(anyShort(), anyByte())).thenReturn(true);
-        when(mMockNative.stopSubscribe(anyShort(), anyByte())).thenReturn(true);
-        when(mMockNative.createAwareNetworkInterface(anyShort(), any())).thenReturn(true);
-        when(mMockNative.deleteAwareNetworkInterface(anyShort(), any())).thenReturn(true);
-        when(mMockNative.initiateDataPath(anyShort(), anyInt(), anyInt(), anyInt(),
-                any(), any(), any(), any(), anyBoolean(),
-                any())).thenReturn(true);
-        when(mMockNative.respondToDataPathRequest(anyShort(), anyBoolean(), anyInt(), any(),
-                any(), any(), anyBoolean(), any())).thenReturn(true);
-        when(mMockNative.endDataPath(anyShort(), anyInt())).thenReturn(true);
-
         when(mMockNetworkInterface.configureAgentProperties(any(), any(), anyInt(), any(), any(),
                 any())).thenReturn(true);
 
@@ -182,6 +175,14 @@ public class WifiAwareDataPathStateManagerTest {
 
         mDut.mDataPathMgr.mNwService = mMockNwMgt;
         mDut.mDataPathMgr.mNiWrapper = mMockNetworkInterface;
+    }
+
+    /**
+     * Post-test validation.
+     */
+    @After
+    public void tearDown() throws Exception {
+        mMockNative.validateUniqueTransactionIds();
     }
 
     /**
