@@ -35,6 +35,7 @@ import com.android.server.wifi.util.ScanResultUtil;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -53,11 +54,14 @@ public class WakeupControllerTest {
 
     @Mock private Context mContext;
     @Mock private WakeupLock mWakeupLock;
+    @Mock private WakeupEvaluator mWakeupEvaluator;
+    @Mock private WakeupOnboarding mWakeupOnboarding;
     @Mock private WifiConfigStore mWifiConfigStore;
     @Mock private WifiInjector mWifiInjector;
     @Mock private WifiScanner mWifiScanner;
     @Mock private WifiConfigManager mWifiConfigManager;
     @Mock private FrameworkFacade mFrameworkFacade;
+    @Mock private WifiSettingsStore mWifiSettingsStore;
 
     private TestLooper mLooper;
     private WakeupController mWakeupController;
@@ -68,6 +72,8 @@ public class WakeupControllerTest {
         MockitoAnnotations.initMocks(this);
 
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
+        when(mWifiInjector.getWifiSettingsStore()).thenReturn(mWifiSettingsStore);
+
         mLooper = new TestLooper();
     }
 
@@ -76,9 +82,12 @@ public class WakeupControllerTest {
         int settingsValue = enabled ? 1 : 0;
         when(mFrameworkFacade.getIntegerSetting(mContext,
                 Settings.Global.WIFI_WAKEUP_ENABLED, 0)).thenReturn(settingsValue);
+        when(mWakeupOnboarding.isOnboarded()).thenReturn(true);
         mWakeupController = new WakeupController(mContext,
                 mLooper.getLooper(),
                 mWakeupLock,
+                mWakeupEvaluator,
+                mWakeupOnboarding,
                 mWifiConfigManager,
                 mWifiConfigStore,
                 mWifiInjector,
@@ -90,6 +99,10 @@ public class WakeupControllerTest {
         scanResult.SSID = ssid;
         scanResult.capabilities = "";
         return scanResult;
+    }
+
+    private void verifyDoesNotEnableWifi() {
+        verify(mWifiSettingsStore, never()).handleWifiToggled(true /* wifiEnabled */);
     }
 
     /**
@@ -242,5 +255,145 @@ public class WakeupControllerTest {
         initializeWakeupController(true /* enabled */);
         mWakeupController.start();
         verify(mWakeupLock).initialize(eq(expectedMatchInfos));
+    }
+
+    /**
+     * Verify that onResults updates the WakeupLock.
+     */
+    @Test
+    public void onResultsUpdatesWakeupLock() {
+        ScanResult scanResult = new ScanResult();
+        scanResult.SSID = "open ssid 1";
+        scanResult.capabilities = "";
+        ScanResult[] scanResults = new ScanResult[1];
+        scanResults[0] = scanResult;
+
+        // scanlistener input
+        WifiScanner.ScanData[] scanDatas = new WifiScanner.ScanData[1];
+        scanDatas[0] = new WifiScanner.ScanData(0 /* id */, 0 /* flags */, 0 /* bucketsScanned */,
+                true /* allChannelsScanned */, scanResults);
+
+        initializeWakeupController(true /* enabled */);
+        mWakeupController.start();
+
+        ArgumentCaptor<WifiScanner.ScanListener> scanListenerArgumentCaptor =
+                ArgumentCaptor.forClass(WifiScanner.ScanListener.class);
+
+        verify(mWifiScanner).registerScanListener(scanListenerArgumentCaptor.capture());
+        WifiScanner.ScanListener scanListener = scanListenerArgumentCaptor.getValue();
+
+        scanListener.onResults(scanDatas);
+
+        ScanResultMatchInfo expectedMatchInfo = ScanResultMatchInfo.fromScanResult(scanResult);
+        verify(mWakeupLock).update(eq(Collections.singleton(expectedMatchInfo)));
+    }
+
+    /**
+     * Verify that the controller searches for viable networks during onResults when WakeupLock is
+     * empty.
+     */
+    @Test
+    public void onResultsSearchesForViableNetworkWhenWakeupLockIsEmpty() {
+        ScanResult scanResult = new ScanResult();
+        scanResult.SSID = "open ssid 1";
+        scanResult.capabilities = "";
+        ScanResult[] scanResults = new ScanResult[1];
+        scanResults[0] = scanResult;
+
+        // scanlistener input
+        WifiScanner.ScanData[] scanDatas = new WifiScanner.ScanData[1];
+        scanDatas[0] = new WifiScanner.ScanData(0 /* id */, 0 /* flags */, 0 /* bucketsScanned */,
+                true /* allChannelsScanned */, scanResults);
+
+        // empty wakeup lock
+        when(mWakeupLock.isEmpty()).thenReturn(true);
+
+        // do not find viable network
+        when(mWakeupEvaluator.findViableNetwork(any(), any())).thenReturn(null);
+
+        initializeWakeupController(true /* enabled */);
+        mWakeupController.start();
+
+        ArgumentCaptor<WifiScanner.ScanListener> scanListenerArgumentCaptor =
+                ArgumentCaptor.forClass(WifiScanner.ScanListener.class);
+
+        verify(mWifiScanner).registerScanListener(scanListenerArgumentCaptor.capture());
+        WifiScanner.ScanListener scanListener = scanListenerArgumentCaptor.getValue();
+
+        scanListener.onResults(scanDatas);
+        verify(mWakeupEvaluator).findViableNetwork(any(), any());
+
+        verifyDoesNotEnableWifi();
+    }
+
+    /**
+     * Verify that the controller only updates the WakeupLock if the user is onboarded.
+     */
+    @Test
+    public void onResultsDoesNotUpdateIfNotOnboarded() {
+        ScanResult scanResult = new ScanResult();
+        scanResult.SSID = "open ssid 1";
+        scanResult.capabilities = "";
+        ScanResult[] scanResults = new ScanResult[1];
+        scanResults[0] = scanResult;
+
+        // scanlistener input
+        WifiScanner.ScanData[] scanDatas = new WifiScanner.ScanData[1];
+        scanDatas[0] = new WifiScanner.ScanData(0 /* id */, 0 /* flags */, 0 /* bucketsScanned */,
+                true /* allChannelsScanned */, scanResults);
+
+        initializeWakeupController(true /* enabled */);
+        when(mWakeupOnboarding.isOnboarded()).thenReturn(false);
+        mWakeupController.start();
+
+        ArgumentCaptor<WifiScanner.ScanListener> scanListenerArgumentCaptor =
+                ArgumentCaptor.forClass(WifiScanner.ScanListener.class);
+
+        verify(mWifiScanner).registerScanListener(scanListenerArgumentCaptor.capture());
+        WifiScanner.ScanListener scanListener = scanListenerArgumentCaptor.getValue();
+
+        scanListener.onResults(scanDatas);
+
+        verify(mWakeupLock, never()).isEmpty();
+        verify(mWakeupLock, never()).update(any());
+
+        verifyDoesNotEnableWifi();
+    }
+
+    /**
+     * Verify that the controller enables wifi and notifies user when all criteria are met.
+     */
+    @Test
+    public void onResultsEnablesWifi() {
+        ScanResult scanResult = new ScanResult();
+        scanResult.SSID = "open ssid 1";
+        scanResult.capabilities = "";
+        ScanResult[] scanResults = new ScanResult[1];
+        scanResults[0] = scanResult;
+
+        // scanlistener input
+        WifiScanner.ScanData[] scanDatas = new WifiScanner.ScanData[1];
+        scanDatas[0] = new WifiScanner.ScanData(0 /* id */, 0 /* flags */, 0 /* bucketsScanned */,
+                true /* allChannelsScanned */, scanResults);
+
+        // empty wakeup lock
+        when(mWakeupLock.isEmpty()).thenReturn(true);
+
+        // find viable network
+        when(mWakeupEvaluator.findViableNetwork(any(), any())).thenReturn(scanResult);
+
+        initializeWakeupController(true /* enabled */);
+        mWakeupController.start();
+
+        ArgumentCaptor<WifiScanner.ScanListener> scanListenerArgumentCaptor =
+                ArgumentCaptor.forClass(WifiScanner.ScanListener.class);
+
+        verify(mWifiScanner).registerScanListener(scanListenerArgumentCaptor.capture());
+        WifiScanner.ScanListener scanListener = scanListenerArgumentCaptor.getValue();
+
+        scanListener.onResults(scanDatas);
+        verify(mWakeupEvaluator).findViableNetwork(any(), any());
+
+        verify(mWifiSettingsStore).handleWifiToggled(true /* wifiEnabled */);
     }
 }

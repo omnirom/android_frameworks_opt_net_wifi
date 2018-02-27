@@ -22,7 +22,7 @@ import static org.mockito.Mockito.*;
 import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.net.IpConfiguration;
 import android.net.wifi.WifiConfiguration;
-import android.test.suitebuilder.annotation.SmallTest;
+import android.support.test.filters.SmallTest;
 import android.text.TextUtils;
 import android.util.SparseArray;
 
@@ -126,7 +126,7 @@ public class WifiConfigStoreLegacyTest {
 
         // Return the config data with passwords masked from wpa_supplicant control interface.
         doAnswer(new AnswerWithArguments() {
-            public boolean answer(Map<String, WifiConfiguration> configs,
+            public boolean answer(String ifaceName, Map<String, WifiConfiguration> configs,
                     SparseArray<Map<String, String>> networkExtras) {
                 for (Map.Entry<String, WifiConfiguration> entry:
                         createWpaSupplicantLoadData(networks).entrySet()) {
@@ -136,7 +136,8 @@ public class WifiConfigStoreLegacyTest {
                 networkExtras.put(passpointNetworkId, createNetworkExtrasForPasspointConfig(fqdn));
                 return true;
             }
-        }).when(mWifiNative).migrateNetworksFromSupplicant(any(Map.class), any(SparseArray.class));
+        }).when(mWifiNative).migrateNetworksFromSupplicant(
+                any(), any(Map.class), any(SparseArray.class));
 
         when(mPasspointConfigParser.parseConfig(anyString())).thenReturn(passpointConfigs);
         WifiConfigStoreLegacy.WifiConfigStoreDataLegacy storeData = mWifiConfigStore.read();

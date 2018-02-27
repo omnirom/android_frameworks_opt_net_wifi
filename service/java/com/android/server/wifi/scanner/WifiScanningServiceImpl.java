@@ -39,7 +39,6 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
-import android.os.UserHandle;
 import android.os.WorkSource;
 import android.util.ArrayMap;
 import android.util.LocalLog;
@@ -287,7 +286,6 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     public void startService() {
-        mClientHandler = new ClientHandler(TAG, mLooper);
         mBackgroundScanStateMachine = new WifiBackgroundScanStateMachine(mLooper);
         mSingleScanStateMachine = new WifiSingleScanStateMachine(mLooper);
         mPnoScanStateMachine = new WifiPnoScanStateMachine(mLooper);
@@ -314,6 +312,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         mBackgroundScanStateMachine.start();
         mSingleScanStateMachine.start();
         mPnoScanStateMachine.start();
+
+        // Create client handler only after StateMachines are ready.
+        mClientHandler = new ClientHandler(TAG, mLooper);
     }
 
     /**
@@ -520,6 +521,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             public boolean processMessage(Message msg) {
                 switch (msg.what) {
                     case CMD_DRIVER_LOADED:
+                        if (mScannerImpl == null) {
+                            loge("Failed to start single scan state machine because scanner impl"
+                                    + " is null");
+                            return HANDLED;
+                        }
                         transitionTo(mIdleState);
                         return HANDLED;
                     case CMD_DRIVER_UNLOADED:
@@ -695,7 +701,6 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                     case CMD_SCAN_FAILED:
                         mWifiMetrics.incrementScanReturnEntry(
                                 WifiMetricsProto.WifiLog.SCAN_UNKNOWN, mActiveScans.size());
-                        sendScanResultBroadcast(false);
                         sendOpFailedToAllAndClear(mActiveScans, WifiScanner.REASON_UNSPECIFIED,
                                 "Scan failed");
                         transitionTo(mIdleState);
@@ -704,6 +709,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                         return NOT_HANDLED;
                 }
             }
+        }
+
+        boolean validateScanType(int type) {
+            return (type == WifiScanner.TYPE_LOW_LATENCY || type == WifiScanner.TYPE_LOW_POWER
+                    || type == WifiScanner.TYPE_HIGH_ACCURACY);
         }
 
         boolean validateScanRequest(ClientInfo ci, int handler, ScanSettings settings) {
@@ -716,6 +726,10 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                     Log.d(TAG, "Failing single scan because channel list was empty");
                     return false;
                 }
+            }
+            if (!validateScanType(settings.type)) {
+                Log.e(TAG, "Invalid scan type " + settings.type);
+                return false;
             }
             if (mContext.checkPermission(
                     Manifest.permission.NETWORK_STACK, UNKNOWN_PID, ci.getUid())
@@ -734,8 +748,61 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             return true;
         }
 
+        int getNativeScanType(int type) {
+            switch(type) {
+                case WifiScanner.TYPE_LOW_LATENCY:
+                    return WifiNative.SCAN_TYPE_LOW_LATENCY;
+                case WifiScanner.TYPE_LOW_POWER:
+                    return WifiNative.SCAN_TYPE_LOW_POWER;
+                case WifiScanner.TYPE_HIGH_ACCURACY:
+                    return WifiNative.SCAN_TYPE_HIGH_ACCURACY;
+                default:
+                    // This should never happen becuase we've validated the incoming type in
+                    // |validateScanType|.
+                    throw new IllegalArgumentException("Invalid scan type " + type);
+            }
+        }
+
+        // We can coalesce a LOW_POWER/LOW_LATENCY scan request into an ongoing HIGH_ACCURACY
+        // scan request. But, we can't coalesce a HIGH_ACCURACY scan request into an ongoing
+        // LOW_POWER/LOW_LATENCY scan request.
+        boolean activeScanTypeSatisfies(int requestScanType) {
+            switch(mActiveScanSettings.scanType) {
+                case WifiNative.SCAN_TYPE_LOW_LATENCY:
+                case WifiNative.SCAN_TYPE_LOW_POWER:
+                    return requestScanType != WifiNative.SCAN_TYPE_HIGH_ACCURACY;
+                case WifiNative.SCAN_TYPE_HIGH_ACCURACY:
+                    return true;
+                default:
+                    // This should never happen becuase we've validated the incoming type in
+                    // |validateScanType|.
+                    throw new IllegalArgumentException("Invalid scan type "
+                        + mActiveScanSettings.scanType);
+            }
+        }
+
+        // If there is a HIGH_ACCURACY scan request among the requests being merged, the merged
+        // scan type should be HIGH_ACCURACY.
+        int mergeScanTypes(int existingScanType, int newScanType) {
+            switch(existingScanType) {
+                case WifiNative.SCAN_TYPE_LOW_LATENCY:
+                case WifiNative.SCAN_TYPE_LOW_POWER:
+                    return newScanType;
+                case WifiNative.SCAN_TYPE_HIGH_ACCURACY:
+                    return existingScanType;
+                default:
+                    // This should never happen becuase we've validated the incoming type in
+                    // |validateScanType|.
+                    throw new IllegalArgumentException("Invalid scan type " + existingScanType);
+            }
+        }
+
         boolean activeScanSatisfies(ScanSettings settings) {
             if (mActiveScanSettings == null) {
+                return false;
+            }
+
+            if (!activeScanTypeSatisfies(getNativeScanType(settings.type))) {
                 return false;
             }
 
@@ -808,6 +875,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             ChannelCollection channels = mChannelHelper.createChannelCollection();
             List<WifiNative.HiddenNetwork> hiddenNetworkList = new ArrayList<>();
             for (RequestInfo<ScanSettings> entry : mPendingScans) {
+                settings.scanType =
+                    mergeScanTypes(settings.scanType, getNativeScanType(entry.settings.type));
                 channels.addChannels(entry.settings);
                 if (entry.settings.hiddenNetworks != null) {
                     for (int i = 0; i < entry.settings.hiddenNetworks.length; i++) {
@@ -875,13 +944,6 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             }
         }
 
-        private void sendScanResultBroadcast(boolean scanSucceeded) {
-            Intent intent = new Intent(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION);
-            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-            intent.putExtra(WifiManager.EXTRA_RESULTS_UPDATED, scanSucceeded);
-            mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-        }
-
         void reportScanResults(ScanData results) {
             if (results != null && results.getResults() != null) {
                 if (results.getResults().length > 0) {
@@ -914,7 +976,6 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             if (results.isAllChannelsScanned()) {
                 mCachedScanResults.clear();
                 mCachedScanResults.addAll(Arrays.asList(results.getResults()));
-                sendScanResultBroadcast(true);
             }
         }
 
@@ -1006,10 +1067,13 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                         // TODO this should be moved to a common location since it is used outside
                         // of this state machine. It is ok right now because the driver loaded event
                         // is sent to this state machine first.
+                        mScannerImpl = mScannerImplFactory.create(mContext, mLooper, mClock);
                         if (mScannerImpl == null) {
-                            mScannerImpl = mScannerImplFactory.create(mContext, mLooper, mClock);
-                            mChannelHelper = mScannerImpl.getChannelHelper();
+                            loge("Failed to start bgscan scan state machine because scanner impl"
+                                    + " is null");
+                            return HANDLED;
                         }
+                        mChannelHelper = mScannerImpl.getChannelHelper();
 
                         mBackgroundScheduler = new BackgroundScanScheduler(mChannelHelper);
 
@@ -1071,7 +1135,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             public void exit() {
                 sendBackgroundScanFailedToAllAndClear(
                         WifiScanner.REASON_UNSPECIFIED, "Scan was interrupted");
-                mScannerImpl.cleanup();
+                if (mScannerImpl != null) {
+                    mScannerImpl.cleanup();
+                }
             }
 
             @Override
@@ -1416,6 +1482,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             public boolean processMessage(Message msg) {
                 switch (msg.what) {
                     case CMD_DRIVER_LOADED:
+                        if (mScannerImpl == null) {
+                            loge("Failed to start pno scan state machine because scanner impl"
+                                    + " is null");
+                            return HANDLED;
+                        }
                         transitionTo(mStartedState);
                         break;
                     case CMD_DRIVER_UNLOADED:
@@ -2107,8 +2178,24 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         return "results=" + results.length;
     }
 
+    static String getScanTypeString(int type) {
+        switch(type) {
+            case WifiScanner.TYPE_LOW_LATENCY:
+                return "LOW LATENCY";
+            case WifiScanner.TYPE_LOW_POWER:
+                return "LOW POWER";
+            case WifiScanner.TYPE_HIGH_ACCURACY:
+                return "HIGH ACCURACY";
+            default:
+                // This should never happen becuase we've validated the incoming type in
+                // |validateScanType|.
+                throw new IllegalArgumentException("Invalid scan type " + type);
+        }
+    }
+
     static String describeTo(StringBuilder sb, ScanSettings scanSettings) {
         sb.append("ScanSettings { ")
+          .append(" type:").append(getScanTypeString(scanSettings.type))
           .append(" band:").append(ChannelHelper.bandToString(scanSettings.band))
           .append(" period:").append(scanSettings.periodInMs)
           .append(" reportEvents:").append(scanSettings.reportEvents)

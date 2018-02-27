@@ -16,6 +16,8 @@
 
 package com.android.server.wifi;
 
+import static com.android.server.wifi.WifiController.CMD_WIFI_TOGGLED;
+
 import android.content.Context;
 import android.database.ContentObserver;
 import android.net.wifi.ScanResult;
@@ -24,12 +26,15 @@ import android.net.wifi.WifiScanner;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.ArraySet;
 import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -44,14 +49,15 @@ public class WakeupController {
 
     private static final String TAG = "WakeupController";
 
-    // TODO(b/69624403) propagate this to Settings
-    private static final boolean USE_PLATFORM_WIFI_WAKE = false;
+    private static final boolean USE_PLATFORM_WIFI_WAKE = true;
 
     private final Context mContext;
     private final Handler mHandler;
     private final FrameworkFacade mFrameworkFacade;
     private final ContentObserver mContentObserver;
     private final WakeupLock mWakeupLock;
+    private final WakeupEvaluator mWakeupEvaluator;
+    private final WakeupOnboarding mWakeupOnboarding;
     private final WifiConfigManager mWifiConfigManager;
     private final WifiInjector mWifiInjector;
 
@@ -63,7 +69,9 @@ public class WakeupController {
 
         @Override
         public void onResults(WifiScanner.ScanData[] results) {
-            // TODO(easchwar) handle scan results
+            if (results.length == 1 && results[0].isAllChannelsScanned()) {
+                handleScanResults(Arrays.asList(results[0].getResults()));
+            }
         }
 
         @Override
@@ -92,6 +100,8 @@ public class WakeupController {
             Context context,
             Looper looper,
             WakeupLock wakeupLock,
+            WakeupEvaluator wakeupEvaluator,
+            WakeupOnboarding wakeupOnboarding,
             WifiConfigManager wifiConfigManager,
             WifiConfigStore wifiConfigStore,
             WifiInjector wifiInjector,
@@ -99,6 +109,8 @@ public class WakeupController {
         mContext = context;
         mHandler = new Handler(looper);
         mWakeupLock = wakeupLock;
+        mWakeupEvaluator = wakeupEvaluator;
+        mWakeupOnboarding = wakeupOnboarding;
         mWifiConfigManager = wifiConfigManager;
         mFrameworkFacade = frameworkFacade;
         mWifiInjector = wifiInjector;
@@ -115,13 +127,16 @@ public class WakeupController {
 
         // registering the store data here has the effect of reading the persisted value of the
         // data sources after system boot finishes
-        WakeupConfigStoreData wakeupConfigStoreData =
-                new WakeupConfigStoreData(new IsActiveDataSource(), mWakeupLock.getDataSource());
+        WakeupConfigStoreData wakeupConfigStoreData = new WakeupConfigStoreData(
+                new IsActiveDataSource(),
+                mWakeupOnboarding.getDataSource(),
+                mWakeupLock.getDataSource());
         wifiConfigStore.registerStoreData(wakeupConfigStoreData);
     }
 
     private void setActive(boolean isActive) {
         if (mIsActive != isActive) {
+            Log.d(TAG, "Setting active to " + isActive);
             mIsActive = isActive;
             mWifiConfigManager.saveToStore(false /* forceWrite */);
         }
@@ -135,6 +150,7 @@ public class WakeupController {
      * it performs its initialization steps and sets {@link #mIsActive} to true.
      */
     public void start() {
+        Log.d(TAG, "start()");
         mWifiInjector.getWifiScanner().registerScanListener(mScanListener);
 
         // If already active, we don't want to re-initialize the lock, so return early.
@@ -143,7 +159,8 @@ public class WakeupController {
         }
         setActive(true);
 
-        if (mWifiWakeupEnabled) {
+        if (isEnabled()) {
+            mWakeupOnboarding.maybeShowNotification();
             mWakeupLock.initialize(getMostRecentSavedScanResults());
         }
     }
@@ -155,11 +172,14 @@ public class WakeupController {
      * WifiScanner.
      */
     public void stop() {
+        Log.d(TAG, "stop()");
         mWifiInjector.getWifiScanner().deregisterScanListener(mScanListener);
+        mWakeupOnboarding.onStop();
     }
 
     /** Resets the WakeupController, setting {@link #mIsActive} to false. */
     public void reset() {
+        Log.d(TAG, "reset()");
         setActive(false);
     }
 
@@ -202,11 +222,71 @@ public class WakeupController {
     }
 
     /**
-     * Whether the feature is enabled in settings.
+     * Handles incoming scan results.
      *
-     * <p>Note: This method is only used to determine whether or not to actually enable wifi. All
-     * other aspects of the WakeupController lifecycle operate normally irrespective of this.
+     * <p>The controller updates the WakeupLock with the incoming scan results. If WakeupLock is
+     * empty, it evaluates scan results for a match with saved networks. If a match exists, it
+     * enables wifi.
+     *
+     * @param scanResults The scan results with which to update the controller
      */
+    private void handleScanResults(Collection<ScanResult> scanResults) {
+        if (!isEnabled()) {
+            return;
+        }
+
+        // need to show notification here in case user enables Wifi Wake when Wifi is off
+        mWakeupOnboarding.maybeShowNotification();
+        if (!mWakeupOnboarding.isOnboarded()) {
+            return;
+        }
+
+        // only update the wakeup lock if it's not already empty
+        if (!mWakeupLock.isEmpty()) {
+            Set<ScanResultMatchInfo> networks = new ArraySet<>();
+            for (ScanResult scanResult : scanResults) {
+                networks.add(ScanResultMatchInfo.fromScanResult(scanResult));
+            }
+            mWakeupLock.update(networks);
+
+            // if wakeup lock is still not empty, return
+            if (!mWakeupLock.isEmpty()) {
+                return;
+            }
+
+            Log.d(TAG, "WakeupLock emptied");
+        }
+
+        ScanResult network =
+                mWakeupEvaluator.findViableNetwork(scanResults, getGoodSavedNetworks());
+
+        if (network != null) {
+            Log.d(TAG, "Found viable network: " + network.SSID);
+            onNetworkFound(network);
+        }
+    }
+
+    private void onNetworkFound(ScanResult scanResult) {
+        if (isEnabled() && mIsActive && USE_PLATFORM_WIFI_WAKE) {
+            Log.d(TAG, "Enabling wifi for network: " + scanResult.SSID);
+            enableWifi();
+        }
+    }
+
+    /**
+     * Enables wifi.
+     *
+     * <p>This method ignores all checks and assumes that {@link WifiStateMachine} is currently
+     * in ScanModeState.
+     */
+    private void enableWifi() {
+        // TODO(b/72180295): ensure that there is no race condition with WifiServiceImpl here
+        if (mWifiInjector.getWifiSettingsStore().handleWifiToggled(true /* wifiEnabled */)) {
+            mWifiInjector.getWifiController().sendMessage(CMD_WIFI_TOGGLED);
+        }
+    }
+
+    /** Whether the feature is enabled in settings. */
     @VisibleForTesting
     boolean isEnabled() {
         return mWifiWakeupEnabled;

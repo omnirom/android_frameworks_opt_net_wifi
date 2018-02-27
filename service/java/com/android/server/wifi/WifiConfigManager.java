@@ -1907,13 +1907,6 @@ public class WifiConfigManager {
         }
 
         // Adding a new BSSID
-        ScanResult result = scanDetailCache.getScanResult(scanResult.BSSID);
-        if (result != null) {
-            // transfer the black list status
-            scanResult.blackListTimestamp = result.blackListTimestamp;
-            scanResult.numIpConfigFailures = result.numIpConfigFailures;
-            scanResult.numConnection = result.numConnection;
-        }
         if (config.ephemeral) {
             // For an ephemeral Wi-Fi config, the ScanResult should be considered
             // untrusted.
@@ -2419,7 +2412,8 @@ public class WifiConfigManager {
             if (TelephonyUtil.isSimConfig(config)) {
                 String currentIdentity = null;
                 if (simPresent) {
-                    currentIdentity = TelephonyUtil.getSimIdentity(mTelephonyManager, config);
+                    currentIdentity = TelephonyUtil.getSimIdentity(mTelephonyManager,
+                        new TelephonyUtil(), config);
                 }
                 // Update the loaded config
                 config.enterpriseConfig.setIdentity(currentIdentity);
