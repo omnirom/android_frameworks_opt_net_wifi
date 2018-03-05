@@ -93,6 +93,7 @@ import android.telephony.PhoneStateListener;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.Pair;
 import android.util.SparseArray;
 
 import com.android.internal.R;
@@ -1831,8 +1832,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     /**
      * Initiates a system-level bugreport, in a non-blocking fashion.
      */
-    public void takeBugReport() {
-        mWifiDiagnostics.takeBugReport();
+    public void takeBugReport(String bugTitle, String bugDetail) {
+        mWifiDiagnostics.takeBugReport(bugTitle, bugDetail);
     }
 
     /**
@@ -3797,6 +3798,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         }
         MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
         MacAddress newMac = config.getOrCreateRandomizedMacAddress();
+        mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
 
         if (currentMac.equals(newMac)) {
             Log.i(TAG, "No changes in MAC address");
@@ -4970,16 +4972,19 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     if (targetWificonfiguration != null
                             && targetWificonfiguration.networkId == netId
                             && TelephonyUtil.isSimConfig(targetWificonfiguration)) {
-                        String identity =
+                        // Pair<identity, encrypted identity>
+                        Pair<String, String> identityPair =
                                 TelephonyUtil.getSimIdentity(getTelephonyManager(),
                                         new TelephonyUtil(), targetWificonfiguration);
-                        if (identity != null) {
-                            mWifiNative.simIdentityResponse(mInterfaceName, netId, identity);
+                        if (identityPair.first != null) {
+                            mWifiNative.simIdentityResponse(mInterfaceName, netId,
+                                    identityPair.first, identityPair.second);
                             identitySent = true;
                         } else {
                             Log.e(TAG, "Unable to retrieve identity from Telephony");
                         }
                     }
+
                     if (!identitySent) {
                         // Supplicant lacks credentials to connect to that network, hence black list
                         ssid = (String) message.obj;
@@ -6266,14 +6271,16 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
                         sendMessageDelayed(obtainMessage(CMD_DELAYED_NETWORK_DISCONNECT,
                                 0, mLastNetworkId), LINK_FLAPPING_DEBOUNCE_MSEC);
-                        if (mVerboseLoggingEnabled) {
-                            log("NETWORK_DISCONNECTION_EVENT in connected state"
+
+                        Log.d(TAG, "NETWORK_DISCONNECTION_EVENT in connected state"
                                     + " BSSID=" + mWifiInfo.getBSSID()
                                     + " RSSI=" + mWifiInfo.getRssi()
                                     + " freq=" + mWifiInfo.getFrequency()
                                     + " reason=" + message.arg2
                                     + " -> debounce");
-                        }
+
+                        // While evaluating the impact of this code, trigger wtf
+                        Log.wtf(TAG, "LinkDebouncing is activated.");
                         return HANDLED;
                     } else {
                         if (mVerboseLoggingEnabled) {

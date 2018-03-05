@@ -25,6 +25,7 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.net.IpConfiguration;
+import android.net.MacAddress;
 import android.net.ProxyInfo;
 import android.net.StaticIpConfiguration;
 import android.net.wifi.ScanResult;
@@ -43,6 +44,7 @@ import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.LocalLog;
 import android.util.Log;
+import android.util.Pair;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
@@ -1608,7 +1610,7 @@ public class WifiConfigManager {
     /**
      * Set default GW MAC address for the provided network.
      *
-     * @param networkId  network ID corresponding to the network.
+     * @param networkId network ID corresponding to the network.
      * @param macAddress MAC address of the gateway to be set.
      * @return true if the network was found, false otherwise.
      */
@@ -1618,6 +1620,22 @@ public class WifiConfigManager {
             return false;
         }
         config.defaultGwMacAddress = macAddress;
+        return true;
+    }
+
+    /**
+     * Set randomized MAC address for the provided network.
+     *
+     * @param networkId network ID corresponding to the network.
+     * @param macAddress Randomized MAC address to be used for network connection.
+     * @return true if the network was found, false otherwise.
+    */
+    public boolean setNetworkRandomizedMacAddress(int networkId, MacAddress macAddress) {
+        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
+        if (config == null) {
+            return false;
+        }
+        config.setRandomizedMacAddress(macAddress);
         return true;
     }
 
@@ -2410,13 +2428,17 @@ public class WifiConfigManager {
         if (mVerboseLoggingEnabled) localLog("resetSimNetworks");
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
             if (TelephonyUtil.isSimConfig(config)) {
-                String currentIdentity = null;
+                Pair<String, String> currentIdentity = null;
                 if (simPresent) {
                     currentIdentity = TelephonyUtil.getSimIdentity(mTelephonyManager,
                         new TelephonyUtil(), config);
                 }
                 // Update the loaded config
-                config.enterpriseConfig.setIdentity(currentIdentity);
+                if (currentIdentity == null) {
+                    Log.d(TAG, "Identity is null");
+                    return;
+                }
+                config.enterpriseConfig.setIdentity(currentIdentity.first);
                 if (config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.PEAP) {
                     config.enterpriseConfig.setAnonymousIdentity("");
                 }
