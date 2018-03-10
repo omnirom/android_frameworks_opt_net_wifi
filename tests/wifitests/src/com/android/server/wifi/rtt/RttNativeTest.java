@@ -104,7 +104,7 @@ public class RttNativeTest {
         RangingRequest request = RttTestUtils.getDummyRangingRequest((byte) 0);
 
         // (1) issue range request
-        mDut.rangeRequest(cmdId, request);
+        mDut.rangeRequest(cmdId, request, true);
 
         // (2) verify HAL call and parameters
         verify(mockRttController).rangeRequest(eq(cmdId), mRttConfigCaptor.capture());
@@ -118,22 +118,91 @@ public class RttNativeTest {
         RttConfig rttConfig = halRequest.get(0);
         collector.checkThat("entry 0: MAC", rttConfig.addr,
                 equalTo(MacAddress.fromString("00:01:02:03:04:00").toByteArray()));
-        collector.checkThat("entry 0: MAC", rttConfig.type, equalTo(RttType.TWO_SIDED));
-        collector.checkThat("entry 0: MAC", rttConfig.peer, equalTo(RttPeerType.AP));
+        collector.checkThat("entry 0: rtt type", rttConfig.type, equalTo(RttType.TWO_SIDED));
+        collector.checkThat("entry 0: peer type", rttConfig.peer, equalTo(RttPeerType.AP));
+        collector.checkThat("entry 0: lci", rttConfig.mustRequestLci, equalTo(true));
+        collector.checkThat("entry 0: lcr", rttConfig.mustRequestLcr, equalTo(true));
 
         rttConfig = halRequest.get(1);
         collector.checkThat("entry 1: MAC", rttConfig.addr,
                 equalTo(MacAddress.fromString("0A:0B:0C:0D:0E:00").toByteArray()));
-        collector.checkThat("entry 1: MAC", rttConfig.type, equalTo(RttType.ONE_SIDED));
-        collector.checkThat("entry 1: MAC", rttConfig.peer, equalTo(RttPeerType.AP));
+        collector.checkThat("entry 1: rtt type", rttConfig.type, equalTo(RttType.ONE_SIDED));
+        collector.checkThat("entry 1: peer type", rttConfig.peer, equalTo(RttPeerType.AP));
+        collector.checkThat("entry 1: lci", rttConfig.mustRequestLci, equalTo(true));
+        collector.checkThat("entry 1: lcr", rttConfig.mustRequestLcr, equalTo(true));
+
 
         rttConfig = halRequest.get(2);
         collector.checkThat("entry 2: MAC", rttConfig.addr,
                 equalTo(MacAddress.fromString("08:09:08:07:06:05").toByteArray()));
-        collector.checkThat("entry 2: MAC", rttConfig.type, equalTo(RttType.TWO_SIDED));
-        collector.checkThat("entry 2: MAC", rttConfig.peer, equalTo(RttPeerType.NAN));
+        collector.checkThat("entry 2: rtt type", rttConfig.type, equalTo(RttType.TWO_SIDED));
+        collector.checkThat("entry 2: peer type", rttConfig.peer, equalTo(RttPeerType.NAN));
+        collector.checkThat("entry 2: lci", rttConfig.mustRequestLci, equalTo(false));
+        collector.checkThat("entry 2: lcr", rttConfig.mustRequestLcr, equalTo(false));
 
-        verifyNoMoreInteractions(mockRttController);
+        verifyNoMoreInteractions(mockRttController, mockRttServiceImpl);
+    }
+
+    /**
+     * Validate ranging request with a mix of Repsonders with and without IEEE 802.11mc support,
+     * from a non- privileged context.
+     */
+    @Test
+    public void testRangeRequestNotPrivilegedNo80211mcSupportMixed() throws Exception {
+        int cmdId = 66;
+
+        // the request has 3 responders: first AP support 802.11mc, second AP does not, third is
+        // Aware (which supports 802.11mc by default)
+        RangingRequest request = RttTestUtils.getDummyRangingRequest((byte) 0);
+
+        // (1) issue range request
+        mDut.rangeRequest(cmdId, request, false);
+
+        // (2) verify HAL call and parameters
+        verify(mockRttController).rangeRequest(eq(cmdId), mRttConfigCaptor.capture());
+
+        // verify contents of HAL request (hard codes knowledge from getDummyRangingRequest()).
+        ArrayList<RttConfig> halRequest = mRttConfigCaptor.getValue();
+
+        collector.checkThat("number of entries", halRequest.size(), equalTo(2));
+
+        RttConfig rttConfig = halRequest.get(0);
+        collector.checkThat("entry 0: MAC", rttConfig.addr,
+                equalTo(MacAddress.fromString("00:01:02:03:04:00").toByteArray()));
+        collector.checkThat("entry 0: rtt type", rttConfig.type, equalTo(RttType.TWO_SIDED));
+        collector.checkThat("entry 0: peer type", rttConfig.peer, equalTo(RttPeerType.AP));
+        collector.checkThat("entry 0: lci", rttConfig.mustRequestLci, equalTo(false));
+        collector.checkThat("entry 0: lcr", rttConfig.mustRequestLcr, equalTo(false));
+
+        rttConfig = halRequest.get(1);
+        collector.checkThat("entry 1: MAC", rttConfig.addr,
+                equalTo(MacAddress.fromString("08:09:08:07:06:05").toByteArray()));
+        collector.checkThat("entry 1: rtt type", rttConfig.type, equalTo(RttType.TWO_SIDED));
+        collector.checkThat("entry 1: peer type", rttConfig.peer, equalTo(RttPeerType.NAN));
+        collector.checkThat("entry 1: lci", rttConfig.mustRequestLci, equalTo(false));
+        collector.checkThat("entry 1: lcr", rttConfig.mustRequestLcr, equalTo(false));
+
+        verifyNoMoreInteractions(mockRttController, mockRttServiceImpl);
+    }
+
+    /**
+     * Validate ranging request with all Repsonders without IEEE 802.11mc support, from a non-
+     * privileged context.
+     */
+    @Test
+    public void testRangeRequestNotPrivilegedNo80211mcSupportForAny() throws Exception {
+        int cmdId = 77;
+        RangingRequest request = RttTestUtils.getDummyRangingRequestNo80211mcSupport((byte) 0);
+
+        // (1) issue range request
+        mDut.rangeRequest(cmdId, request, false);
+
+        // (2) verify immediate result callback (empty result set)
+        verify(mockRttServiceImpl).onRangingResults(eq(cmdId), mRttResultCaptor.capture());
+
+        collector.checkThat("Result set", mRttResultCaptor.getValue().size(), equalTo(0));
+
+        verifyNoMoreInteractions(mockRttController, mockRttServiceImpl);
     }
 
     /**
@@ -151,7 +220,7 @@ public class RttNativeTest {
         assertFalse(mDut.isReady());
 
         // (2) issue range request
-        mDut.rangeRequest(cmdId, request);
+        mDut.rangeRequest(cmdId, request, true);
 
         verifyNoMoreInteractions(mockRttServiceImpl, mockRttController);
     }
@@ -215,6 +284,6 @@ public class RttNativeTest {
         collector.checkThat("distanceCm", rttResult.distanceInMm, equalTo(1500));
         collector.checkThat("timestamp", rttResult.timeStampInUs, equalTo(666L));
 
-        verifyNoMoreInteractions(mockRttController);
+        verifyNoMoreInteractions(mockRttController, mockRttServiceImpl);
     }
 }

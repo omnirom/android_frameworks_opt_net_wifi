@@ -37,6 +37,8 @@ import android.net.DhcpResults;
 import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
 import android.net.NetworkFactory;
+import android.net.NetworkInfo;
+import android.net.NetworkMisc;
 import android.net.NetworkRequest;
 import android.net.dhcp.DhcpClient;
 import android.net.ip.IpClient;
@@ -106,9 +108,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
 
@@ -135,6 +135,13 @@ public class WifiStateMachineTest {
     private static final String DEFAULT_TEST_SSID = "\"GoogleGuest\"";
     private static final String OP_PACKAGE_NAME = "com.xxx";
     private static final int TEST_UID = Process.SYSTEM_UID + 1000;
+
+    // NetworkAgent creates threshold ranges with Integers
+    private static final int RSSI_THRESHOLD_MAX = -30;
+    private static final int RSSI_THRESHOLD_MIN = -76;
+    // Threshold breach callbacks are called with bytes
+    private static final byte RSSI_THRESHOLD_BREACH_MIN = -80;
+    private static final byte RSSI_THRESHOLD_BREACH_MAX = -20;
 
     private long mBinderToken;
 
@@ -328,7 +335,6 @@ public class WifiStateMachineTest {
     @Mock SupplicantStateTracker mSupplicantStateTracker;
     @Mock WifiMetrics mWifiMetrics;
     @Mock UserManager mUserManager;
-    @Mock WifiApConfigStore mApConfigStore;
     @Mock BackupManagerProxy mBackupManagerProxy;
     @Mock WifiCountryCode mCountryCode;
     @Mock WifiInjector mWifiInjector;
@@ -356,6 +362,11 @@ public class WifiStateMachineTest {
     @Mock WifiPermissionsWrapper mWifiPermissionsWrapper;
     @Mock WakeupController mWakeupController;
     @Mock ScanRequestProxy mScanRequestProxy;
+
+    final ArgumentCaptor<WifiNative.StatusListener> mStatusListenerCaptor =
+            ArgumentCaptor.forClass(WifiNative.StatusListener.class);
+    final ArgumentCaptor<WifiNative.InterfaceCallback> mInterfaceCallbackCaptor =
+            ArgumentCaptor.forClass(WifiNative.InterfaceCallback.class);
 
     public WifiStateMachineTest() throws Exception {
     }
@@ -413,9 +424,6 @@ public class WifiStateMachineTest {
                 Settings.Global.WIFI_FREQUENCY_BAND,
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO)).thenReturn(
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO);
-
-        when(mFrameworkFacade.makeApConfigStore(eq(mContext), eq(mBackupManagerProxy)))
-                .thenReturn(mApConfigStore);
 
         when(mFrameworkFacade.makeSupplicantStateTracker(
                 any(Context.class), any(WifiConfigManager.class),
@@ -831,6 +839,9 @@ public class WifiStateMachineTest {
         mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
         mLooper.dispatchAll();
 
+        // this will be removed when interface management is dynamic
+        verify(mWifiNative, atLeastOnce()).teardownAllInterfaces();
+
         assertEquals("SupplicantStartingState", getCurrentState().getName());
 
         when(mWifiNative.setDeviceName(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
@@ -847,7 +858,8 @@ public class WifiStateMachineTest {
         mWsm.sendMessage(WifiMonitor.SUP_CONNECTION_EVENT);
         mLooper.dispatchAll();
 
-        verify(mWifiNative, atLeastOnce()).setupInterfaceForClientMode(any());
+        verify(mWifiNative, atLeastOnce())
+                .setupInterfaceForClientMode(mInterfaceCallbackCaptor.capture());
         verify(mWifiLastResortWatchdog, atLeastOnce()).clearAllFailureCounts();
     }
 
@@ -905,68 +917,6 @@ public class WifiStateMachineTest {
             }
         }
         return null;
-    }
-
-    private void verifyScan(int band, int reportEvents, Set<String> hiddenNetworkSSIDSet) {
-        ArgumentCaptor<WifiScanner.ScanSettings> scanSettingsCaptor =
-                ArgumentCaptor.forClass(WifiScanner.ScanSettings.class);
-        ArgumentCaptor<WifiScanner.ScanListener> scanListenerCaptor =
-                ArgumentCaptor.forClass(WifiScanner.ScanListener.class);
-        verify(mWifiScanner).startScan(scanSettingsCaptor.capture(), scanListenerCaptor.capture(),
-                eq(null));
-        WifiScanner.ScanSettings actualSettings = scanSettingsCaptor.getValue();
-        assertEquals("band", band, actualSettings.band);
-        assertEquals("reportEvents", reportEvents, actualSettings.reportEvents);
-
-        if (hiddenNetworkSSIDSet == null) {
-            hiddenNetworkSSIDSet = new HashSet<>();
-        }
-        Set<String> actualHiddenNetworkSSIDSet = new HashSet<>();
-        if (actualSettings.hiddenNetworks != null) {
-            for (int i = 0; i < actualSettings.hiddenNetworks.length; ++i) {
-                actualHiddenNetworkSSIDSet.add(actualSettings.hiddenNetworks[i].ssid);
-            }
-        }
-        assertEquals("hidden networks", hiddenNetworkSSIDSet, actualHiddenNetworkSSIDSet);
-
-        when(mWifiNative.getScanResults(WIFI_IFACE_NAME)).thenReturn(getMockScanResults());
-        mWsm.sendMessage(WifiMonitor.SCAN_RESULTS_EVENT);
-
-        mLooper.dispatchAll();
-
-        List<ScanResult> reportedResults = mWsm.syncGetScanResultsList();
-        assertEquals(8, reportedResults.size());
-    }
-
-    @Test
-    public void scan() throws Exception {
-        initializeAndAddNetworkAndVerifySuccess();
-
-        mWsm.startScan(-1, 0, null, null);
-        mLooper.dispatchAll();
-
-        verifyScan(WifiScanner.WIFI_BAND_BOTH_WITH_DFS,
-                WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN
-                | WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT, null);
-    }
-
-    @Test
-    public void scanWithHiddenNetwork() throws Exception {
-        initializeAndAddNetworkAndVerifySuccess(true);
-
-        Set<String> hiddenNetworkSet = new HashSet<>();
-        hiddenNetworkSet.add(sSSID);
-        List<WifiScanner.ScanSettings.HiddenNetwork> hiddenNetworkList = new ArrayList<>();
-        hiddenNetworkList.add(new WifiScanner.ScanSettings.HiddenNetwork(sSSID));
-        when(mWifiConfigManager.retrieveHiddenNetworkList()).thenReturn(hiddenNetworkList);
-
-        mWsm.startScan(-1, 0, null, null);
-        mLooper.dispatchAll();
-
-        verifyScan(WifiScanner.WIFI_BAND_BOTH_WITH_DFS,
-                WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN
-                | WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT,
-                hiddenNetworkSet);
     }
 
     private void setupAndStartConnectSequence(WifiConfiguration config) throws Exception {
@@ -1751,21 +1701,70 @@ public class WifiStateMachineTest {
         assertEquals("DisconnectingState", getCurrentState().getName());
     }
 
+    /**
+     * Trigger recovery and a bug report of we see a native failure when Client mode is active.
+     */
     @Test
-    public void handleWifiNativeFailure() throws Exception {
-        ArgumentCaptor<WifiNative.StatusListener> statusListenerCaptor =
-                ArgumentCaptor.forClass(WifiNative.StatusListener.class);
-
+    public void handleWifiNativeFailureWhenClientModeActive() throws Exception {
         // Trigger initialize to capture the death handler registration.
         loadComponentsInStaMode();
 
-        verify(mWifiNative).registerStatusListener(statusListenerCaptor.capture());
+        verify(mWifiNative).registerStatusListener(mStatusListenerCaptor.capture());
 
         // Now trigger the death notification.
-        statusListenerCaptor.getValue().onStatusChanged(false);
+        mStatusListenerCaptor.getValue().onStatusChanged(false);
         mLooper.dispatchAll();
         verify(mSelfRecovery).trigger(eq(SelfRecovery.REASON_WIFICOND_CRASH));
         verify(mWifiDiagnostics).captureBugReportData(WifiDiagnostics.REPORT_REASON_WIFICOND_CRASH);
+    }
+
+    /**
+     * WifiNative failures when in a state other than client mode should just be dropped.
+     */
+    @Test
+    public void handleWifiNativeFailureInDefaultDoesNotRestartClientMode() throws Exception {
+        // Trigger initialize to capture the death handler registration.
+        loadComponentsInStaMode();
+        verify(mWifiNative).registerStatusListener(mStatusListenerCaptor.capture());
+
+        mWsm.setOperationalMode(WifiStateMachine.SCAN_ONLY_MODE);
+        mLooper.dispatchAll();
+
+        // Now trigger the death notification.
+        mStatusListenerCaptor.getValue().onStatusChanged(false);
+        mLooper.dispatchAll();
+        verify(mSelfRecovery, never()).trigger(anyInt());
+        verify(mWifiDiagnostics, never()).captureBugReportData(anyInt());
+    }
+
+    /**
+     * Test verifying that interface onDown callbacks are not currently hooked up.
+     */
+    @Test
+    public void testInterfaceOnDownDoesNotTriggerClientModeShutdown() throws Exception {
+        connect();
+
+        // trigger onDown for the client interface
+        mInterfaceCallbackCaptor.getValue().onDown(WIFI_IFACE_NAME);
+        mLooper.dispatchAll();
+
+        // since this is not handled yet, should not trigger a disconnect
+        assertEquals("ConnectedState", getCurrentState().getName());
+    }
+
+    /**
+     * Test verifying that interface onDestroyed callbacks are not currently hooked up.
+     */
+    @Test
+    public void testInterfaceOnDestroyedDoesNotTriggerClientModeShutdown() throws Exception {
+        connect();
+
+        // trigger onDestroyed for the client interface
+        mInterfaceCallbackCaptor.getValue().onDown(WIFI_IFACE_NAME);
+        mLooper.dispatchAll();
+
+        // since this is not handled yet, should not trigger a disconnect
+        assertEquals("ConnectedState", getCurrentState().getName());
     }
 
     /**
@@ -1896,107 +1895,24 @@ public class WifiStateMachineTest {
     }
 
     /**
-     * Test that connected SSID and BSSID are not exposed to an app that does not have the
-     * appropriate permissions.
+     * Test that connected SSID and BSSID are exposed to system server.
      * Also tests that {@link WifiStateMachine#syncRequestConnectionInfo(String)} always
      * returns a copy of WifiInfo.
-     */
-    @Test
-    public void testConnectedIdsAreHiddenFromAppWithoutPermission() throws Exception {
-        WifiInfo wifiInfo = mWsm.getWifiInfo();
-
-        // Get into a connected state, with known BSSID and SSID
-        connect();
-        assertEquals(sBSSID, wifiInfo.getBSSID());
-        assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
-
-        when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(TEST_UID), anyInt()))
-                .thenReturn(false);
-
-        WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName(),
-                TEST_UID);
-
-        assertNotEquals(wifiInfo, connectionInfo);
-        assertEquals(WifiSsid.NONE, connectionInfo.getSSID());
-        assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getBSSID());
-    }
-
-    /**
-     * Test that connected SSID and BSSID are not exposed to an app that does not have the
-     * appropriate permissions, when canAccessScanResults raises a SecurityException.
-     * Also tests that {@link WifiStateMachine#syncRequestConnectionInfo(String)} always
-     * returns a copy of WifiInfo.
-     */
-    @Test
-    public void testConnectedIdsAreHiddenOnSecurityException() throws Exception {
-        WifiInfo wifiInfo = mWsm.getWifiInfo();
-
-        // Get into a connected state, with known BSSID and SSID
-        connect();
-        assertEquals(sBSSID, wifiInfo.getBSSID());
-        assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
-
-        when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(TEST_UID), anyInt()))
-                .thenThrow(new SecurityException());
-
-        WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName(),
-                TEST_UID);
-
-        assertNotEquals(wifiInfo, connectionInfo);
-        assertEquals(WifiSsid.NONE, connectionInfo.getSSID());
-        assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getBSSID());
-    }
-
-    /**
-     * Test that connected SSID and BSSID are exposed to system server
      */
     @Test
     public void testConnectedIdsAreVisibleFromSystemServer() throws Exception {
-        when(mWifiPermissionsWrapper.getLocalMacAddressPermission(anyInt()))
-                .thenReturn(PackageManager.PERMISSION_GRANTED);
-
         WifiInfo wifiInfo = mWsm.getWifiInfo();
         // Get into a connected state, with known BSSID and SSID
         connect();
         assertEquals(sBSSID, wifiInfo.getBSSID());
         assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
 
-        when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(TEST_UID), anyInt()))
-                .thenReturn(true);
-
-        WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName(),
-                TEST_UID);
+        WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo();
 
         assertNotEquals(wifiInfo, connectionInfo);
         assertEquals(wifiInfo.getSSID(), connectionInfo.getSSID());
         assertEquals(wifiInfo.getBSSID(), connectionInfo.getBSSID());
         assertEquals(wifiInfo.getMacAddress(), connectionInfo.getMacAddress());
-    }
-
-    /**
-     * Test that connected SSID and BSSID are exposed to an app that does have the
-     * appropriate permissions.
-     */
-    @Test
-    public void testConnectedIdsAreVisibleFromPermittedApp() throws Exception {
-        WifiInfo wifiInfo = mWsm.getWifiInfo();
-
-        // Get into a connected state, with known BSSID and SSID
-        connect();
-        assertEquals(sBSSID, wifiInfo.getBSSID());
-        assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
-
-        when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(TEST_UID), anyInt()))
-                .thenReturn(true);
-
-        WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName(),
-                TEST_UID);
-
-        assertNotEquals(wifiInfo, connectionInfo);
-        assertEquals(wifiInfo.getSSID(), connectionInfo.getSSID());
-        assertEquals(wifiInfo.getBSSID(), connectionInfo.getBSSID());
-        // Access to our MAC address uses a different permission, make sure it is not granted
-        assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getMacAddress());
     }
 
     /**
@@ -2344,5 +2260,61 @@ public class WifiStateMachineTest {
     public void takeBugReportCallsWifiDiagnostics() {
         mWsm.takeBugReport(anyString(), anyString());
         verify(mWifiDiagnostics).takeBugReport(anyString(), anyString());
+    }
+
+    /**
+     * Verify that Rssi Monitoring is started and the callback registered after connecting.
+     */
+    @Test
+    public void verifyRssiMonitoringCallbackIsRegistered() throws Exception {
+        // Simulate the first connection.
+        connect();
+        ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
+        verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
+                any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
+                anyInt(), any(NetworkMisc.class));
+
+        ArrayList<Integer> thresholdsArray = new ArrayList();
+        thresholdsArray.add(RSSI_THRESHOLD_MAX);
+        thresholdsArray.add(RSSI_THRESHOLD_MIN);
+        Bundle thresholds = new Bundle();
+        thresholds.putIntegerArrayList("thresholds", thresholdsArray);
+        Message message = new Message();
+        message.what = android.net.NetworkAgent.CMD_SET_SIGNAL_STRENGTH_THRESHOLDS;
+        message.obj  = thresholds;
+        messengerCaptor.getValue().send(message);
+        mLooper.dispatchAll();
+
+        ArgumentCaptor<WifiNative.WifiRssiEventHandler> rssiEventHandlerCaptor =
+                ArgumentCaptor.forClass(WifiNative.WifiRssiEventHandler.class);
+        verify(mWifiNative).startRssiMonitoring(anyString(), anyByte(), anyByte(),
+                rssiEventHandlerCaptor.capture());
+
+        // breach below min
+        rssiEventHandlerCaptor.getValue().onRssiThresholdBreached(RSSI_THRESHOLD_BREACH_MIN);
+        mLooper.dispatchAll();
+        WifiInfo wifiInfo = mWsm.getWifiInfo();
+        assertEquals(RSSI_THRESHOLD_BREACH_MIN, wifiInfo.getRssi());
+
+        // breach above max
+        rssiEventHandlerCaptor.getValue().onRssiThresholdBreached(RSSI_THRESHOLD_BREACH_MAX);
+        mLooper.dispatchAll();
+        assertEquals(RSSI_THRESHOLD_BREACH_MAX, wifiInfo.getRssi());
+    }
+
+    /**
+     * Verify that calls to start and stop filtering multicast packets are passed on to the IpClient
+     * instance.
+     */
+    @Test
+    public void verifyMcastLockManagerFilterControllerCallsUpdateIpClient() throws Exception {
+        loadComponentsInStaMode();
+        reset(mIpClient);
+        WifiMulticastLockManager.FilterController filterController =
+                mWsm.getMcastLockManagerFilterController();
+        filterController.startFilteringMulticastPackets();
+        verify(mIpClient).setMulticastFilter(eq(true));
+        filterController.stopFilteringMulticastPackets();
+        verify(mIpClient).setMulticastFilter(eq(false));
     }
 }

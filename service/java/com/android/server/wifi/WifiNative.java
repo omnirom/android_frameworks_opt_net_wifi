@@ -21,6 +21,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.net.InterfaceConfiguration;
 import android.net.MacAddress;
+import android.net.TrafficStats;
 import android.net.apf.ApfCapabilities;
 import android.net.wifi.RttManager;
 import android.net.wifi.RttManager.ResponderConfig;
@@ -451,13 +452,7 @@ public class WifiNative {
     private void onNativeDaemonDeath() {
         synchronized (mLock) {
             Log.i(TAG, "One of the daemons died. Tearing down everything");
-            Iterator<Integer> ifaceIdIter = mIfaceMgr.getIfaceIdIter();
-            while (ifaceIdIter.hasNext()) {
-                Iface iface = mIfaceMgr.getIface(ifaceIdIter.next());
-                ifaceIdIter.remove();
-                onInterfaceDestroyed(iface);
-                Log.i(TAG, "Successfully torn down iface=" + iface.name);
-            }
+            teardownAllInterfaces();
             for (StatusListener listener : mStatusListeners) {
                 listener.onStatusChanged(false);
             }
@@ -909,9 +904,11 @@ public class WifiNative {
             Iterator<Integer> ifaceIdIter = mIfaceMgr.getIfaceIdIter();
             while (ifaceIdIter.hasNext()) {
                 Iface iface = mIfaceMgr.getIface(ifaceIdIter.next());
-                teardownInterface(iface.name);
+                ifaceIdIter.remove();
+                onInterfaceDestroyed(iface);
+                Log.i(TAG, "Successfully torn down iface=" + iface.name);
             }
-            Log.i(TAG, "Successfully initiated teardown for all ifaces");
+            Log.i(TAG, "Successfully torn down all ifaces");
         }
     }
 
@@ -2478,6 +2475,26 @@ public class WifiNative {
      */
     public boolean getRxPktFates(@NonNull String ifaceName, RxFateReport[] reportBufs) {
         return mWifiVendorHal.getRxPktFates(ifaceName, reportBufs);
+    }
+
+    /**
+     * Get the tx packet counts for the interface.
+     *
+     * @param ifaceName Name of the interface.
+     * @return tx packet counts
+     */
+    public long getTxPackets(@NonNull String ifaceName) {
+        return TrafficStats.getTxPackets(ifaceName);
+    }
+
+    /**
+     * Get the rx packet counts for the interface.
+     *
+     * @param ifaceName Name of the interface
+     * @return rx packet counts
+     */
+    public long getRxPackets(@NonNull String ifaceName) {
+        return TrafficStats.getRxPackets(ifaceName);
     }
 
     /**
