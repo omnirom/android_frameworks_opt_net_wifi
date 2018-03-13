@@ -70,7 +70,8 @@ LOCAL_STATIC_JAVA_LIBRARIES := \
 	android.hardware.wifi.supplicant-V1.1-java
 LOCAL_REQUIRED_MODULES := \
 	services \
-	libwifi-service
+	libwifi-service \
+	cacerts_wfa
 LOCAL_MODULE_TAGS :=
 LOCAL_MODULE := wifi-service
 LOCAL_INIT_RC := wifi-events.rc
@@ -78,7 +79,7 @@ LOCAL_INIT_RC := wifi-events.rc
 LOCAL_DEX_PREOPT_APP_IMAGE := false
 LOCAL_DEX_PREOPT_GENERATE_PROFILE := true
 LOCAL_DEX_PREOPT_PROFILE_CLASS_LISTING := frameworks/base/services/art-profile
-
+LOCAL_ERROR_PRONE_FLAGS := -Xep:CheckReturnValue:ERROR
 
 include $(BUILD_JAVA_LIBRARY)
 
