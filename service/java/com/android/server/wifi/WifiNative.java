@@ -123,6 +123,8 @@ public class WifiNative {
         public final @IfaceType int type;
         /** Name of the interface */
         public String name;
+        /** Is the interface up? This is used to mask up/down notifications to external clients. */
+        public boolean isUp;
         /** External iface destroyed listener for the iface */
         public InterfaceCallback externalListener;
         /** Network observer registered for this interface */
@@ -519,6 +521,23 @@ public class WifiNative {
         }
     }
 
+    /** Helper method invoked to handle interface change. */
+    private void onInterfaceStateChanged(Iface iface, boolean isUp) {
+        synchronized (mLock) {
+            // Mask multiple notifications with the same state.
+            if (isUp == iface.isUp) {
+                Log.d(TAG, "Interface status unchanged from " + isUp + ", Ignoring...");
+                return;
+            }
+            if (isUp) {
+                iface.externalListener.onUp(iface.name);
+            } else {
+                iface.externalListener.onDown(iface.name);
+            }
+            iface.isUp = isUp;
+        }
+    }
+
     /**
      * Network observer to use for all interface up/down notifications.
      */
@@ -534,18 +553,19 @@ public class WifiNative {
         public void interfaceLinkStateChanged(String ifaceName, boolean isUp) {
             synchronized (mLock) {
                 Log.i(TAG, "Interface link state changed=" + ifaceName + ", isUp=" + isUp);
-                final Iface iface = mIfaceMgr.getIface(mInterfaceId);
-                if (iface == null) {
+                final Iface ifaceWithId = mIfaceMgr.getIface(mInterfaceId);
+                if (ifaceWithId == null) {
+                    Log.e(TAG, "Received iface up/down notification on an invalid iface="
+                            + mInterfaceId);
+                    return;
+                }
+                final Iface ifaceWithName = mIfaceMgr.getIface(ifaceName);
+                if (ifaceWithName == null || ifaceWithName != ifaceWithId) {
                     Log.e(TAG, "Received iface up/down notification on an invalid iface="
                             + ifaceName);
                     return;
                 }
-
-                if (isUp) {
-                    iface.externalListener.onUp(ifaceName);
-                } else {
-                    iface.externalListener.onDown(ifaceName);
-                }
+                onInterfaceStateChanged(ifaceWithName, isUp);
             }
         }
     }
@@ -568,10 +588,10 @@ public class WifiNative {
      * For devices which do not the support the HAL, this will bypass HalDeviceManager &
      * teardown any existing iface.
      */
-    private String createStaIface(@NonNull Iface iface) {
+    private String createStaIface(@NonNull Iface iface, boolean lowPrioritySta) {
         synchronized (mLock) {
             if (mWifiVendorHal.isVendorHalSupported()) {
-                return mWifiVendorHal.createStaIface(
+                return mWifiVendorHal.createStaIface(lowPrioritySta,
                         new InterfaceDestoyedListenerInternal(iface.id));
             } else {
                 Log.i(TAG, "Vendor Hal not supported, ignoring createStaIface.");
@@ -734,10 +754,13 @@ public class WifiNative {
      * This method configures an interface in STA mode in all the native daemons
      * (wificond, wpa_supplicant & vendor HAL).
      *
+     * @param lowPrioritySta The requested STA has a low request priority (lower probability of
+     *                       getting created, higher probability of getting destroyed).
      * @param interfaceCallback Associated callback for notifying status changes for the iface.
      * @return Returns the name of the allocated interface, will be null on failure.
      */
-    public String setupInterfaceForClientMode(@NonNull InterfaceCallback interfaceCallback) {
+    public String setupInterfaceForClientMode(boolean lowPrioritySta,
+            @NonNull InterfaceCallback interfaceCallback) {
         synchronized (mLock) {
             if (!startHal()) {
                 Log.e(TAG, "Failed to start Hal");
@@ -755,7 +778,7 @@ public class WifiNative {
                 return null;
             }
             iface.externalListener = interfaceCallback;
-            iface.name = createStaIface(iface);
+            iface.name = createStaIface(iface, lowPrioritySta);
             if (TextUtils.isEmpty(iface.name)) {
                 Log.e(TAG, "Failed to create iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
@@ -780,6 +803,9 @@ public class WifiNative {
                 teardownInterface(iface.name);
                 return null;
             }
+            // Just to avoid any race conditions with interface state change callbacks,
+            // update the interface state before we exit.
+            onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             initializeNwParamsForClientInterface(iface.name);
             Log.i(TAG, "Successfully setup iface=" + iface.name);
             return iface.name;
@@ -829,6 +855,9 @@ public class WifiNative {
                 teardownInterface(iface.name);
                 return null;
             }
+            // Just to avoid any race conditions with interface state change callbacks,
+            // update the interface state before we exit.
+            onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             Log.i(TAG, "Successfully setup iface=" + iface.name);
             return iface.name;
         }
