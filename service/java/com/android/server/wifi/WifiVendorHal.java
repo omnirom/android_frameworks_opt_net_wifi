@@ -77,6 +77,8 @@ import com.android.server.wifi.HalDeviceManager.InterfaceDestroyedListener;
 import com.android.server.wifi.util.BitMask;
 import com.android.server.wifi.util.NativeUtil;
 
+import com.google.errorprone.annotations.CompileTimeConstant;
+
 import libcore.util.NonNull;
 
 import java.util.ArrayList;
@@ -187,11 +189,9 @@ public class WifiVendorHal {
      * @param format string with % placeholders
      * @return LogMessage formatter (remember to .flush())
      */
-    private WifiLog.LogMessage enter(String format) {
+    private WifiLog.LogMessage enter(@CompileTimeConstant final String format) {
         if (mVerboseLog == sNoLog) return sNoLog.info(format);
-        Thread cur = Thread.currentThread();
-        StackTraceElement[] trace = cur.getStackTrace();
-        return mVerboseLog.trace("% " + format).c(trace[3].getMethodName());
+        return mVerboseLog.trace(format, 1);
     }
 
     /**
@@ -201,7 +201,7 @@ public class WifiVendorHal {
      *
      * @param trace, fo example obtained by Thread.currentThread().getStackTrace()
      * @param start  frame number to log, typically 3
-     * @return string cotaining the method name and line number
+     * @return string containing the method name and line number
      */
     private static String niceMethodName(StackTraceElement[] trace, int start) {
         if (start >= trace.length) return "";
@@ -2454,7 +2454,7 @@ public class WifiVendorHal {
                         val = StaRoamingState.ENABLED;
                         break;
                     default:
-                        mLog.err("enableFirmwareRoaming invalid argument " + state).flush();
+                        mLog.err("enableFirmwareRoaming invalid argument %").c(state).flush();
                         return WifiStatusCode.ERROR_INVALID_ARGS;
                 }
 
