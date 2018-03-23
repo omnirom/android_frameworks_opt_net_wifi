@@ -2226,9 +2226,6 @@ public class WifiStateMachine extends StateMachine {
                 config = mWifiConfigManager.getConfiguredNetwork(msg.arg1);
                 if (config != null) {
                     sb.append(" ").append(config.configKey());
-                    if (config.visibility != null) {
-                        sb.append(" ").append(config.visibility.toString());
-                    }
                 }
                 if (mTargetRoamBSSID != null) {
                     sb.append(" ").append(mTargetRoamBSSID);
@@ -2237,9 +2234,6 @@ public class WifiStateMachine extends StateMachine {
                 config = getCurrentWifiConfiguration();
                 if (config != null) {
                     sb.append(config.configKey());
-                    if (config.visibility != null) {
-                        sb.append(" ").append(config.visibility.toString());
-                    }
                 }
                 break;
             case CMD_START_ROAM:
@@ -3777,8 +3771,8 @@ public class WifiStateMachine extends StateMachine {
                 case CMD_WIFINATIVE_FAILURE:
                     Log.e(TAG, "One of the native daemons died unexpectedly. Triggering recovery");
                     mWifiDiagnostics.captureBugReportData(
-                            WifiDiagnostics.REPORT_REASON_WIFICOND_CRASH);
-                    mWifiInjector.getSelfRecovery().trigger(SelfRecovery.REASON_WIFICOND_CRASH);
+                            WifiDiagnostics.REPORT_REASON_WIFINATIVE_FAILURE);
+                    mWifiInjector.getSelfRecovery().trigger(SelfRecovery.REASON_WIFINATIVE_FAILURE);
                     break;
                 default:
                     return NOT_HANDLED;
@@ -5405,7 +5399,6 @@ public class WifiStateMachine extends StateMachine {
         }
 
         setNetworkDetailedState(DetailedState.CONNECTED);
-        mWifiConfigManager.updateNetworkAfterConnect(mLastNetworkId);
         sendNetworkStateChangeBroadcast(mLastBssid);
     }
 
