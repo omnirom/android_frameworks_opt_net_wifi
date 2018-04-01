@@ -552,7 +552,7 @@ public class WifiNative {
                 }
                 return;
             }
-            Log.i(TAG, "Interface link state changed on " + iface + ", isUp=" + isUp);
+            Log.i(TAG, "Interface state changed on " + iface + ", isUp=" + isUp);
             if (isUp) {
                 iface.externalListener.onUp(iface.name);
             } else {
@@ -573,8 +573,9 @@ public class WifiNative {
             mInterfaceId = id;
         }
 
+        // TODO(b/76219766): We may need to listen for link state changes in SoftAp mode.
         @Override
-        public void interfaceLinkStateChanged(String ifaceName, boolean isUp) {
+        public void interfaceStatusChanged(String ifaceName, boolean isUp) {
             synchronized (mLock) {
                 final Iface ifaceWithId = mIfaceMgr.getIface(mInterfaceId);
                 if (ifaceWithId == null) {
@@ -1504,6 +1505,11 @@ public class WifiNative {
     public static final String SIM_AUTH_RESP_TYPE_GSM_AUTH = "GSM-AUTH";
     public static final String SIM_AUTH_RESP_TYPE_UMTS_AUTH = "UMTS-AUTH";
     public static final String SIM_AUTH_RESP_TYPE_UMTS_AUTS = "UMTS-AUTS";
+
+    /**
+     * EAP-SIM Error Codes
+     */
+    public static final int EAP_SIM_VENDOR_SPECIFIC_CERT_EXPIRED = 16385;
 
     /**
      * Send the sim auth response for the currently configured network.
