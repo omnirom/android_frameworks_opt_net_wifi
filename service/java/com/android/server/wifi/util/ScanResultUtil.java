@@ -71,6 +71,22 @@ public class ScanResultUtil {
     }
 
     /**
+     * Helper method to check if the provided |scanResult| corresponds to FILS SHA256 network.
+     * This checks if the provided capabilities string contains FILS-SHA256 or not.
+     */
+    public static boolean isScanResultForFilsSha256Network(ScanResult scanResult) {
+        return scanResult.capabilities.contains("FILS-SHA256");
+    }
+
+    /**
+     * Helper method to check if the provided |scanResult| corresponds to FILS SHA384 network.
+     * This checks if the provided capabilities string contains FILS-SHA384 or not.
+     */
+    public static boolean isScanResultForFilsSha384Network(ScanResult scanResult) {
+        return scanResult.capabilities.contains("FILS-SHA384");
+    }
+
+    /**
      * Helper method to check if the provided |scanResult| corresponds to an open network or not.
      * This checks if the provided capabilities string does not contain either of WEP, PSK or EAP
      * encryption types or not.
@@ -111,6 +127,10 @@ public class ScanResultUtil {
         } else if (isScanResultForEapNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_EAP);
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.IEEE8021X);
+            if (isScanResultForFilsSha256Network(scanResult))
+                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA256);
+            if (isScanResultForFilsSha384Network(scanResult))
+                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA384);
         } else if (isScanResultForWepNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
             config.allowedAuthAlgorithms.set(WifiConfiguration.AuthAlgorithm.OPEN);

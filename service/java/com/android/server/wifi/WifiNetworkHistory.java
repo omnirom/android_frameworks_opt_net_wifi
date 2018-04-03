@@ -557,7 +557,7 @@ public class WifiNetworkHistory {
             return false;
         }
         if (config.allowedKeyManagement.cardinality() > 1) {
-            if (config.allowedKeyManagement.cardinality() != 2) {
+            if (config.allowedKeyManagement.cardinality() > 4) {
                 return false;
             }
             if (!config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP)) {

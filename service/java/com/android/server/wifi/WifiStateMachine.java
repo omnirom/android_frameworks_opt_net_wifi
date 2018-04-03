@@ -2842,6 +2842,11 @@ public class WifiStateMachine extends StateMachine {
                 mInterfaceName, WifiNative.BLUETOOTH_COEXISTENCE_MODE_SENSE);
     }
 
+    public String getCapabilities(String capaType) {
+
+        return mWifiNative.getCapabilities(mInterfaceName, capaType);
+    }
+
     private static final long DIAGS_CONNECT_TIMEOUT_MILLIS = 60 * 1000;
     private long mDiagsConnectionStartMillis = -1;
     /**

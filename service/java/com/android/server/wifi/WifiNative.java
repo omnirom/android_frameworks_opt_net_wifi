@@ -1486,6 +1486,17 @@ public class WifiNative {
     }
 
     /**
+     * Get capabilities from driver
+     *
+     * @param ifaceName Name of the interface.
+     * @param capaType which driver capability to get, ex. key_mgmt
+     * @return String of capabilities fetched from driver.
+     */
+     public String getCapabilities(@NonNull String ifaceName, String capaType) {
+         return mSupplicantStaIfaceHal.getCapabilities(ifaceName, capaType);
+    }
+
+    /**
      * Set country code.
      *
      * @param ifaceName Name of the interface.
