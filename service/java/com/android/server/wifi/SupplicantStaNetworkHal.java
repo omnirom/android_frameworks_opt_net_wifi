@@ -17,6 +17,7 @@ package com.android.server.wifi;
 
 import android.content.Context;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetwork;
+import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
@@ -91,6 +92,7 @@ public class SupplicantStaNetworkHal {
     private final String mIfaceName;
     private final WifiMonitor mWifiMonitor;
     private ISupplicantStaNetwork mISupplicantStaNetwork;
+    private ISupplicantVendorStaNetwork mISupplicantVendorStaNetwork;
     private ISupplicantStaNetworkCallback mISupplicantStaNetworkCallback;
 
     private boolean mVerboseLoggingEnabled = false;
@@ -327,12 +329,25 @@ public class SupplicantStaNetworkHal {
                     Log.e(TAG, "failed to set Key Management");
                     return false;
                 }
+                if (!setVendorKeyMgmt(wifiConfigurationToSupplicantVendorKeyMgmtMask(keyMgmtMask))) {
+                    Log.e(TAG, "failed to set Vendor Key Management");
+                } else {
+                    if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
+                        keyMgmtMask.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
+                        config.enterpriseConfig.setFieldValue(WifiEnterpriseConfig.EAP_ERP, "1");
+                    }
+                }
             }
             /** Security Protocol */
             if (config.allowedProtocols.cardinality() != 0
                     && !setProto(wifiConfigurationToSupplicantProtoMask(config.allowedProtocols))) {
                 Log.e(TAG, "failed to set Security Protocol");
                 return false;
+            }
+            /** Vendor Security Protocol */
+            if (config.allowedProtocols.cardinality() != 0
+                    && !setVendorProto(wifiConfigurationToSupplicantVendorProtoMask(config.allowedProtocols))) {
+                Log.e(TAG, "failed to set Vendor Security Protocol");
             }
             /** Auth Algorithm */
             if (config.allowedAuthAlgorithms.cardinality() != 0
@@ -343,10 +358,16 @@ public class SupplicantStaNetworkHal {
             }
             /** Group Cipher */
             if (config.allowedGroupCiphers.cardinality() != 0
-                    && !setGroupCipher(wifiConfigurationToSupplicantGroupCipherMask(
-                    config.allowedGroupCiphers))) {
+                    && (!setGroupCipher(wifiConfigurationToSupplicantGroupCipherMask(
+                    config.allowedGroupCiphers)))) {
                 Log.e(TAG, "failed to set Group Cipher");
                 return false;
+            }
+            /** Vendor Group Cipher */
+            if (config.allowedGroupCiphers.cardinality() != 0
+                    && (!setVendorGroupCipher(wifiConfigurationToSupplicantVendorGroupCipherMask(
+                    config.allowedGroupCiphers)))) {
+                Log.e(TAG, "failed to set Vendor Group Cipher");
             }
             /** Pairwise Cipher*/
             if (config.allowedPairwiseCiphers.cardinality() != 0
@@ -354,6 +375,12 @@ public class SupplicantStaNetworkHal {
                     config.allowedPairwiseCiphers))) {
                 Log.e(TAG, "failed to set PairwiseCipher");
                 return false;
+            }
+            /** Vendor Pairwise Cipher */
+            if (config.allowedPairwiseCiphers.cardinality() != 0
+                    && (!setVendorPairwiseCipher(wifiConfigurationToSupplicantVendorPairwiseCipherMask(
+                    config.allowedPairwiseCiphers)))) {
+                Log.e(TAG, "failed to set Vendor Group Cipher");
             }
             /** metadata: FQDN + ConfigKey + CreatorUid */
             final Map<String, String> metadata = new HashMap<String, String>();
@@ -589,6 +616,19 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, ssid + ": failed to set proactive key caching: " + eapParam);
                 return false;
             }
+           /** EAP ERP */
+           eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.EAP_ERP);
+           if (!TextUtils.isEmpty(eapParam) && eapParam.equals("1")) {
+               if (!setEapErp(true)) {
+                   Log.e(TAG, ssid + ": failed to set eap erp");
+                   return false;
+               } else if (!setAuthAlg(0)) {
+                   /* Reset Auth Alg in order to allow supplicant to use both OPEN and FILS types */
+                   Log.e(TAG, ssid + ": failed to reset AuthAlgorithm");
+                   return false;
+               }
+           }
+
             return true;
         }
     }
@@ -625,9 +665,37 @@ public class SupplicantStaNetworkHal {
                     mask |= ISupplicantStaNetwork.KeyMgmtMask.FT_EAP;
                     break;
                 case WifiConfiguration.KeyMgmt.WPA2_PSK: // This should never happen
+                case WifiConfiguration.KeyMgmt.FILS_SHA256:
+                case WifiConfiguration.KeyMgmt.FILS_SHA384:
+                    break;
                 default:
                     throw new IllegalArgumentException(
                             "Invalid protoMask bit in keyMgmt: " + bit);
+            }
+        }
+        return mask;
+    }
+
+    /**
+     * Maps WifiConfiguration Key Management BitSet to Supplicant Vendor HIDL bitmask int
+     * TODO(b/32571829): Update mapping when fast transition keys are added
+     * @return bitmask int describing the allowed Key Management schemes, readable by the Supplicant
+     *         HIDL hal
+     */
+    private static int wifiConfigurationToSupplicantVendorKeyMgmtMask(BitSet keyMgmt) {
+        int mask = 0;
+        for (int bit = keyMgmt.nextSetBit(0); bit != -1; bit = keyMgmt.nextSetBit(bit + 1)) {
+            switch (bit) {
+                case WifiConfiguration.KeyMgmt.FILS_SHA256:
+                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: " + WifiConfiguration.KeyMgmt.FILS_SHA256);
+                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA256;
+                    break;
+                case WifiConfiguration.KeyMgmt.FILS_SHA384:
+                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: " + WifiConfiguration.KeyMgmt.FILS_SHA384);
+                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA384;
+                    break;
+                default:
+                    Log.e(TAG, "Invalid VendorKeyMgmtMask bit in keyMgmt: " + bit);
             }
         }
         return mask;
@@ -649,6 +717,18 @@ public class SupplicantStaNetworkHal {
                 default:
                     throw new IllegalArgumentException(
                             "Invalid protoMask bit in wificonfig: " + bit);
+            }
+        }
+        return mask;
+    };
+
+    private static int wifiConfigurationToSupplicantVendorProtoMask(BitSet protoMask) {
+        int mask = 0;
+        for (int bit = protoMask.nextSetBit(0); bit != -1; bit = protoMask.nextSetBit(bit + 1)) {
+            switch (bit) {
+                    //TODO for vendor proto mask
+                default:
+		    Log.e(TAG, "Invalid protoMask bit in wificonfig: " + bit);
             }
         }
         return mask;
@@ -704,6 +784,21 @@ public class SupplicantStaNetworkHal {
         return mask;
     };
 
+    private static int wifiConfigurationToSupplicantVendorGroupCipherMask(BitSet groupCipherMask) {
+        int mask = 0;
+        for (int bit = groupCipherMask.nextSetBit(0); bit != -1; bit =
+                groupCipherMask.nextSetBit(bit + 1)) {
+            switch (bit) {
+                case WifiConfiguration.GroupCipher.GCMP:
+                    mask |= ISupplicantVendorStaNetwork.VendorGroupCipherMask.GCMP_256;
+                    break;
+                default:
+                    Log.e(TAG, "Invalid VendorGroupCipherMask bit in wificonfig:: " + bit);
+            }
+        }
+        return mask;
+    };
+
     private static int wifiConfigurationToSupplicantPairwiseCipherMask(BitSet pairwiseCipherMask) {
         int mask = 0;
         for (int bit = pairwiseCipherMask.nextSetBit(0); bit != -1;
@@ -721,6 +816,21 @@ public class SupplicantStaNetworkHal {
                 default:
                     throw new IllegalArgumentException(
                             "Invalid pairwiseCipherMask bit in wificonfig: " + bit);
+            }
+        }
+        return mask;
+    };
+
+    private static int wifiConfigurationToSupplicantVendorPairwiseCipherMask(BitSet pairwiseCipherMask) {
+        int mask = 0;
+        for (int bit = pairwiseCipherMask.nextSetBit(0); bit != -1; bit =
+                pairwiseCipherMask.nextSetBit(bit + 1)) {
+            switch (bit) {
+                case WifiConfiguration.PairwiseCipher.GCMP:
+                    mask |= ISupplicantVendorStaNetwork.VendorPairwiseCipherMask.GCMP_256;
+                    break;
+                default:
+                    Log.e(TAG, "Invalid VendorPairwiseCipherMask bit in wificonfig:: " + bit);
             }
         }
         return mask;
@@ -941,7 +1051,7 @@ public class SupplicantStaNetworkHal {
     };
 
     /** See ISupplicantNetwork.hal for documentation */
-    private boolean getId() {
+    public boolean getId() {
         synchronized (mLock) {
             final String methodStr = "getId";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
@@ -961,6 +1071,22 @@ public class SupplicantStaNetworkHal {
                 return false;
             }
         }
+    }
+
+    /** get network current network */
+    public int getNetworkId() {
+           return mNetworkId;
+    }
+
+    /** set local vendor sta network, if it not null */
+    public void setVendorStaNetwork(ISupplicantVendorStaNetwork vendor_network) {
+           System.out.println("stanetwork getId >>" + mNetworkId);
+           if (vendor_network != null) {
+               Log.e(TAG, "set ISupplicantVendorStaNetwork successfull");
+               mISupplicantVendorStaNetwork = vendor_network;
+           } else {
+               Log.e(TAG, "Failed to set ISupplicantVendorStaNetwork due to null");
+           }
     }
 
     /** See ISupplicantStaNetwork.hal for documentation */
@@ -1053,6 +1179,21 @@ public class SupplicantStaNetworkHal {
         }
     }
     /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean setVendorKeyMgmt(int keyMgmtMask) {
+        synchronized (mLock) {
+            final String methodStr = "setVendorKeyMgmt";
+            Log.e(TAG, "Vendor Key Management " + keyMgmtMask);
+            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorKeyMgmt(keyMgmtMask);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+    /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setProto(int protoMask) {
         synchronized (mLock) {
             final String methodStr = "setProto";
@@ -1060,6 +1201,20 @@ public class SupplicantStaNetworkHal {
             try {
                 SupplicantStatus status =  mISupplicantStaNetwork.setProto(protoMask);
                 return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+    /** See ISupplicantVendorStaNetwork.hal for documentation */
+    private boolean setVendorProto(int protoMask) {
+        synchronized (mLock) {
+            final String methodStr = "setVendorProto";
+            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorProto(protoMask);
+                return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -1088,6 +1243,36 @@ public class SupplicantStaNetworkHal {
             try {
                 SupplicantStatus status =  mISupplicantStaNetwork.setGroupCipher(groupCipherMask);
                 return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+    /** See ISupplicantVendorStaNetwork.hal for documentation */
+    private boolean setVendorGroupCipher(int groupCipherMask) {
+        synchronized (mLock) {
+            final String methodStr = "setVendorGroupCipher";
+            Log.e(TAG, "Vendor group cipher " + groupCipherMask);
+            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorGroupCipher(groupCipherMask);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+    /** See ISupplicantVendorStaNetwork.hal for documentation */
+    private boolean setVendorPairwiseCipher(int pairwiseCipherMask) {
+        synchronized (mLock) {
+            final String methodStr = "setVendorPairwiseCipher";
+            Log.e(TAG, "Vendor Pairwise cipher " + pairwiseCipherMask);
+            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorPairwiseCipher(pairwiseCipherMask);
+                return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -1397,6 +1582,20 @@ public class SupplicantStaNetworkHal {
             try {
                 SupplicantStatus status =  mISupplicantStaNetwork.setProactiveKeyCaching(enable);
                 return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+    /** See ISupplicantVendorStaNetwork.hal for documentation */
+    private boolean setEapErp(boolean enable) {
+        synchronized (mLock) {
+            final String methodStr = "setEapErp";
+            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                SupplicantStatus status =  mISupplicantVendorStaNetwork.setEapErp(enable);
+                return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -2430,6 +2629,24 @@ public class SupplicantStaNetworkHal {
     }
 
     /**
+     * Returns true if provided status code is SUCCESS, logs debug message and returns false
+     * otherwise
+     */
+    private boolean checkVendorStatusAndLogFailure(SupplicantStatus status, final String methodStr) {
+        synchronized (mLock) {
+            if (status.code != SupplicantStatusCode.SUCCESS) {
+                Log.e(TAG, "ISupplicantVendorStaNetwork." + methodStr + " failed: " + status);
+                return false;
+            } else {
+                if (mVerboseLoggingEnabled) {
+                    Log.d(TAG, "ISupplicantVendorStaNetwork." + methodStr + " succeeded");
+                }
+                return true;
+            }
+        }
+    }
+
+    /**
      * Helper function to log callbacks.
      */
     private void logCallback(final String methodStr) {
@@ -2447,6 +2664,19 @@ public class SupplicantStaNetworkHal {
         synchronized (mLock) {
             if (mISupplicantStaNetwork == null) {
                 Log.e(TAG, "Can't call " + methodStr + ", ISupplicantStaNetwork is null");
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Returns false if ISupplicantVendorStaNetwork is null, and logs failure of methodStr
+     */
+    private boolean checkISupplicantVendorStaNetworkAndLogFailure(final String methodStr) {
+        synchronized (mLock) {
+            if (mISupplicantVendorStaNetwork == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", ISupplicantVendorStaNetwork is null");
                 return false;
             }
             return true;

@@ -58,6 +58,8 @@ import android.net.Network;
 import android.net.NetworkUtils;
 import android.net.Uri;
 import android.net.ip.IpClient;
+import android.net.StaticIpConfiguration;
+import android.net.IpConfiguration;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.IWifiManager;
 import android.net.wifi.ScanResult;
@@ -2147,6 +2149,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     public void deauthenticateNetwork(long holdoff, boolean ess) {
         mLog.info("deauthenticateNetwork uid=%").c(Binder.getCallingUid()).flush();
         mWifiStateMachine.deauthenticateNetwork(mWifiStateMachineChannel, holdoff, ess);
+    }
+
+    public String getCapabilities(String capaType) {
+        return mWifiStateMachine.getCapabilities(capaType);
     }
 
     /**

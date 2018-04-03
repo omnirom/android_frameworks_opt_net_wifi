@@ -411,6 +411,8 @@ public class InformationElementUtil {
         private static final int WPA2_AKM_FT_PSK = 0x04ac0f00;
         private static final int WPA2_AKM_EAP_SHA256 = 0x05ac0f00;
         private static final int WPA2_AKM_PSK_SHA256 = 0x06ac0f00;
+        private static final int WPA2_AKM_FILS_SHA256 = 0x0eac0f00;
+        private static final int WPA2_AKM_FILS_SHA384 = 0x0fac0f00;
 
         private static final int WPA_CIPHER_NONE = 0x00f25000;
         private static final int WPA_CIPHER_TKIP = 0x02f25000;
@@ -495,6 +497,12 @@ public class InformationElementUtil {
                             break;
                         case WPA2_AKM_PSK_SHA256:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_PSK_SHA256);
+                            break;
+                        case WPA2_AKM_FILS_SHA256:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA256);
+                            break;
+                        case WPA2_AKM_FILS_SHA384:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA384);
                             break;
                         default:
                             // do nothing
@@ -704,6 +712,10 @@ public class InformationElementUtil {
                     return "EAP-SHA256";
                 case ScanResult.KEY_MGMT_PSK_SHA256:
                     return "PSK-SHA256";
+                case ScanResult.KEY_MGMT_FILS_SHA256:
+                    return "FILS-SHA256";
+                case ScanResult.KEY_MGMT_FILS_SHA384:
+                    return "FILS-SHA384";
                 default:
                     return "?";
             }
