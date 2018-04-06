@@ -34,6 +34,7 @@ import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorIface;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaIface;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorNetwork;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaNetwork;
+import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaIfaceCallback;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantIface;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIface;
@@ -109,6 +110,8 @@ public class SupplicantStaIfaceHal {
     private HashMap<String, ISupplicantStaIface> mISupplicantStaIfaces = new HashMap<>();
     private HashMap<String, ISupplicantVendorStaIface> mISupplicantVendorStaIfaces = new HashMap<>();
     private HashMap<String, ISupplicantStaIfaceCallback> mISupplicantStaIfaceCallbacks =
+            new HashMap<>();
+    private HashMap<String, ISupplicantVendorStaIfaceCallback> mISupplicantVendorStaIfaceCallbacks =
             new HashMap<>();
     private HashMap<String, SupplicantStaNetworkHal> mCurrentNetworkRemoteHandles = new HashMap<>();
     private HashMap<String, WifiConfiguration> mCurrentNetworkLocalConfigs = new HashMap<>();
@@ -429,7 +432,14 @@ public class SupplicantStaIfaceHal {
         }
 
         if (vendor_iface != null) {
-            mISupplicantVendorStaIfaces.put(ifaceName, vendor_iface);
+            ISupplicantVendorStaIfaceCallback vendorcallback = new SupplicantVendorStaIfaceHalCallback(ifaceName);
+            if (!registerVendorCallback(vendor_iface, vendorcallback)) {
+                Log.e(TAG, "Failed to register Vendor callback");
+            } else {
+                mISupplicantVendorStaIfaces.put(ifaceName, vendor_iface);
+                if (vendorcallback != null)
+                    mISupplicantVendorStaIfaceCallbacks.put(ifaceName, vendorcallback);
+            }
         }
         return true;
     }
@@ -596,6 +606,7 @@ public class SupplicantStaIfaceHal {
                 return false;
             }
             mISupplicantStaIfaceCallbacks.remove(ifaceName);
+            mISupplicantVendorStaIfaceCallbacks.remove(ifaceName);
             return true;
         }
     }
@@ -1410,6 +1421,22 @@ public class SupplicantStaIfaceHal {
         }
     }
 
+    /** See ISupplicantVendorStaIface.hal for documentation */
+    private boolean registerVendorCallback(
+            ISupplicantVendorStaIface iface, ISupplicantVendorStaIfaceCallback callback) {
+        synchronized (mLock) {
+            final String methodStr = "registerVendorCallback";
+            if (iface == null) return false;
+            try {
+                SupplicantStatus status =  iface.registerVendorCallback(callback);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /**
      * @return a list of SupplicantNetworkID ints for all networks controlled by supplicant, returns
      * null if the call fails
@@ -2188,6 +2215,55 @@ public class SupplicantStaIfaceHal {
     }
 
     /**
+     * Flush all previously configured HLPs.
+     *
+     * @param ifaceName Name of the interface.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean flushAllHlp(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final String methodStr = "filsHlpFlushRequest";
+            ISupplicantVendorStaIface iface =
+                checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return false;
+            try {
+                SupplicantStatus status = iface.filsHlpFlushRequest();
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Set FILS HLP packet.
+     *
+     * @param ifaceName Name of the interface.
+     * @param dst Destination MAC address.
+     * @param hlpPacket Hlp Packet data in hex.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean addHlpReq(@NonNull String ifaceName, String dst, String hlpPacket) {
+        synchronized (mLock) {
+            final String methodStr = "filsHlpAddRequest";
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return false;
+            try {
+                SupplicantStatus status = iface.filsHlpAddRequest(
+                                               NativeUtil.macAddressToByteArray(dst),
+                                               NativeUtil.hexOrQuotedStringToBytes(hlpPacket));
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+
+    /**
      * Start WPS pin registrar operation with the specified peer and pin.
      *
      * @param ifaceName Name of the interface.
@@ -2655,6 +2731,39 @@ public class SupplicantStaIfaceHal {
                 return SupplicantState.COMPLETED;
             default:
                 throw new IllegalArgumentException("Invalid state: " + state);
+        }
+    }
+
+    private class SupplicantVendorStaIfaceHalCallback extends ISupplicantVendorStaIfaceCallback.Stub {
+        private String mIfaceName;
+        private boolean mStateIsFourway = false; // Used to help check for PSK password mismatch
+
+        SupplicantVendorStaIfaceHalCallback(@NonNull String ifaceName) {
+            mIfaceName = ifaceName;
+        }
+
+        @Override
+        public void onVendorStateChanged(int newState, byte[/* 6 */] bssid, int id,
+                                   ArrayList<Byte> ssid, boolean filsHlpSent) {
+            synchronized (mLock) {
+                logCallback("onVendorStateChanged");
+                SupplicantState newSupplicantState = supplicantHidlStateToFrameworkState(newState);
+                WifiSsid wifiSsid =
+                        WifiSsid.createFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
+                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
+                mStateIsFourway = (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE);
+                if (newSupplicantState == SupplicantState.COMPLETED) {
+                    if (filsHlpSent == false) {
+                        mWifiMonitor.broadcastNetworkConnectionEvent(
+                                mIfaceName, getCurrentNetworkId(mIfaceName), bssidStr);
+                    } else {
+                        mWifiMonitor.broadcastFilsNetworkConnectionEvent(
+                                mIfaceName, getCurrentNetworkId(mIfaceName), bssidStr);
+                    }
+                }
+                mWifiMonitor.broadcastSupplicantStateChangeEvent(
+                        mIfaceName, getCurrentNetworkId(mIfaceName), wifiSsid, bssidStr, newSupplicantState);
+            }
         }
     }
 

@@ -1508,6 +1508,26 @@ public class WifiNative {
     }
 
     /**
+     * Flush all previously configured HLPs.
+     *
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean flushAllHlp(@NonNull String ifaceName) {
+        return mSupplicantStaIfaceHal.flushAllHlp(ifaceName);
+    }
+
+    /**
+     * Set FILS HLP packet.
+     *
+     * @param dst Destination MAC address.
+     * @param hlpPacket Hlp Packet data in hex.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean addHlpReq(@NonNull String ifaceName, String dst, String hlpPacket) {
+        return mSupplicantStaIfaceHal.addHlpReq(ifaceName, dst, hlpPacket);
+    }
+
+    /**
      * Initiate TDLS discover and setup or teardown with the specified peer.
      *
      * @param ifaceName Name of the interface.
