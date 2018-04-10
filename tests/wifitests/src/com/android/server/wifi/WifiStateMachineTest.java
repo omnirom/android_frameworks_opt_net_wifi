@@ -47,6 +47,7 @@ import android.net.ip.IpClient;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
@@ -637,7 +638,7 @@ public class WifiStateMachineTest {
         // But if someone tells us to enter connect mode, we start up supplicant
         mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
         mLooper.dispatchAll();
-        assertEquals("SupplicantStartingState", getCurrentState().getName());
+        assertEquals("DisconnectedState", getCurrentState().getName());
     }
 
     /**
@@ -852,7 +853,7 @@ public class WifiStateMachineTest {
     }
 
     /**
-     * Helper method to move through SupplicantStarting and SupplicantStarted states.
+     * Helper method to move through startup states.
      */
     private void startSupplicantAndDispatchMessages() throws Exception {
         mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
@@ -861,25 +862,11 @@ public class WifiStateMachineTest {
         // this will be removed when interface management is dynamic
         verify(mWifiNative, atLeastOnce()).teardownAllInterfaces();
 
-        assertEquals("SupplicantStartingState", getCurrentState().getName());
-
-        when(mWifiNative.setDeviceName(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setManufacturer(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setModelName(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setModelNumber(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setSerialNumber(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setConfigMethods(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setDeviceType(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setSerialNumber(eq(WIFI_IFACE_NAME), anyString())).thenReturn(true);
-        when(mWifiNative.setScanningMacOui(eq(WIFI_IFACE_NAME), any(byte[].class)))
-                .thenReturn(true);
-
-        mWsm.sendMessage(WifiMonitor.SUP_CONNECTION_EVENT);
-        mLooper.dispatchAll();
-
         verify(mWifiNative, atLeastOnce())
                 .setupInterfaceForClientMode(eq(false), mInterfaceCallbackCaptor.capture());
         verify(mWifiLastResortWatchdog, atLeastOnce()).clearAllFailureCounts();
+
+        assertEquals("DisconnectedState", getCurrentState().getName());
     }
 
     private void addNetworkAndVerifySuccess(boolean isHidden) throws Exception {
@@ -1275,6 +1262,63 @@ public class WifiStateMachineTest {
                 eq(WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD));
 
         assertEquals("DisconnectedState", getCurrentState().getName());
+    }
+
+    /**
+     * Verify that the function resetCarrierKeysForImsiEncryption() in TelephonyManager
+     * is called when a Authentication failure is detected with a vendor specific EAP Error
+     * of certification expired while using EAP-SIM
+     * In this test case, it is assumed that the network had been connected previously.
+     */
+    @Test
+    public void testEapSimErrorVendorSpecific() throws Exception {
+        initializeAndAddNetworkAndVerifySuccess();
+
+        mLooper.startAutoDispatch();
+        mWsm.syncEnableNetwork(mWsmAsyncChannel, 0, true);
+        mLooper.stopAutoDispatch();
+
+        verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt());
+
+        WifiConfiguration config = new WifiConfiguration();
+        config.getNetworkSelectionStatus().setHasEverConnected(true);
+        config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.SIM);
+        when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
+
+        mWsm.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_EAP_FAILURE,
+                WifiNative.EAP_SIM_VENDOR_SPECIFIC_CERT_EXPIRED);
+        mLooper.dispatchAll();
+
+        verify(mTelephonyManager).resetCarrierKeysForImsiEncryption();
+    }
+
+    /**
+     * Verify that the function resetCarrierKeysForImsiEncryption() in TelephonyManager
+     * is not called when a Authentication failure is detected with a vendor specific EAP Error
+     * of certification expired while using other methods than EAP-SIM, EAP-AKA, or EAP-AKA'.
+     */
+    @Test
+    public void testEapTlsErrorVendorSpecific() throws Exception {
+        initializeAndAddNetworkAndVerifySuccess();
+
+        mLooper.startAutoDispatch();
+        mWsm.syncEnableNetwork(mWsmAsyncChannel, 0, true);
+        mLooper.stopAutoDispatch();
+
+        verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt());
+
+        WifiConfiguration config = new WifiConfiguration();
+        config.getNetworkSelectionStatus().setHasEverConnected(true);
+        config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.TLS);
+        when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
+
+        mWsm.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_EAP_FAILURE,
+                WifiNative.EAP_SIM_VENDOR_SPECIFIC_CERT_EXPIRED);
+        mLooper.dispatchAll();
+
+        verify(mTelephonyManager, never()).resetCarrierKeysForImsiEncryption();
     }
 
     @Test
@@ -1776,18 +1820,127 @@ public class WifiStateMachineTest {
     }
 
     /**
-     * Test verifying that interface onDown callbacks are not currently hooked up.
+     * Test verifying that interface onDown callback triggers SelfRecovery when Supplicant has
+     * already reported the driver is not active.
      */
     @Test
-    public void testInterfaceOnDownDoesNotTriggerClientModeShutdown() throws Exception {
-        connect();
+    public void testInterfaceOnDownInClientModeTriggersSelfRecovery() throws Exception {
+        // Trigger initialize to capture the death handler registration.
+        loadComponentsInStaMode();
+
+        // make sure we mark the iface up
+        mInterfaceCallbackCaptor.getValue().onUp(WIFI_IFACE_NAME);
+
+        // make sure supplicant has been reported as inactive
+        when(mWifiNative.isInterfaceUp(eq(WIFI_IFACE_NAME))).thenReturn(true);
+        mWsm.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, WifiSsid.createFromAsciiEncoded(""), null,
+                        SupplicantState.INTERFACE_DISABLED));
+        mLooper.dispatchAll();
 
         // trigger onDown for the client interface
         mInterfaceCallbackCaptor.getValue().onDown(WIFI_IFACE_NAME);
         mLooper.dispatchAll();
 
-        // since this is not handled yet, should not trigger a disconnect
-        assertEquals("ConnectedState", getCurrentState().getName());
+        // WSM should trigger self recovery, but not disconnect until externally triggered
+        verify(mSelfRecovery).trigger(eq(SelfRecovery.REASON_STA_IFACE_DOWN));
+    }
+
+    /**
+     * Test verifying that interface onDown callback does not trigger SelfRecovery when
+     * Supplicant reports that the driver is active.
+     */
+    @Test
+    public void testInterfaceOnDownInClientModeDoesNotTriggerSelfRecoveryIfDriverActive()
+            throws Exception {
+        // Trigger initialize to capture the death handler registration.
+        loadComponentsInStaMode();
+
+        // make sure we mark the iface up
+        mInterfaceCallbackCaptor.getValue().onUp(WIFI_IFACE_NAME);
+        mLooper.dispatchAll();
+
+        // make sure supplicant has been reported as active
+        mWsm.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, WifiSsid.createFromAsciiEncoded(""), null,
+                        SupplicantState.DISCONNECTED));
+        mLooper.dispatchAll();
+
+        // trigger onDown for the client interface
+        mInterfaceCallbackCaptor.getValue().onDown(WIFI_IFACE_NAME);
+        mLooper.dispatchAll();
+
+        // WSM should trigger self recovery, but not disconnect until externally triggered
+        verify(mSelfRecovery, never()).trigger(eq(SelfRecovery.REASON_STA_IFACE_DOWN));
+    }
+
+    /**
+     * Test verifying that Supplicant update for inactive driver does not trigger SelfRecovery
+     * when the interface is reported down.
+     */
+    @Test
+    public void testSupplicantUpdateDriverInactiveInClientModeTriggersSelfRecovery()
+            throws Exception {
+        // Trigger initialize to capture the death handler registration.
+        loadComponentsInStaMode();
+
+        when(mWifiNative.isInterfaceUp(eq(WIFI_IFACE_NAME))).thenReturn(false);
+
+        mWsm.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, WifiSsid.createFromAsciiEncoded(""), null,
+                        SupplicantState.INTERFACE_DISABLED));
+        mLooper.dispatchAll();
+
+        // WSM should trigger self recovery, but not disconnect until externally triggered
+        verify(mSelfRecovery, never()).trigger(eq(SelfRecovery.REASON_STA_IFACE_DOWN));
+    }
+
+    /**
+     * Test verifying that interface Supplicant update for inactive driver does not trigger
+     * SelfRecovery when WifiNative reports the interface is up.
+     */
+    @Test
+    public void testSupplicantUpdateDriverInactiveIfaceUpClientModeDoesNotTriggerSelfRecovery()
+            throws Exception {
+        // Trigger initialize to capture the death handler registration.
+        loadComponentsInStaMode();
+
+        when(mWifiNative.isInterfaceUp(eq(WIFI_IFACE_NAME))).thenReturn(true);
+
+        // make sure supplicant has been reported as inactive
+        mWsm.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, WifiSsid.createFromAsciiEncoded(""), null,
+                        SupplicantState.INTERFACE_DISABLED));
+        mLooper.dispatchAll();
+
+        // WSM should trigger self recovery, but not disconnect until externally triggered
+        verify(mSelfRecovery, never()).trigger(eq(SelfRecovery.REASON_STA_IFACE_DOWN));
+    }
+
+    /**
+     * Test verifying that interface onDown callback does not trigger SelfRecovery when
+     * MacRandomization is enabled.
+     */
+    @Test
+    public void testInterfaceOnDownInClientModeDoesNotTriggerSelfRecoveryWithMacRand()
+            throws Exception {
+        when(mFrameworkFacade.getIntegerSetting(mContext,
+                Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED, 0)).thenReturn(1);
+        mContentObserver.onChange(false);
+
+        // Trigger initialize to capture the death handler registration.
+        loadComponentsInStaMode();
+
+        // make sure we mark the iface up
+        mInterfaceCallbackCaptor.getValue().onUp(WIFI_IFACE_NAME);
+        mLooper.dispatchAll();
+
+        // trigger onDown for the client interface
+        mInterfaceCallbackCaptor.getValue().onDown(WIFI_IFACE_NAME);
+        mLooper.dispatchAll();
+
+        // WSM should trigger self recovery, but not disconnect until externally triggered
+        verify(mSelfRecovery, never()).trigger(eq(SelfRecovery.REASON_STA_IFACE_DOWN));
     }
 
     /**
@@ -2434,5 +2587,34 @@ public class WifiStateMachineTest {
                 .setNetworkRandomizedMacAddress(eq(0), any(MacAddress.class));
         verify(mWifiNative, never()).setMacAddress(eq(WIFI_IFACE_NAME), any(MacAddress.class));
         assertEquals(mWsm.getWifiInfo().getMacAddress(), oldMac);
+    }
+
+    /**
+     * Verifies that we don't set MAC address when config returns an invalid MAC address.
+     */
+    @Test
+    public void testDoNotSetMacWhenInvalid() throws Exception {
+        initializeAndAddNetworkAndVerifySuccess();
+        assertEquals(WifiStateMachine.CONNECT_MODE, mWsm.getOperationalModeForTest());
+        assertEquals(WifiManager.WIFI_STATE_ENABLED, mWsm.syncGetWifiState());
+
+        when(mFrameworkFacade.getIntegerSetting(mContext,
+                Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED, 0)).thenReturn(1);
+        mContentObserver.onChange(false);
+        when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
+                .thenReturn(TEST_GLOBAL_MAC_ADDRESS.toString());
+
+        WifiConfiguration config = mock(WifiConfiguration.class);
+        when(config.getOrCreateRandomizedMacAddress())
+                .thenReturn(MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS));
+        when(config.getNetworkSelectionStatus())
+                .thenReturn(new WifiConfiguration.NetworkSelectionStatus());
+        when(mWifiConfigManager.getConfiguredNetworkWithoutMasking(0)).thenReturn(config);
+
+        mWsm.sendMessage(WifiStateMachine.CMD_START_CONNECT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+
+        verify(config).getOrCreateRandomizedMacAddress();
+        verify(mWifiNative, never()).setMacAddress(eq(WIFI_IFACE_NAME), any(MacAddress.class));
     }
 }
