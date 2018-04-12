@@ -2210,9 +2210,7 @@ public class WifiStateMachine extends StateMachine {
                 if (report != null) {
                     sb.append(" ").append(report);
                 }
-                if (mWifiScoreReport.isLastReportValid()) {
-                    sb.append(mWifiScoreReport.getLastReport());
-                }
+                sb.append(String.format(" score=%d", mWifiInfo.score));
                 break;
             case CMD_START_CONNECT:
             case WifiManager.CONNECT_NETWORK:
@@ -2890,17 +2888,6 @@ public class WifiStateMachine extends StateMachine {
         mLastBssid = null;
         registerDisconnected();
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
-    }
-
-    private void handleSupplicantConnectionLoss(boolean killSupplicant) {
-        /* Socket connection can be lost when we do a graceful shutdown
-        * or when the driver is hung. Ensure supplicant is stopped here.
-        */
-        if (killSupplicant) {
-            mWifiMonitor.stopAllMonitoring();
-        }
-        sendSupplicantConnectionChangedBroadcast(false);
-        setWifiState(WIFI_STATE_DISABLED);
     }
 
     void handlePreDhcpSetup() {
@@ -3754,9 +3741,6 @@ public class WifiStateMachine extends StateMachine {
             // supplicant
             sendWifiScanAvailable(false);
 
-            // Tearing down the client interfaces below is going to stop our supplicant.
-            mWifiMonitor.stopAllMonitoring();
-
             mWifiNative.registerStatusListener(mWifiNativeStatusListener);
             // TODO: This teardown should ideally be handled in STOP_SUPPLICANT to be consistent
             // with other mode managers. But, client mode is not yet controlled by
@@ -3770,7 +3754,6 @@ public class WifiStateMachine extends StateMachine {
         @Override
         public void enter() {
             mIfaceIsUp = false;
-            mWifiMonitor.stopAllMonitoring();
             mWifiStateTracker.updateState(WifiStateTracker.INVALID);
             cleanup();
             sendMessage(CMD_START_SUPPLICANT);
@@ -3798,7 +3781,6 @@ public class WifiStateMachine extends StateMachine {
                     mIpClient.setMulticastFilter(true);
                     if (mVerboseLoggingEnabled) log("Supplicant start successful");
                     registerForWifiMonitorEvents();
-                    mWifiMonitor.startMonitoring(mInterfaceName);
                     mWifiInjector.getWifiLastResortWatchdog().clearAllFailureCounts();
                     setSupplicantLogLevel();
                     transitionTo(mSupplicantStartedState);
@@ -4305,7 +4287,9 @@ public class WifiStateMachine extends StateMachine {
                     mSupplicantStateTracker.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT);
                     // If rejection occurred while Metrics is tracking a ConnnectionEvent, end it.
                     reportConnectionAttemptEnd(
-                            WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_REJECTION,
+                            timedOut
+                                    ? WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_TIMED_OUT
+                                    : WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_REJECTION,
                             WifiMetricsProto.ConnectionEvent.HLF_NONE);
                     mWifiInjector.getWifiLastResortWatchdog()
                             .noteConnectionFailureAndTriggerIfNeeded(
@@ -4366,6 +4350,7 @@ public class WifiStateMachine extends StateMachine {
                     // interest (e.g. routers); harmless if none are configured.
                     if (state == SupplicantState.COMPLETED) {
                         mIpClient.confirmConfiguration();
+                        mWifiScoreReport.noteIpCheck();
                     }
 
                     if (!SupplicantState.isDriverActive(state)) {
@@ -5203,6 +5188,10 @@ public class WifiStateMachine extends StateMachine {
                             // Send the update score to network agent.
                             mWifiScoreReport.calculateAndReportScore(
                                     mWifiInfo, mNetworkAgent, mWifiMetrics);
+                            if (mWifiScoreReport.shouldCheckIpLayer()) {
+                                mIpClient.confirmConfiguration();
+                                mWifiScoreReport.noteIpCheck();
+                            }
                         }
                         sendMessageDelayed(obtainMessage(CMD_RSSI_POLL, mRssiPollToken, 0),
                                 mPollRssiIntervalMsecs);
