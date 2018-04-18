@@ -79,6 +79,7 @@ public class WificondControl implements IBinder.DeathRecipient {
     private HashMap<String, IPnoScanEvent> mPnoScanEventHandlers = new HashMap<>();
     private HashMap<String, IApInterfaceEventCallback> mApInterfaceListeners = new HashMap<>();
     private WifiNative.WificondDeathEventHandler mDeathEventHandler;
+    private static final int MAX_SSID_LEN = 32;
 
     private class ScanEventHandler extends IScanEvent.Stub {
         private String mIfaceName;
@@ -641,6 +642,11 @@ public class WificondControl implements IBinder.DeathRecipient {
                     network.ssid = NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(ssid));
                 } catch (IllegalArgumentException e) {
                     Log.e(TAG, "Illegal argument " + ssid, e);
+                    continue;
+                }
+                if (network.ssid.length > MAX_SSID_LEN) {
+                    Log.e(TAG, "SSID is too long after conversion, skipping this ssid! SSID = " +
+                                network.ssid + " , network.ssid.size = " + network.ssid.length);
                     continue;
                 }
                 settings.hiddenNetworks.add(network);
