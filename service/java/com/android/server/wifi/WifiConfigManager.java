@@ -835,6 +835,16 @@ public class WifiConfigManager {
             internalConfig.allowedGroupCiphers =
                     (BitSet) externalConfig.allowedGroupCiphers.clone();
         }
+        if (externalConfig.allowedGroupMgmtCiphers != null
+                && !externalConfig.allowedGroupMgmtCiphers.isEmpty()) {
+            internalConfig.allowedGroupMgmtCiphers =
+                    (BitSet) externalConfig.allowedGroupMgmtCiphers.clone();
+        }
+        if (externalConfig.allowedSuiteBCiphers != null
+                && !externalConfig.allowedSuiteBCiphers.isEmpty()) {
+            internalConfig.allowedSuiteBCiphers =
+                    (BitSet) externalConfig.allowedSuiteBCiphers.clone();
+        }
 
         // Copy over the |IpConfiguration| parameters if set.
         if (externalConfig.getIpConfiguration() != null) {
@@ -865,6 +875,19 @@ public class WifiConfigManager {
         // Copy over any metered information.
         internalConfig.meteredHint = externalConfig.meteredHint;
         internalConfig.meteredOverride = externalConfig.meteredOverride;
+        // Copy over the DPP configuration parameters if set.
+        if (externalConfig.dppConnector != null) {
+            internalConfig.dppConnector = externalConfig.dppConnector;
+        }
+        if (externalConfig.dppNetAccessKey != null) {
+            internalConfig.dppNetAccessKey = externalConfig.dppNetAccessKey;
+        }
+        if (externalConfig.dppNetAccessKeyExpiry >= 0) {
+            internalConfig.dppNetAccessKeyExpiry = externalConfig.dppNetAccessKeyExpiry;
+        }
+        if (externalConfig.dppCsign != null) {
+            internalConfig.dppCsign = externalConfig.dppCsign;
+        }
     }
 
     /**
@@ -885,12 +908,18 @@ public class WifiConfigManager {
         configuration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_EAP);
 
         configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.CCMP);
+        configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.GCMP);
         configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.TKIP);
 
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.CCMP);
+        configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.GCMP);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.TKIP);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP40);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP104);
+
+        configuration.allowedGroupMgmtCiphers.set(WifiConfiguration.GroupMgmtCipher.CMAC);
+
+        configuration.allowedSuiteBCiphers.set(WifiConfiguration.SuiteBCipher.ECDHE_ECDSA);
 
         configuration.setIpAssignment(IpConfiguration.IpAssignment.DHCP);
         configuration.setProxySettings(IpConfiguration.ProxySettings.NONE);

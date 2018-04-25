@@ -26,6 +26,14 @@ import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HS
 import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HSOSUProviders;
 import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HSWANMetrics;
 
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_AUTH_SUCCESS;
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_NOT_COMPATIBLE;
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_RESPONSE_PENDING;
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_SCAN_PEER_QRCODE;
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_CONF;
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_MISSING_AUTH;
+import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_NETWORK_ID;
+
 import android.annotation.NonNull;
 import android.content.Context;
 import android.hardware.wifi.supplicant.V1_0.ISupplicant;
@@ -53,12 +61,15 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
 import android.os.HidlSupport.Mutable;
+import android.net.wifi.WifiDppConfig;
+import android.net.wifi.WifiDppConfig.DppResult;
 import android.os.HwRemoteBinder;
 import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.Pair;
 import android.util.SparseArray;
+import android.util.MutableInt;
 
 import com.android.server.wifi.WifiNative.SupplicantDeathEventHandler;
 import com.android.server.wifi.hotspot2.AnqpEvent;
@@ -851,6 +862,7 @@ public class SupplicantStaIfaceHal {
     }
 
     /**
+
      * Helper method to look up the network object for the specified iface.
      */
     private SupplicantStaNetworkHal getCurrentNetworkRemoteHandle(@NonNull String ifaceName) {
@@ -2765,6 +2777,88 @@ public class SupplicantStaIfaceHal {
                         mIfaceName, getCurrentNetworkId(mIfaceName), wifiSsid, bssidStr, newSupplicantState);
             }
         }
+
+        /* DPP Callbacks Start */
+        @Override
+        public void onDppAuthSuccess(boolean initiator) {
+            logCallback("onDppAuthSuccess");
+            synchronized (mLock) {
+                DppResult result = new DppResult();
+                result.initiator = initiator;
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_AUTH_SUCCESS, result);
+            }
+        }
+
+        @Override
+        public void onDppNotCompatible(byte capab, boolean initiator) {
+            logCallback("onDppNotCompatible");
+            synchronized (mLock) {
+                DppResult result = new DppResult();
+                result.capab = capab;
+                result.initiator = initiator;
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_NOT_COMPATIBLE, result);
+            }
+        }
+
+        @Override
+        public void onDppResponsePending() {
+            logCallback("onDppResponsePending");
+            synchronized (mLock) {
+                // For now we may discard this event
+                DppResult result = new DppResult();
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_RESPONSE_PENDING, result);
+            }
+        }
+
+        @Override
+        public void onDppScanPeerQrCode(ArrayList<Byte> bootstrapData) {
+            logCallback("onDppScanPeerQrCode");
+            synchronized (mLock) {
+                DppResult result = new DppResult();
+                result.iBootstrapData = NativeUtil.stringFromByteArrayList(bootstrapData);
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_SCAN_PEER_QRCODE, result);
+            }
+        }
+
+        @Override
+        public void onDppConf(byte type, ArrayList<Byte> ssid, String connector,
+                              ArrayList<Byte> cSignKey, ArrayList<Byte> netAccessKey,
+                              int netAccessExpiry, String passphrase, ArrayList<Byte> psk) {
+            logCallback("onDppConf");
+            synchronized (mLock) {
+                DppResult result = new DppResult();
+                result.configEventType = type;
+                result.ssid = NativeUtil.stringFromByteArrayList(ssid);
+                result.connector = connector;
+                result.cSignKey = NativeUtil.bytesToHexOrQuotedString(cSignKey);
+                result.netAccessKey = NativeUtil.bytesToHexOrQuotedString(netAccessKey);
+                result.netAccessKeyExpiry = netAccessExpiry;
+                result.passphrase = passphrase;
+                result.psk = NativeUtil.stringFromByteArrayList(psk);
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_CONF, result);
+            }
+        }
+
+        @Override
+        public void onDppMissingAuth(byte dppAuthParam) {
+            logCallback("onDppMissingAuth");
+            synchronized (mLock) {
+                DppResult result = new DppResult();
+                result.authMissingParam = dppAuthParam;
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_MISSING_AUTH, result);
+            }
+        }
+
+        @Override
+        public void onDppNetworkId(int netID) {
+            logCallback("onDppNetworkId");
+            synchronized (mLock) {
+                DppResult result = new DppResult();
+                result.netID = netID;
+                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_NETWORK_ID, result);
+            }
+        }
+        /* DPP Callbacks ends */
     }
 
     private class SupplicantStaIfaceHalCallback extends ISupplicantStaIfaceCallback.Stub {
@@ -3011,6 +3105,7 @@ public class SupplicantStaIfaceHal {
                 logCallback("onExtRadioWorkTimeout");
             }
         }
+
     }
 
     private class SupplicantStaIfaceHalCallbackV1_1 extends
@@ -3138,4 +3233,316 @@ public class SupplicantStaIfaceHal {
     private static void loge(String s) {
         Log.e(TAG, s);
     }
+
+    /**
+     * Add the DPP bootstrap info obtained from QR code.
+     *
+     * @param ifaceName Name of the interface.
+     * @param uri:The URI obtained from the QR code.
+     *
+     * @return: Handle to strored info else -1 on failure
+     */
+    public int dppAddBootstrapQrCode(@NonNull String ifaceName, String uri) {
+        if (TextUtils.isEmpty(uri)) return -1;
+        synchronized (mLock) {
+            final String methodStr = "dppAddBootstrapQrCode";
+            final MutableInt handle = new MutableInt(-1);
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppAddBootstrapQrcode(uri,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                handle.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return handle.value;
+        }
+    }
+
+    /**
+     * Generate bootstrap URI based on the passed arguments
+     *
+     * @param ifaceName Name of the interface.
+     * @param config – bootstrap generate config
+     *
+     * @return: Handle to strored URI info else -1 on failure
+     */
+    public int dppBootstrapGenerate(@NonNull String ifaceName, WifiDppConfig config) {
+        synchronized (mLock) {
+            final String methodStr = "dppBootstrapGenerate";
+            final MutableInt handle = new MutableInt(-1);
+
+            String chan_list = (TextUtils.isEmpty(config.chan_list)) ? "" : config.chan_list;
+            String mac_addr = (TextUtils.isEmpty(config.mac_addr)) ? "00:00:00:00:00:00" : config.mac_addr;
+            String info = (TextUtils.isEmpty(config.info)) ? "" : config.info;
+            String curve = (TextUtils.isEmpty(config.curve)) ? "" : config.curve;
+            String key = (TextUtils.isEmpty(config.key)) ? "" : config.key;
+
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppBootstrapGenerate(config.bootstrap_type,
+                            chan_list, NativeUtil.macAddressToByteArray(mac_addr),
+                            info, curve, key,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                handle.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return handle.value;
+        }
+    }
+
+    /**
+     * Get bootstrap URI based on bootstrap ID
+     *
+     * @param ifaceName Name of the interface.
+     * @param bootstrap_id: Stored bootstrap ID
+     *
+     * @return: URI string else -1 on failure
+     */
+    public String dppGetUri(@NonNull String ifaceName, int bootstrap_id) {
+        synchronized (mLock) {
+            final String methodStr = "dppGetUri";
+            final Mutable<String> URI = new Mutable<>();
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return "-1";
+            try {
+                iface.dppGetUri(bootstrap_id,
+                        (SupplicantStatus status, String uri) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                URI.value = uri;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return URI.value;
+        }
+    }
+
+    /**
+     * Remove bootstrap URI based on bootstrap ID.
+     *
+     * @param ifaceName Name of the interface.
+     * @param bootstrap_id: Stored bootstrap ID
+     *
+     * @return: 0 – Success or -1 on failure
+     */
+    public int dppBootstrapRemove(@NonNull String ifaceName, int bootstrap_id) {
+        synchronized (mLock) {
+            final String methodStr = "dppBootstrapRemove";
+            final MutableInt handle = new MutableInt(-1);
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppBootstrapRemove(bootstrap_id,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                handle.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return handle.value;
+        }
+    }
+
+    /**
+     * start listen on the channel specified waiting to receive
+     * the DPP Authentication request.
+     *
+     * @param ifaceName Name of the interface.
+     * @param frequency: DPP listen frequency
+     * @param dpp_role: Configurator/Enrollee role
+     * @param qr_mutual: Mutual authentication required
+     * @param netrole_ap: network role
+     *
+     * @return: Returns 0 if a DPP-listen work is successfully
+     *  queued and -1 on failure.
+     */
+    public int dppListen(@NonNull String ifaceName, String frequency, int dpp_role,
+                         boolean qr_mutual, boolean netrole_ap) {
+        if (TextUtils.isEmpty(frequency)) return -1;
+        synchronized (mLock) {
+            final String methodStr = "dppListen";
+            final MutableInt handle = new MutableInt(-1);
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppStartListen(frequency, dpp_role,
+                        qr_mutual, netrole_ap,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                handle.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return handle.value;
+        }
+    }
+
+    /**
+     * stop ongoing dpp listen.
+     *
+     * @param ifaceName Name of the interface.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean dppStopListen(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final String methodStr = "dppStopListen";
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return false;
+            try {
+                SupplicantStatus status = iface.dppStopListen();
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Adds the DPP configurator
+     *
+     * @param ifaceName Name of the interface.
+     * @param curve curve used for dpp encryption
+     * @param key private key
+     * @param expiry timeout in seconds
+     *
+     * @return: Identifier of the added configurator or -1 on failure
+     */
+    public int dppConfiguratorAdd(@NonNull String ifaceName, String curve,
+                                  String key, int expiry) {
+        String curve_t = (TextUtils.isEmpty(curve)) ? "" : curve;
+        String key_t = (TextUtils.isEmpty(key)) ? "" : key;
+        synchronized (mLock) {
+            final String methodStr = "dppConfiguratorAdd";
+            final MutableInt handle = new MutableInt(-1);
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppConfiguratorAdd(curve_t, key_t, expiry,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                handle.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return handle.value;
+        }
+    }
+
+    /**
+     * Remove the added configurator through dppConfiguratorAdd.
+     *
+     * @param ifaceName Name of the interface.
+     * @param config_id: DPP Configurator ID
+     *
+     * @return: Handle to strored info else -1 on failure
+     */
+    public int dppConfiguratorRemove(@NonNull String ifaceName, int config_id) {
+        synchronized (mLock) {
+            final String methodStr = "dppConfiguratorRemove";
+            final MutableInt handle = new MutableInt(-1);
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppConfiguratorRemove(config_id,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                handle.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return handle.value;
+        }
+    }
+
+    /**
+     * Start DPP authentication and provisioning with the specified peer
+     *
+     * @param ifaceName Name of the interface.
+     * @param config – dpp auth init config
+     *
+     * @return: 0 if DPP Authentication request was transmitted and -1 on failure
+     */
+    public int  dppStartAuth(@NonNull String ifaceName, WifiDppConfig config) {
+        String ssid = (TextUtils.isEmpty(config.ssid)) ? "" : config.ssid;
+        String passphrase = (TextUtils.isEmpty(config.passphrase)) ? "" : config.passphrase;
+        synchronized (mLock) {
+            final String methodStr = "dppStartAuth";
+            final MutableInt Status = new MutableInt(-1);
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return -1;
+            try {
+                iface.dppStartAuth(config.peer_bootstrap_id,
+                            config.own_bootstrap_id, config.dpp_role,
+                            ssid, passphrase, (config.isAp > 0) ? true : false,
+                            (config.isDpp > 0) ? true: false, config.conf_id, config.expiry,
+                        (SupplicantStatus status, int hdl) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                Status.value = hdl;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return Status.value;
+        }
+    }
+
+    /**
+     * Retrieve Private key to be used for configurator
+     *
+     * @param ifaceName Name of the interface.
+     * @param id: id of configurator obj
+     *
+     * @return: Key string else -1 on failure
+     */
+    public String dppConfiguratorGetKey(@NonNull String ifaceName, int id) {
+        synchronized (mLock) {
+            final String methodStr = "dppConfiguratorGetKey";
+            final Mutable<String> KEY = new Mutable<>();
+            ISupplicantVendorStaIface iface =
+                   checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) return "-1";
+            try {
+                iface.dppConfiguratorGetKey(id,
+                        (SupplicantStatus status, String key) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                KEY.value = key;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return KEY.value;
+        }
+    }
+
 }
