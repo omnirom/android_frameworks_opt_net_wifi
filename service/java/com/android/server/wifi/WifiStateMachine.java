@@ -64,6 +64,8 @@ import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.p2p.IWifiP2pManager;
+import android.net.wifi.WifiDppConfig;
+import android.net.wifi.WifiDppConfig.DppResult;
 import android.os.BatteryStats;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -639,6 +641,29 @@ public class WifiStateMachine extends StateMachine {
     // Start subscription provisioning with a given provider
     private static final int CMD_START_SUBSCRIPTION_PROVISIONING        = BASE + 254;
 
+    /* Take some GAP in numbering, start DPP commands from 301 onwards */
+    /* Add bootstrap info*/
+    public static final int CMD_DPP_GENERATE_BOOTSTRAP                  = BASE + 301;
+    /* Generate QRCODE bootstrap info*/
+    public static final int CMD_DPP_ADD_BOOTSTRAP_QRCODE                = BASE + 302;
+    /* Remove bootstrap info */
+    public static final int CMD_DPP_REMOVE_BOOTSTRAP                    = BASE + 303;
+    /* Get bootstrap URI*/
+    public static final int CMD_DPP_GET_URI                             = BASE + 304;
+    /* Start DPP Listen*/
+    public static final int CMD_DPP_LISTEN_START                        = BASE + 305;
+    /* Stop ongoing DPP Listen*/
+    public static final int CMD_DPP_LISTEN_STOP                         = BASE + 306;
+    /* Add DPP Configuration */
+    public static final int CMD_DPP_CONF_ADD                            = BASE + 307;
+    /* Remove DPP Configuration */
+    public static final int CMD_DPP_CONF_REMOVE                         = BASE + 308;
+    /* Start DPP AUTH*/
+    public static final int CMD_DPP_AUTH_INIT                           = BASE + 309;
+    /* Get Private Key*/
+    public static final int CMD_DPP_CONFIGURATOR_GET_KEY                = BASE + 310;
+
+
     // For message logging.
     private static final Class[] sMessageClasses = {
             AsyncChannel.class, WifiStateMachine.class, DhcpClient.class };
@@ -961,6 +986,7 @@ public class WifiStateMachine extends StateMachine {
                 mWifiMetrics.getHandler());
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.FILS_NETWORK_CONNECTION_EVENT,
                 getHandler());
+        mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.DPP_EVENT, getHandler());
     }
 
     /**
@@ -2365,6 +2391,10 @@ public class WifiStateMachine extends StateMachine {
                     sb.append(Integer.toString(msg.arg1));
                 }
                 break;
+            case WifiMonitor.DPP_EVENT:
+                sb.append(" type=");
+                sb.append(msg.arg1);
+                break;
             default:
                 sb.append(" ");
                 sb.append(Integer.toString(msg.arg1));
@@ -2662,6 +2692,16 @@ public class WifiStateMachine extends StateMachine {
         Intent intent = new Intent(WifiManager.SUPPLICANT_CONNECTION_CHANGE_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_SUPPLICANT_CONNECTED, connected);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
+    private void sendDppEventBroadcast(int dppEventType, DppResult result) {
+        WifiDppConfig config = new WifiDppConfig();
+        config.setDppResult(result);
+        Intent intent = new Intent(WifiManager.DPP_EVENT_ACTION);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        intent.putExtra(WifiManager.EXTRA_DPP_EVENT_TYPE, dppEventType);
+        intent.putExtra(WifiManager.EXTRA_DPP_EVENT_DATA, config);
         mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
     }
 
@@ -3470,6 +3510,7 @@ public class WifiStateMachine extends StateMachine {
                 case CMD_ROAM_WATCHDOG_TIMER:
                 case CMD_DISABLE_P2P_WATCHDOG_TIMER:
                 case CMD_DISABLE_EPHEMERAL_NETWORK:
+                case WifiMonitor.DPP_EVENT:
                     messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
@@ -3625,6 +3666,21 @@ public class WifiStateMachine extends StateMachine {
                     break;
                 case CMD_GET_ALL_MATCHING_CONFIGS:
                     replyToMessage(message, message.what, new ArrayList<WifiConfiguration>());
+                case CMD_DPP_GENERATE_BOOTSTRAP:
+                case CMD_DPP_ADD_BOOTSTRAP_QRCODE:
+                case CMD_DPP_REMOVE_BOOTSTRAP:
+                case CMD_DPP_LISTEN_START:
+                case CMD_DPP_CONF_ADD:
+                case CMD_DPP_CONF_REMOVE:
+                case CMD_DPP_AUTH_INIT:
+                    replyToMessage(message, message.what, FAILURE);
+                    break;
+                case CMD_DPP_GET_URI:
+                case CMD_DPP_CONFIGURATOR_GET_KEY:
+                    replyToMessage(message, message.what, "Supplicant Not Started!!");
+                    break;
+                case CMD_DPP_LISTEN_STOP:
+                    messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case 0:
                     // We want to notice any empty messages (with what == 0) that might crop up.
@@ -3723,6 +3779,9 @@ public class WifiStateMachine extends StateMachine {
                 break;
             case WifiManager.RSSI_PKTCNT_FETCH:
                 s = "RSSI_PKTCNT_FETCH";
+                break;
+            case WifiMonitor.DPP_EVENT:
+                s = "WifiMonitor.DPP_EVENT";
                 break;
             default:
                 s = "what:" + Integer.toString(what);
@@ -4587,6 +4646,56 @@ public class WifiStateMachine extends StateMachine {
                 case CMD_ENABLE_WIFI_CONNECTIVITY_MANAGER:
                     mWifiConnectivityManager.enable(message.arg1 == 1 ? true : false);
                     break;
+                case CMD_DPP_GENERATE_BOOTSTRAP:
+                    int id = mWifiNative.dppBootstrapGenerate(mInterfaceName, (WifiDppConfig)message.obj);
+                    replyToMessage(message, message.what, id);
+                    break;
+                case CMD_DPP_ADD_BOOTSTRAP_QRCODE:
+                    int qrcode_hdl = mWifiNative.dppAddBootstrapQrCode(mInterfaceName, (String) message.obj);
+                    replyToMessage(message, message.what, qrcode_hdl);
+                    break;
+                case CMD_DPP_REMOVE_BOOTSTRAP:
+                    int bootstrap_status = mWifiNative.dppBootstrapRemove(mInterfaceName, message.arg1);
+                    replyToMessage(message, message.what, bootstrap_status);
+                    break;
+                case CMD_DPP_GET_URI:
+                    String uri = mWifiNative.dppGetUri(mInterfaceName, message.arg1);
+                    replyToMessage(message, message.what, uri);
+                    break;
+                case CMD_DPP_LISTEN_START:
+                    int listen_status = mWifiNative.dppListen(mInterfaceName,
+                            ((Bundle) message.obj).getString("freq"),
+                            ((Bundle) message.obj).getInt("dppRole"),
+                            ((Bundle) message.obj).getBoolean("mutual"),
+                            ((Bundle) message.obj).getBoolean("netRoleAp"));
+                    replyToMessage(message, message.what, listen_status);
+                    break;
+                case CMD_DPP_LISTEN_STOP:
+                    mWifiNative.dppStopListen(mInterfaceName);
+                    break;
+                case CMD_DPP_CONF_ADD:
+                    int cfg_add_status = mWifiNative.dppConfiguratorAdd(mInterfaceName,
+                            ((Bundle) message.obj).getString("curve"),
+                            ((Bundle) message.obj).getString("key"),
+                             message.arg1);
+                    replyToMessage(message, message.what, cfg_add_status);
+                    break;
+                case CMD_DPP_CONF_REMOVE:
+                    int cfg_remove_status = mWifiNative.dppConfiguratorRemove(mInterfaceName, message.arg1);
+                    replyToMessage(message, message.what, cfg_remove_status);
+                    break;
+                case CMD_DPP_AUTH_INIT:
+                    int auth_init_status = mWifiNative.dppStartAuth(mInterfaceName, (WifiDppConfig)message.obj);
+                    replyToMessage(message, message.what, auth_init_status);
+                    break;
+                case CMD_DPP_CONFIGURATOR_GET_KEY:
+                    String key = mWifiNative.dppConfiguratorGetKey(mInterfaceName, (int) message.obj);
+                    replyToMessage(message, message.what, key);
+                    break;
+                case WifiMonitor.DPP_EVENT:
+                    Log.d(TAG, "DPP Event received. Type = " + message.arg1);
+                    sendDppEventBroadcast(message.arg1, (DppResult) message.obj);
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -4663,7 +4772,6 @@ public class WifiStateMachine extends StateMachine {
                         getTelephonyManager().resetCarrierKeysForImsiEncryption();
                     }
                     break;
-
                 default:
                     // Do Nothing
             }
@@ -6150,4 +6258,173 @@ public class WifiStateMachine extends StateMachine {
         resultMsg.recycle();
         return result;
     }
+
+    /**
+     * Add the DPP bootstrap info obtained from QR code.
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param uri:The URI obtained from the QR code.
+     *
+     * @return: Handle to strored info else -1 on failure
+     */
+    public int syncDppAddBootstrapQrCode(AsyncChannel channel, String uri) {
+        Message resultMsg = channel.sendMessageSynchronously(
+                CMD_DPP_ADD_BOOTSTRAP_QRCODE, 0, 0, uri);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * Generate bootstrap URI based on the passed arguments
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param config – bootstrap generate config
+     *
+     * @return: Handle to strored URI info else -1 on failure
+     */
+    public int syncDppBootstrapGenerate(AsyncChannel channel,
+        WifiDppConfig config) {
+        Message resultMsg = channel.sendMessageSynchronously(
+            CMD_DPP_GENERATE_BOOTSTRAP, 0, 0, config);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * Get bootstrap URI based on bootstrap ID
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param bootstrap_id: Stored bootstrap ID
+     *
+     * @return: URI string else -1 on failure
+     */
+    public String syncDppGetUri(AsyncChannel channel, int bootstrap_id) {
+        Message resultMsg = channel.sendMessageSynchronously(
+            CMD_DPP_GET_URI, bootstrap_id);
+        String result = (String)resultMsg.obj;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * Remove bootstrap URI based on bootstrap ID.
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param bootstrap_id: Stored bootstrap ID
+     *
+     * @return: 0 – Success or -1 on failure
+     */
+    public int syncDppBootstrapRemove(AsyncChannel channel, int bootstrap_id) {
+        Message resultMsg = channel.sendMessageSynchronously(
+            CMD_DPP_REMOVE_BOOTSTRAP, bootstrap_id);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * start listen on the channel specified waiting to receive
+     * the DPP Authentication request.
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param frequency: DPP listen frequency
+     * @param dpp_role: Configurator/Enrollee role
+     * @param qr_mutual: Mutual authentication required
+     * @param netrole_ap: network role
+     *
+     * @return: Returns 0 if a DPP-listen work is successfully
+     *  queued and -1 on failure.
+     */
+    public int syncDppListen(AsyncChannel channel, String frequency, int dpp_role,
+                             boolean qr_mutual, boolean netrole_ap) {
+        Bundle bundle = new Bundle();
+        bundle.putString("freq", frequency);
+        bundle.putInt("dppRole", dpp_role);
+        bundle.putBoolean("mutual", qr_mutual);
+        bundle.putBoolean("netRoleAp", netrole_ap);
+        Message resultMsg = channel.sendMessageSynchronously(CMD_DPP_LISTEN_START,
+                            0, 0, bundle);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * stop ongoing dpp listen.
+     */
+    public void dppStopListen(AsyncChannel channel) {
+        sendMessage(CMD_DPP_LISTEN_STOP);
+    }
+
+    /**
+     * Adds the DPP configurator
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param curve curve used for dpp encryption
+     * @param key private key
+     * @param expiry timeout in seconds
+     *
+     * @return: Identifier of the added configurator or -1 on failure
+     */
+    public int syncDppConfiguratorAdd(AsyncChannel channel,
+               String curve, String key, int expiry) {
+        Bundle bundle = new Bundle();
+        bundle.putString("curve", curve);
+        bundle.putString("key", key);
+        Message resultMsg = channel.sendMessageSynchronously(CMD_DPP_CONF_ADD,
+                            expiry, 0, bundle);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * Remove the added configurator through dppConfiguratorAdd.
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param config_id: DPP Configurator ID
+     *
+     * @return: Handle to strored info else -1 on failure
+     */
+    public int syncDppConfiguratorRemove(AsyncChannel channel, int config_id) {
+        Message resultMsg = channel.sendMessageSynchronously(CMD_DPP_CONF_REMOVE, config_id);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     * Start DPP authentication and provisioning with the specified peer
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param config – dpp auth init config
+     *
+     * @return: 0 if DPP Authentication request was transmitted and -1 on failure
+     */
+    public int  syncDppStartAuth(AsyncChannel channel, WifiDppConfig config) {
+        Message resultMsg = channel.sendMessageSynchronously(CMD_DPP_AUTH_INIT,
+                            0, 0, config);
+        int result = resultMsg.arg1;
+        resultMsg.recycle();
+        return result;
+    }
+
+    /**
+     *Retrieve Private key to be used for configurator
+     *
+     * @param channel Channel for communicating with the state machine
+     * @param id: id of configurator obj
+     *
+     * @return: KEY string else -1 on failure
+     */
+    public String syncDppConfiguratorGetKey(AsyncChannel channel, int id) {
+        Message resultMsg = channel.sendMessageSynchronously(
+            CMD_DPP_CONFIGURATOR_GET_KEY, 0, 0, id);
+        String result = (String)resultMsg.obj;
+        resultMsg.recycle();
+        return result;
+    }
+
 }

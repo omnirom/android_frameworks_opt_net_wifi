@@ -87,6 +87,31 @@ public class ScanResultUtil {
     }
 
     /**
+     * Helper method to check if the provided |scanResult| corresponds to DPP network.
+     * This checks if the provided capabilities string contains DPP or not.
+     */
+    public static boolean isScanResultForDppNetwork(ScanResult scanResult) {
+        return scanResult.capabilities.contains("DPP");
+    }
+
+    /**
+     * Helper method to check if the provided |scanResult| corresponds to OWE network.
+     * This checks if the provided capabilities string contains OWE or not.
+     */
+    public static boolean isScanResultForOweNetwork(ScanResult scanResult) {
+        return scanResult.capabilities.contains("OWE");
+    }
+
+    /**
+     * Helper method to check if the provided |scanResult| corresponds to SAE network.
+     * This checks if the provided capabilities string contains SAE or not.
+     */
+
+    public static boolean isScanResultForSaeNetwork(ScanResult scanResult) {
+        return scanResult.capabilities.contains("SAE");
+    }
+
+    /**
      * Helper method to check if the provided |scanResult| corresponds to an open network or not.
      * This checks if the provided capabilities string does not contain either of WEP, PSK or EAP
      * encryption types or not.
@@ -135,6 +160,12 @@ public class ScanResultUtil {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
             config.allowedAuthAlgorithms.set(WifiConfiguration.AuthAlgorithm.OPEN);
             config.allowedAuthAlgorithms.set(WifiConfiguration.AuthAlgorithm.SHARED);
+        } else if (isScanResultForDppNetwork(scanResult)) {
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.DPP);
+        } else if (isScanResultForOweNetwork(scanResult)) {
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.OWE);
+        } else if (isScanResultForSaeNetwork(scanResult)) {
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SAE);
         } else {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
         }

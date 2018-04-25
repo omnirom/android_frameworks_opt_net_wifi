@@ -346,6 +346,11 @@ public class XmlUtil {
         public static final String XML_TAG_ROAMING_CONSORTIUM_OIS = "RoamingConsortiumOIs";
         public static final String XML_TAG_RANDOMIZED_MAC_ADDRESS = "RandomizedMacAddress";
 
+        public static final String XML_TAG_DPP_CONNECTOR = "DppConnector";
+        public static final String XML_TAG_DPP_NETACCESSKEY = "DppNetAccessKey";
+        public static final String XML_TAG_DPP_NETACCESSKEY_EXPIRY = "DppNetAccessKeyExpiry";
+        public static final String XML_TAG_DPP_CSIGN = "DppCsign";
+
         /**
          * Write WepKeys to the XML stream.
          * WepKeys array is intialized in WifiConfiguration constructor, but all of the elements
@@ -465,6 +470,11 @@ public class XmlUtil {
                     out, XML_TAG_ROAMING_CONSORTIUM_OIS, configuration.roamingConsortiumIds);
             XmlUtil.writeNextValue(out, XML_TAG_RANDOMIZED_MAC_ADDRESS,
                     configuration.getRandomizedMacAddress().toString());
+
+            XmlUtil.writeNextValue(out, XML_TAG_DPP_CONNECTOR, configuration.dppConnector);
+            XmlUtil.writeNextValue(out, XML_TAG_DPP_NETACCESSKEY, configuration.dppNetAccessKey);
+            XmlUtil.writeNextValue(out, XML_TAG_DPP_NETACCESSKEY_EXPIRY, configuration.dppNetAccessKeyExpiry);
+            XmlUtil.writeNextValue(out, XML_TAG_DPP_CSIGN, configuration.dppCsign);
         }
 
         /**
@@ -633,6 +643,17 @@ public class XmlUtil {
                     case XML_TAG_RANDOMIZED_MAC_ADDRESS:
                         configuration.setRandomizedMacAddress(
                                 MacAddress.fromString((String) value));
+                    case XML_TAG_DPP_CONNECTOR:
+                        configuration.dppConnector = (String) value;
+                        break;
+                    case XML_TAG_DPP_NETACCESSKEY:
+                        configuration.dppNetAccessKey = (String) value;
+                        break;
+                    case XML_TAG_DPP_NETACCESSKEY_EXPIRY:
+                        configuration.dppNetAccessKeyExpiry = (int) value;
+                        break;
+                    case XML_TAG_DPP_CSIGN:
+                        configuration.dppCsign = (String) value;
                         break;
                     default:
                         throw new XmlPullParserException(
