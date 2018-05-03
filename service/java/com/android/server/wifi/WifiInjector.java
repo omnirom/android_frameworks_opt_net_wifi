@@ -138,6 +138,7 @@ public class WifiInjector {
     private final INetworkManagementService mNwManagementService;
     private final ScanRequestProxy mScanRequestProxy;
     private BaseWifiDiagnostics mWifiDiagnostics;
+    private final SarManager mSarManager;
 
     private final boolean mUseRealLogger;
 
@@ -253,10 +254,13 @@ public class WifiInjector {
                 mWifiPermissionsUtil, mWifiMetrics, mClock);
         // mWifiStateMachine has an implicit dependency on mJavaRuntime due to WifiDiagnostics.
         mJavaRuntime = Runtime.getRuntime();
+        mSarManager = new SarManager(mContext, makeTelephonyManager(), wifiStateMachineLooper,
+                mWifiNative);
         mWifiStateMachine = new WifiStateMachine(mContext, mFrameworkFacade,
                 wifiStateMachineLooper, UserManager.get(mContext),
                 this, mBackupManagerProxy, mCountryCode, mWifiNative,
-                new WrongPasswordNotifier(mContext, mFrameworkFacade));
+                new WrongPasswordNotifier(mContext, mFrameworkFacade),
+                mSarManager);
         IBinder b = mFrameworkFacade.getService(Context.NETWORKMANAGEMENT_SERVICE);
         mWifiStateMachinePrime = new WifiStateMachinePrime(this, mContext, wifiStateMachineLooper,
                 mWifiNative, new DefaultModeManager(mContext, wifiStateMachineLooper),
@@ -360,6 +364,10 @@ public class WifiInjector {
 
     public WifiApConfigStore getWifiApConfigStore() {
         return mWifiApConfigStore;
+    }
+
+    public SarManager getSarManager() {
+        return mSarManager;
     }
 
     public WifiStateMachine getWifiStateMachine() {
