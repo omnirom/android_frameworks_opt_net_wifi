@@ -164,7 +164,7 @@ public class WifiConnectivityManager {
     // Device configs
     private boolean mEnableAutoJoinWhenAssociated;
     private boolean mWaitForFullBandScanResults = false;
-    private boolean mUseSingleRadioChainScanResults = false;
+    private boolean mUseSingleRadioChainScanResults = true;
     private int mFullScanMaxTxRate;
     private int mFullScanMaxRxRate;
 
@@ -608,8 +608,8 @@ public class WifiConnectivityManager {
                 R.integer.config_wifi_framework_SECURITY_AWARD);
         mEnableAutoJoinWhenAssociated = context.getResources().getBoolean(
                 R.bool.config_wifi_framework_enable_associated_network_selection);
-        mUseSingleRadioChainScanResults = context.getResources().getBoolean(
-                R.bool.config_wifi_framework_use_single_radio_chain_scan_results_network_selection);
+        //mUseSingleRadioChainScanResults = context.getResources().getBoolean(
+          //      R.bool.config_wifi_framework_use_single_radio_chain_scan_results_network_selection);
         mInitialScoreMax = (Math.max(mScoringParams.getGoodRssi(ScoringParams.BAND2),
                                      mScoringParams.getGoodRssi(ScoringParams.BAND5))
                             + context.getResources().getInteger(
