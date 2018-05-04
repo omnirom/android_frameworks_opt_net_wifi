@@ -107,7 +107,7 @@ import java.util.Map;
  */
 public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     private static final String TAG = "WifiP2pService";
-    private static final boolean DBG = false;
+    private static boolean DBG = false;
     private static final String NETWORKTYPE = "WIFI_P2P";
 
     private Context mContext;
@@ -400,7 +400,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         mP2pStateMachine = new P2pStateMachine(TAG, wifiP2pThread.getLooper(), mP2pSupported);
         mP2pStateMachine.start();
     }
-
+    public void enableVerboseLogging(int verbose) {
+        if (verbose > 0 ) {
+            DBG = true;
+        } else {
+            DBG = false;
+        }
+    }
     /**
      * Obtains the service interface for Managements services
      */
