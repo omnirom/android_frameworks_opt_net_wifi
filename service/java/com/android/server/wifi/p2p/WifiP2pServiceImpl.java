@@ -1594,6 +1594,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         // group negotiation comes through causes issues
                         break;
                     case WifiP2pMonitor.P2P_PROV_DISC_SHOW_PIN_EVENT:
+                        if (message.obj == null) {
+                            Log.e(TAG, "Illegal argument(s)");
+                            break;
+                        }
                         WifiP2pProvDiscEvent provDisc = (WifiP2pProvDiscEvent) message.obj;
                         WifiP2pDevice device = provDisc.device;
                         if (device == null) {
@@ -2700,26 +2704,27 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             final String tempPin = pin;
 
             final View textEntryView = LayoutInflater.from(mContext)
-                   .inflate(R.layout.wifi_p2p_dialog, null);
+                    .inflate(R.layout.wifi_p2p_dialog, null);
 
             ViewGroup group = (ViewGroup) textEntryView.findViewById(R.id.info);
             addRowToDialog(group, R.string.wifi_p2p_to_message, getDeviceName(peerAddress));
             addRowToDialog(group, R.string.wifi_p2p_show_pin_message, pin);
 
             AlertDialog dialog = new AlertDialog.Builder(mContext)
-                .setTitle(r.getString(R.string.wifi_p2p_invitation_sent_title))
-                .setView(textEntryView)
-                .setPositiveButton(r.getString(R.string.accept), new OnClickListener() {
-                        public void onClick(DialogInterface dialog, int which) {
-                                 mSavedPeerConfig = new WifiP2pConfig();
-                                 mSavedPeerConfig.deviceAddress = tempDevAddress;
-                                 mSavedPeerConfig.wps.setup = WpsInfo.DISPLAY;
-                                 mSavedPeerConfig.wps.pin = tempPin;
-                                 mWifiNative.p2pConnect(mSavedPeerConfig, FORM_GROUP);
-                        }
-                   })
-                .setCancelable(false)
-                .create();
+                    .setTitle(r.getString(R.string.wifi_p2p_invitation_sent_title))
+                    .setView(textEntryView)
+                    .setPositiveButton(r.getString(R.string.accept), new OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                mSavedPeerConfig = new WifiP2pConfig();
+                                mSavedPeerConfig.deviceAddress = tempDevAddress;
+                                mSavedPeerConfig.wps.setup = WpsInfo.DISPLAY;
+                                mSavedPeerConfig.wps.pin = tempPin;
+                                mWifiNative.p2pConnect(mSavedPeerConfig, FORM_GROUP);
+                            }
+                    })
+                    .setCancelable(false)
+                    .create();
+            dialog.setCanceledOnTouchOutside(false);
             dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
             WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
             attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
