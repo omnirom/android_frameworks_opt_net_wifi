@@ -5020,6 +5020,15 @@ public class WifiStateMachine extends StateMachine {
             // cause the roam to fail and the device to disconnect.
             clearTargetBssid("ObtainingIpAddress");
 
+            // Reset power save mode after association.
+            // Kernel does not forward power save request to driver if power
+            // save state of that interface is same as requested state in
+            // cfg80211. This happens when driver’s power save state not
+            // synchronized with cfg80211 power save state.
+            // By resetting power save state resolves issues of cfg80211
+            // ignoring enable power save request sent in ObtainingIpState.
+            mWifiNative.setPowerSave(mInterfaceName, false);
+
             // Stop IpClient in case we're switching from DHCP to static
             // configuration or vice versa.
             //
