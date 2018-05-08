@@ -3234,15 +3234,14 @@ public class WifiStateMachine extends StateMachine {
         if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
             Log.wtf(TAG, "Config generated an invalid MAC address");
         } else if (currentMac.equals(newMac)) {
-            Log.i(TAG, "No changes in MAC address");
+            Log.d(TAG, "No changes in MAC address");
         } else {
-            Log.i(TAG, "ConnectedMacRandomization SSID(" + config.getPrintableSsid()
-                    + "). setMacAddress(" + newMac.toString() + ") from "
-                    + currentMac.toString());
+            mWifiMetrics.logStaEvent(StaEvent.TYPE_MAC_CHANGE, config);
             boolean setMacSuccess =
                     mWifiNative.setMacAddress(mInterfaceName, newMac);
-            Log.i(TAG, "ConnectedMacRandomization  ...setMacAddress("
-                    + newMac.toString() + ") = " + setMacSuccess);
+            Log.d(TAG, "ConnectedMacRandomization SSID(" + config.getPrintableSsid()
+                    + "). setMacAddress(" + newMac.toString() + ") from "
+                    + currentMac.toString() + " = " + setMacSuccess);
         }
     }
 
@@ -3256,6 +3255,7 @@ public class WifiStateMachine extends StateMachine {
         boolean macRandomizationEnabled = (macRandomizationFlag == 1);
         mEnableConnectedMacRandomization.set(macRandomizationEnabled);
         mWifiInfo.setEnableConnectedMacRandomization(macRandomizationEnabled);
+        mWifiMetrics.setIsMacRandomizationOn(macRandomizationEnabled);
         Log.d(TAG, "EnableConnectedMacRandomization Setting changed to "
                 + macRandomizationEnabled);
     }
@@ -4842,6 +4842,7 @@ public class WifiStateMachine extends StateMachine {
                     if (mVerboseLoggingEnabled && message.obj != null) log((String) message.obj);
                     if (mIpReachabilityDisconnectEnabled) {
                         handleIpReachabilityLost();
+                        mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_NUD_FAILURE);
                         transitionTo(mDisconnectingState);
                     } else {
                         logd("CMD_IP_REACHABILITY_LOST but disconnect disabled -- ignore");
@@ -5018,6 +5019,15 @@ public class WifiStateMachine extends StateMachine {
             // from this point on and having the BSSID specified in the network block would
             // cause the roam to fail and the device to disconnect.
             clearTargetBssid("ObtainingIpAddress");
+
+            // Reset power save mode after association.
+            // Kernel does not forward power save request to driver if power
+            // save state of that interface is same as requested state in
+            // cfg80211. This happens when driver’s power save state not
+            // synchronized with cfg80211 power save state.
+            // By resetting power save state resolves issues of cfg80211
+            // ignoring enable power save request sent in ObtainingIpState.
+            mWifiNative.setPowerSave(mInterfaceName, false);
 
             // Stop IpClient in case we're switching from DHCP to static
             // configuration or vice versa.
