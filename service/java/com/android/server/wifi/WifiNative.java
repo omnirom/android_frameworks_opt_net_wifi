@@ -414,7 +414,11 @@ public class WifiNative {
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
-            if (!mHostapdHal.removeAccessPoint(iface.name)) {
+            if (mHostapdHal.isVendorHostapdHal()) {
+                if (!mHostapdHal.removeVendorAccessPoint(iface.name)) {
+                    Log.e(TAG, "Failed to remove vendor access point on " + iface);
+                }
+            } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
             if (!mHostapdHal.deregisterDeathHandler()) {
@@ -949,6 +953,49 @@ public class WifiNative {
     }
 
     /**
+     * Setup an interface for Bridge mode operations.
+     *
+     * This method configures an interface in Bridge mode. This is used only to register
+     * for interface callbacks (up/down/enable/disabled)
+     *
+     * @param interfaceCallback Associated callback for notifying status changes for the iface.
+     * @return Returns the name of the allocated interface, will be null on failure.
+     */
+    public String setupInterfaceForBridgeMode(@NonNull InterfaceCallback interfaceCallback) {
+        synchronized (mLock) {
+            if (!startHal()) {
+                Log.e(TAG, "Failed to start Hal");
+                mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
+                return null;
+            }
+            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_AP);
+            if (iface == null) {
+                Log.e(TAG, "Failed to allocate new bridge iface");
+                return null;
+            }
+            iface.externalListener = interfaceCallback;
+            iface.name = WifiInjector.getInstance().getWifiApConfigStore().getBridgeInterface();
+            if (TextUtils.isEmpty(iface.name)) {
+                Log.e(TAG, "Failed to create Bridge iface in wifinative");
+                mIfaceMgr.removeIface(iface.id);
+                mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
+                return null;
+            }
+            iface.networkObserver = new NetworkObserverInternal(iface.id);
+            if (!registerNetworkObserver(iface.networkObserver)) {
+                Log.e(TAG, "Failed to register network observer on " + iface);
+                teardownInterface(iface.name);
+                return null;
+            }
+            // Just to avoid any race conditions with interface state change callbacks,
+            // update the interface state before we exit.
+            onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
+            Log.i(TAG, "Successfully setup bridge " + iface);
+            return iface.name;
+        }
+    }
+
+    /**
      *
      * Check if the interface is up or down.
      *
@@ -1265,7 +1312,14 @@ public class WifiNative {
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
         }
-        if (!mHostapdHal.addAccessPoint(ifaceName, config)) {
+
+        if (mHostapdHal.isVendorHostapdHal()) {
+            if (!mHostapdHal.addVendorAccessPoint(ifaceName, config)) {
+                Log.e(TAG, "Failed to add Vendor acccess point");
+                mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
+                return false;
+            }
+        } else if (!mHostapdHal.addAccessPoint(ifaceName, config)) {
             Log.e(TAG, "Failed to add acccess point");
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
@@ -1280,8 +1334,12 @@ public class WifiNative {
      * @return true on success, false otherwise.
      */
     public boolean stopSoftAp(@NonNull String ifaceName) {
-        if (!mHostapdHal.removeAccessPoint(ifaceName)) {
-            Log.e(TAG, "Failed to remove access point");
+        if (mHostapdHal.isVendorHostapdHal()) {
+            if (!mHostapdHal.removeVendorAccessPoint(ifaceName)) {
+                Log.e(TAG, "Failed to remove vendor access point on " + ifaceName);
+            }
+        } else if (!mHostapdHal.removeAccessPoint(ifaceName)) {
+            Log.e(TAG, "Failed to remove access point on " + ifaceName);
         }
         return mWificondControl.stopHostapd(ifaceName);
     }
@@ -2328,7 +2386,20 @@ public class WifiNative {
      * @return true for success
      */
     public boolean setCountryCodeHal(@NonNull String ifaceName, String countryCode) {
+        mHostapdHal.setCountryCode(countryCode);
         return mWifiVendorHal.setCountryCodeHal(ifaceName, countryCode);
+    }
+
+    /**
+     * Set hostapd parameters via QSAP command.
+     *
+     * This would call QSAP library APIs via hostapd hidl.
+     *
+     * @param cmd QSAP command.
+     * @return true on success, false otherwise.
+     */
+    public boolean setHostapdParams(@NonNull String cmd) {
+        return mHostapdHal.setHostapdParams(cmd);
     }
 
     //---------------------------------------------------------------------------------
