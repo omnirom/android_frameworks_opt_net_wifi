@@ -22,8 +22,19 @@
 namespace android {
 namespace wifi_system {
 const char kHostapdServiceName[] = "hostapd";
+const char kHostapdFullServiceName[] = "init.svc.hostapd";
 
 bool HostapdManager::StartHostapd() {
+
+  // Check if hostapd already started
+  char hostapd_status[PROPERTY_VALUE_MAX];
+  property_get(kHostapdFullServiceName, hostapd_status, "");
+
+  if (strcmp(hostapd_status, "running") == 0) {
+    LOG(DEBUG) << "SoftAP already started. Skip another start";
+    return true;
+  }
+
   if (property_set("ctl.start", kHostapdServiceName) != 0) {
     LOG(ERROR) << "Failed to start SoftAP";
     return false;
@@ -35,6 +46,15 @@ bool HostapdManager::StartHostapd() {
 
 bool HostapdManager::StopHostapd() {
   LOG(DEBUG) << "Stopping the SoftAP service...";
+
+  // Check if hostapd already stopped
+  char hostapd_status[PROPERTY_VALUE_MAX];
+  property_get(kHostapdFullServiceName, hostapd_status, "");
+
+  if (!strlen(hostapd_status) || strcmp(hostapd_status, "stopped") == 0) {
+    LOG(DEBUG) << "SoftAP already stopped. Skip another stop";
+    return true;
+  }
 
   if (property_set("ctl.stop", kHostapdServiceName) < 0) {
     LOG(ERROR) << "Failed to stop hostapd service!";
