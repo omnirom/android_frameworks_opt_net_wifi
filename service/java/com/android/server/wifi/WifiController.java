@@ -45,6 +45,7 @@ public class WifiController extends StateMachine {
     private static final boolean DBG = false;
     private Context mContext;
     private boolean mFirstUserSignOnSeen = false;
+    private boolean mWifiControllerReady = false;
 
     /**
      * See {@link Settings.Global#WIFI_REENABLE_DELAY_MS}.  This is the default value if a
@@ -117,8 +118,8 @@ public class WifiController extends StateMachine {
         mWifiStateMachineLooper = wifiStateMachineLooper;
         mWifiStateMachinePrime = wsmp;
         mSettingsStore = wss;
+        mWifiControllerReady = false;
 
-        // CHECKSTYLE:OFF IndentationCheck
         addState(mDefaultState);
             addState(mStaDisabledState, mDefaultState);
             addState(mStaEnabledState, mDefaultState);
@@ -175,7 +176,7 @@ public class WifiController extends StateMachine {
                             } else if (state == WifiManager.WIFI_AP_STATE_DISABLED) {
                                 sendMessage(CMD_AP_STOPPED);
                             }
-                        } else if (action.equals(LocationManager.MODE_CHANGED_ACTION)) {
+                        } else if (action.equals(LocationManager.MODE_CHANGED_ACTION) && mWifiControllerReady) {
                             // Location mode has been toggled...  trigger with the scan change
                             // update to make sure we are in the correct mode
                             sendMessage(CMD_SCAN_ALWAYS_MODE_CHANGED);
@@ -249,6 +250,12 @@ public class WifiController extends StateMachine {
     }
 
     class DefaultState extends State {
+
+        @Override
+        public void enter() {
+            mWifiControllerReady = true;
+        }
+
         @Override
         public boolean processMessage(Message msg) {
             switch (msg.what) {
@@ -346,6 +353,8 @@ public class WifiController extends StateMachine {
             mDeferredEnableSerialNumber++;
             mHaveDeferredEnable = false;
             mWifiStateMachine.clearANQPCache();
+            mWifiControllerReady = true;
+
         }
         @Override
         public boolean processMessage(Message msg) {
@@ -501,6 +510,7 @@ public class WifiController extends StateMachine {
             mDisabledTimestamp = SystemClock.elapsedRealtime();
             mDeferredEnableSerialNumber++;
             mHaveDeferredEnable = false;
+            mWifiControllerReady = true;
         }
 
         @Override
