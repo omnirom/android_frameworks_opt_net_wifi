@@ -136,7 +136,6 @@ public class WifiInjector {
     private final WakeupController mWakeupController;
     private final INetworkManagementService mNwManagementService;
     private final ScanRequestProxy mScanRequestProxy;
-    private BaseWifiDiagnostics mWifiDiagnostics;
     private final SarManager mSarManager;
     private final BaseWifiDiagnostics mWifiDiagnostics;
 
@@ -288,7 +287,6 @@ public class WifiInjector {
                 new WakeupLock(mWifiConfigManager, mWifiMetrics.getWakeupMetrics(), mClock),
                 WakeupEvaluator.fromContext(mContext), wakeupOnboarding, mWifiConfigManager,
                 mWifiConfigStore, mWifiMetrics.getWakeupMetrics(), this, mFrameworkFacade);
-        mWifiDiagnostics = this.makeWifiDiagnostics(mWifiNative);
         if (mWifiStateMachine != null)
             mWifiStateMachine.setWifiDiagnostics(mWifiDiagnostics);
         mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService());
