@@ -30,6 +30,8 @@ public class ScanResultMatchInfo {
     public static final int NETWORK_TYPE_WEP = 1;
     public static final int NETWORK_TYPE_PSK = 2;
     public static final int NETWORK_TYPE_EAP = 3;
+    public static final int NETWORK_TYPE_FILS_SHA256 = 10;
+    public static final int NETWORK_TYPE_FILS_SHA384 = 11;
 
     /**
      * SSID of the network.
@@ -54,6 +56,10 @@ public class ScanResultMatchInfo {
             info.networkType = NETWORK_TYPE_WEP;
         } else if (WifiConfigurationUtil.isConfigForOpenNetwork(config)) {
             info.networkType = NETWORK_TYPE_OPEN;
+        } else if (WifiConfigurationUtil.isConfigForSha256Network(config)) {
+            info.networkType = NETWORK_TYPE_FILS_SHA256;
+        } else if (WifiConfigurationUtil.isConfigForSha384Network(config)) {
+            info.networkType = NETWORK_TYPE_FILS_SHA384;
         } else {
             throw new IllegalArgumentException("Invalid WifiConfiguration: " + config);
         }
@@ -78,6 +84,10 @@ public class ScanResultMatchInfo {
             info.networkType = NETWORK_TYPE_WEP;
         } else if (ScanResultUtil.isScanResultForOpenNetwork(scanResult)) {
             info.networkType = NETWORK_TYPE_OPEN;
+        } else if (ScanResultUtil.isScanResultForFilsSha256Network(scanResult)) {
+            info.networkType = NETWORK_TYPE_FILS_SHA256;
+        } else if (ScanResultUtil.isScanResultForFilsSha384Network(scanResult)) {
+            info.networkType = NETWORK_TYPE_FILS_SHA384;
         } else {
             throw new IllegalArgumentException("Invalid ScanResult: " + scanResult);
         }

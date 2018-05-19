@@ -20,6 +20,7 @@ import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
+import android.net.wifi.WifiDppConfig.DppResult;
 import android.os.Handler;
 import android.os.Message;
 import android.util.ArraySet;
@@ -95,6 +96,12 @@ public class WifiMonitor {
 
     /* hotspot 2.0 events */
     public static final int HS20_REMEDIATION_EVENT               = BASE + 61;
+
+    /* Fils network connection completed */
+    public static final int FILS_NETWORK_CONNECTION_EVENT        = BASE + 63;
+
+    /* Take some gap, start DPP event from 101*/
+    public static final int DPP_EVENT                            = BASE + 101;
 
     /* WPS config errrors */
     private static final int CONFIG_MULTIPLE_PBC_DETECTED = 12;
@@ -501,6 +508,19 @@ public class WifiMonitor {
     }
 
     /**
+     * Broadcast the fils network connection event to all the handlers registered for this event.
+     *
+     * @param iface Name of iface on which this occurred.
+     * @param networkId ID of the network in wpa_supplicant.
+     * @param bssid BSSID of the access point.
+     */
+    public void broadcastFilsNetworkConnectionEvent(String iface, int networkId, String bssid) {
+        sendMessage(iface, FILS_NETWORK_CONNECTION_EVENT, networkId, 0, bssid);
+    }
+
+    /**
+
+    /**
      * Broadcast the network disconnection event to all the handlers registered for this event.
      *
      * @param iface Name of iface on which this occurred.
@@ -546,5 +566,16 @@ public class WifiMonitor {
      */
     public void broadcastSupplicantDisconnectionEvent(String iface) {
         sendMessage(iface, SUP_DISCONNECTION_EVENT);
+    }
+
+    /**
+     * Broadcast the DPP events to all the handlers registered for this event.
+     *
+     * @param iface Name of iface on which this occurred.
+     * @param dppEventType Name of DPP event as defined in DppResults.
+     * @param result DppResult object.
+     */
+    public void broadcastDppEvent(String iface, int dppEventType, DppResult result) {
+        sendMessage(iface, DPP_EVENT, dppEventType, 0, result);
     }
 }

@@ -134,6 +134,14 @@ public class WifiConfigurationUtil {
                 || isConfigForEapNetwork(config));
     }
 
+    public static boolean isConfigForSha256Network(WifiConfiguration config) {
+        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256);
+    }
+
+    public static boolean isConfigForSha384Network(WifiConfiguration config) {
+        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384);
+    }
+
     /**
      * Compare existing and new WifiConfiguration objects after a network update and return if
      * IP parameters have changed or not.
@@ -410,8 +418,8 @@ public class WifiConfigurationUtil {
 
     private static boolean validateKeyMgmt(BitSet keyMgmnt) {
         if (keyMgmnt.cardinality() > 1) {
-            if (keyMgmnt.cardinality() != 2) {
-                Log.e(TAG, "validateKeyMgmt failed: cardinality != 2");
+            if (keyMgmnt.cardinality() > 4) {
+                Log.e(TAG, "validateKeyMgmt failed: cardinality > 4");
                 return false;
             }
             if (!keyMgmnt.get(WifiConfiguration.KeyMgmt.WPA_EAP)) {
