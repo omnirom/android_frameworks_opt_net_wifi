@@ -28,6 +28,7 @@ import android.util.Log;
 import com.android.internal.R;
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.ScanDetail;
+import com.android.server.wifi.WifiGbk;
 import com.android.server.wifi.WifiMonitor;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
@@ -327,6 +328,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             int numFilteredScanResults = 0;
             for (int i = 0; i < mNativePnoScanResults.size(); ++i) {
                 ScanResult result = mNativePnoScanResults.get(i).getScanResult();
+                WifiGbk.processScanResult(result); // wifigbk++
                 long timestamp_ms = result.timestamp / 1000; // convert us -> ms
                 if (timestamp_ms > mLastPnoScanSettings.startTime) {
                     hwPnoScanResults.add(result);
@@ -370,6 +372,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             int numFilteredScanResults = 0;
             for (int i = 0; i < mNativeScanResults.size(); ++i) {
                 ScanResult result = mNativeScanResults.get(i).getScanResult();
+                WifiGbk.processScanResult(result); // wifigbk++
                 long timestamp_ms = result.timestamp / 1000; // convert us -> ms
                 if (timestamp_ms > mLastScanSettings.startTime) {
                     if (mLastScanSettings.singleScanFreqs.containsChannel(
@@ -383,6 +386,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             if (numFilteredScanResults != 0) {
                 Log.d(TAG, "Filtering out " + numFilteredScanResults + " scan results.");
             }
+            WifiGbk.ageBssCache(); // wifigbk++
 
             if (mLastScanSettings.singleScanEventHandler != null) {
                 if (mLastScanSettings.reportSingleScanFullResults) {

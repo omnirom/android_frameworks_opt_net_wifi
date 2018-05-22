@@ -639,7 +639,7 @@ public class WificondControl implements IBinder.DeathRecipient {
             for (String ssid : hiddenNetworkSSIDs) {
                 HiddenNetwork network = new HiddenNetwork();
                 try {
-                    network.ssid = NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(ssid));
+                    network.ssid = WifiGbk.getRandUtfOrGbkBytes(ssid); // wifigbk++
                 } catch (IllegalArgumentException e) {
                     Log.e(TAG, "Illegal argument " + ssid, e);
                     continue;
@@ -691,6 +691,17 @@ public class WificondControl implements IBinder.DeathRecipient {
                     continue;
                 }
                 settings.pnoNetworks.add(condNetwork);
+                //wifigbk++
+                if (!WifiGbk.isAllAscii(condNetwork.ssid)) {
+                    PnoNetwork condNetwork2 = new PnoNetwork();
+                    condNetwork2.isHidden = condNetwork.isHidden;
+                    condNetwork2.ssid = WifiGbk.toGbk(condNetwork.ssid);
+                    if (condNetwork2.ssid != null) {
+                        settings.pnoNetworks.add(condNetwork2);
+                        Log.i(TAG, "WifiGbk - pnoScan add extra Gbk ssid for " + network.ssid);
+                    }
+                }
+                //wifigbk--
             }
         }
 
