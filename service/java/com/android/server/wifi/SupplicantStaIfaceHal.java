@@ -530,7 +530,7 @@ public class SupplicantStaIfaceHal {
                 });
             } catch (RemoteException e) {
                 Log.e(TAG, "ISupplicant.listInterfaces exception: " + e);
-                supplicantServiceDiedHandler(ifaceName);
+                handleRemoteException(e, "listInterfaces");
                 return null;
             }
             if (supplicantIfaces.size() == 0) {
@@ -551,7 +551,7 @@ public class SupplicantStaIfaceHal {
                                 });
                     } catch (RemoteException e) {
                         Log.e(TAG, "ISupplicant.getInterface exception: " + e);
-                        supplicantServiceDiedHandler(ifaceName);
+                        handleRemoteException(e, "getInterface");
                         return null;
                     }
                     break;
@@ -584,8 +584,8 @@ public class SupplicantStaIfaceHal {
                             supplicantIface.value = iface;
                         });
             } catch (RemoteException e) {
-                Log.e(TAG, "ISupplicant.createInterface exception: " + e);
-                supplicantServiceDiedHandler(ifaceName);
+                Log.e(TAG, "ISupplicant.addInterface exception: " + e);
+                handleRemoteException(e, "addInterface");
                 return null;
             }
             return supplicantIface.value;
@@ -641,7 +641,7 @@ public class SupplicantStaIfaceHal {
                 }
             } catch (RemoteException e) {
                 Log.e(TAG, "ISupplicant.removeInterface exception: " + e);
-                supplicantServiceDiedHandler(ifaceName);
+                handleRemoteException(e, "removeInterface");
                 return false;
             }
             return true;
@@ -681,13 +681,6 @@ public class SupplicantStaIfaceHal {
             mISupplicantVendorStaIfaces.clear();
             mCurrentNetworkLocalConfigs.clear();
             mCurrentNetworkRemoteHandles.clear();
-        }
-    }
-
-    private void supplicantServiceDiedHandler(@NonNull String ifaceName) {
-        synchronized (mLock) {
-            mWifiMonitor.broadcastSupplicantDisconnectionEvent(ifaceName);
-            supplicantServiceDiedHandler();
         }
     }
 
@@ -825,7 +818,7 @@ public class SupplicantStaIfaceHal {
                 return (getSupplicantMockableV1_1() != null);
             } catch (RemoteException e) {
                 Log.e(TAG, "ISupplicant.getService exception: " + e);
-                supplicantServiceDiedHandler();
+                handleRemoteException(e, "getSupplicantMockable");
                 return false;
             }
         }
@@ -2672,7 +2665,7 @@ public class SupplicantStaIfaceHal {
 
     private void handleRemoteException(RemoteException e, String methodStr) {
         synchronized (mLock) {
-            supplicantServiceDiedHandler();
+            clearState();
             Log.e(TAG, "ISupplicantStaIface." + methodStr + " failed with exception", e);
         }
     }

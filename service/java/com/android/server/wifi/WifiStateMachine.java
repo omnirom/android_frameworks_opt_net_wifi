@@ -499,9 +499,6 @@ public class WifiStateMachine extends StateMachine {
     /* Get matching network */
     static final int CMD_GET_MATCHING_CONFIG                            = BASE + 99;
 
-    /* alert from firmware */
-    static final int CMD_FIRMWARE_ALERT                                 = BASE + 100;
-
     /* SIM is removed; reset any cached data for it */
     static final int CMD_RESET_SIM_NETWORKS                             = BASE + 101;
 
@@ -833,7 +830,7 @@ public class WifiStateMachine extends StateMachine {
         mPasspointManager = mWifiInjector.getPasspointManager();
 
         mWifiMonitor = mWifiInjector.getWifiMonitor();
-        mWifiDiagnostics = mWifiInjector.makeWifiDiagnostics(mWifiNative);
+        mWifiDiagnostics = mWifiInjector.getWifiDiagnostics();
         mScanRequestProxy = mWifiInjector.getScanRequestProxy();
         mWifiPermissionsWrapper = mWifiInjector.getWifiPermissionsWrapper();
 
@@ -1189,7 +1186,7 @@ public class WifiStateMachine extends StateMachine {
                 || !mWifiConfigManager.updateLastConnectUid(netId, uid)) {
             logi("connectToUserSelectNetwork Allowing uid " + uid
                     + " with insufficient permissions to connect=" + netId);
-        } else {
+        } else if (mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
             // Note user connect choice here, so that it will be considered in the next network
             // selection.
             mWifiConnectivityManager.setUserConnectChoice(netId);
@@ -3559,14 +3556,6 @@ public class WifiStateMachine extends StateMachine {
                 case CMD_GET_SUPPORTED_FEATURES:
                     int featureSet = mWifiNative.getSupportedFeatureSet(mInterfaceName);
                     replyToMessage(message, message.what, featureSet);
-                    break;
-                case CMD_FIRMWARE_ALERT:
-                    if (mWifiDiagnostics != null) {
-                        byte[] buffer = (byte[])message.obj;
-                        int alertReason = message.arg1;
-                        mWifiDiagnostics.captureAlertData(alertReason, buffer);
-                        mWifiMetrics.incrementAlertReasonCount(alertReason);
-                    }
                     break;
                 case CMD_GET_LINK_LAYER_STATS:
                     // Not supported hence reply with error message
