@@ -4469,6 +4469,7 @@ public class WifiStateMachine extends StateMachine {
                     if (config != null) {
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
+                        mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
 
                         ScanDetailCache scanDetailCache =
                                 mWifiConfigManager.getScanDetailCacheForNetwork(config.networkId);
@@ -5087,6 +5088,7 @@ public class WifiStateMachine extends StateMachine {
                     mWifiInfo.setBSSID((String) message.obj);
                     mLastNetworkId = message.arg1;
                     mWifiInfo.setNetworkId(mLastNetworkId);
+                    mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
                     if(!mLastBssid.equals(message.obj)) {
                         mLastBssid = (String) message.obj;
                         sendNetworkStateChangeBroadcast(mLastBssid);
@@ -5547,10 +5549,20 @@ public class WifiStateMachine extends StateMachine {
                                         config.networkId, false);
                                 mWifiConfigManager.updateNetworkSelectionStatus(config.networkId,
                                         WifiConfiguration.NetworkSelectionStatus
-                                        .DISABLED_NO_INTERNET);
+                                        .DISABLED_NO_INTERNET_PERMANENT);
+                            } else {
+                                mWifiConfigManager.incrementNetworkNoInternetAccessReports(
+                                        config.networkId);
+                                // If this was not the last selected network, update network
+                                // selection status to temporarily disable the network.
+                                if (mWifiConfigManager.getLastSelectedNetwork() != config.networkId
+                                        && !config.noInternetAccessExpected) {
+                                    mWifiConfigManager.updateNetworkSelectionStatus(
+                                            config.networkId,
+                                            WifiConfiguration.NetworkSelectionStatus
+                                                    .DISABLED_NO_INTERNET_TEMPORARY);
+                                }
                             }
-                            mWifiConfigManager.incrementNetworkNoInternetAccessReports(
-                                    config.networkId);
                         }
                     }
                     return HANDLED;
