@@ -5557,6 +5557,8 @@ public class WifiStateMachine extends StateMachine {
                                 // selection status to temporarily disable the network.
                                 if (mWifiConfigManager.getLastSelectedNetwork() != config.networkId
                                         && !config.noInternetAccessExpected) {
+                                    Log.i(TAG, "Temporarily disabling network because of"
+                                            + "no-internet access");
                                     mWifiConfigManager.updateNetworkSelectionStatus(
                                             config.networkId,
                                             WifiConfiguration.NetworkSelectionStatus
@@ -5571,6 +5573,10 @@ public class WifiStateMachine extends StateMachine {
                         config = getCurrentWifiConfiguration();
                         if (config != null) {
                             // re-enable autojoin
+                            mWifiConfigManager.updateNetworkSelectionStatus(
+                                    config.networkId,
+                                    WifiConfiguration.NetworkSelectionStatus
+                                            .NETWORK_SELECTION_ENABLE);
                             mWifiConfigManager.setNetworkValidatedInternetAccess(
                                     config.networkId, true);
                         }
