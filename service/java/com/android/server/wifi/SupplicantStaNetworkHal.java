@@ -260,8 +260,9 @@ public class SupplicantStaNetworkHal {
             if (config == null) return false;
             /** SSID */
             if (config.SSID != null) {
-                if (!setSsid(NativeUtil.decodeSsid(config.SSID))) {
-                    Log.e(TAG, "failed to set SSID: " + config.SSID);
+                String ssid = WifiGbk.getRealSsid(config); // wifigbk++
+                if (!setSsid(NativeUtil.decodeSsid(ssid))) {
+                    Log.e(TAG, "failed to set SSID: " + ssid);
                     return false;
                 }
             }

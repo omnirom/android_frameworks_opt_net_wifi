@@ -922,9 +922,10 @@ public class SupplicantStaIfaceHal {
      */
     public boolean connectToNetwork(@NonNull String ifaceName, @NonNull WifiConfiguration config) {
         synchronized (mLock) {
-            logd("connectToNetwork " + config.configKey());
+            boolean isAscii = WifiGbk.isAllAscii(WifiGbk.getSsidBytes(config.SSID, "UTF-8")); // wifigbk++
+            logd("connectToNetwork " + config.configKey() + " isAscii=" + isAscii);
             WifiConfiguration currentConfig = getCurrentNetworkLocalConfig(ifaceName);
-            if (WifiConfigurationUtil.isSameNetwork(config, currentConfig)) {
+            if (WifiConfigurationUtil.isSameNetwork(config, currentConfig) && isAscii) {
                 String networkSelectionBSSID = config.getNetworkSelectionStatus()
                         .getNetworkSelectionBSSID();
                 String networkSelectionBSSIDCurrent =
@@ -2924,8 +2925,8 @@ public class SupplicantStaIfaceHal {
             synchronized (mLock) {
                 logCallback("onStateChanged");
                 SupplicantState newSupplicantState = supplicantHidlStateToFrameworkState(newState);
-                WifiSsid wifiSsid =
-                        WifiSsid.createFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
+                WifiSsid wifiSsid = // wifigbk++
+                        WifiGbk.createWifiSsidFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
                 String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
                 mStateIsFourway = (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE);
                 if (newSupplicantState == SupplicantState.COMPLETED) {

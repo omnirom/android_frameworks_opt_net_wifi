@@ -332,6 +332,7 @@ public class WifiStateMachinePrime {
                 mDefaultModeManager.sendScanAvailableBroadcast(mContext, false);
                 mScanRequestProxy.enableScanningForHiddenNetworks(false);
                 mScanRequestProxy.clearScanResults();
+                WifiGbk.clearBssCache(); // wifigbk++
             }
 
             @Override

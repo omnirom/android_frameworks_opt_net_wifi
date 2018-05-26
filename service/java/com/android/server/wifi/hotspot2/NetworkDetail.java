@@ -10,6 +10,8 @@ import com.android.server.wifi.hotspot2.anqp.ANQPElement;
 import com.android.server.wifi.hotspot2.anqp.Constants;
 import com.android.server.wifi.hotspot2.anqp.RawByteElement;
 import com.android.server.wifi.util.InformationElementUtil;
+import com.android.server.wifi.util.NativeUtil;
+import com.android.server.wifi.WifiGbk;
 
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
@@ -226,6 +228,13 @@ public class NetworkDetail {
             }
 
             if (ssid == null) {
+                // wifigbk++
+                String ssid2 = WifiGbk.encodeSsid(ssidOctets, "GBK");
+                if (ssid2 != null) {
+                    ssid = NativeUtil.removeEnclosingQuotes(ssid2);
+                }
+                else
+                // wifigbk--
                 if (extendedCapabilities.isStrictUtf8() && exception != null) {
                     throw new IllegalArgumentException("Failed to decode SSID in dubious IE string");
                 }
