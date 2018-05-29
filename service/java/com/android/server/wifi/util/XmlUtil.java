@@ -1008,6 +1008,7 @@ public class XmlUtil {
         public static final String XML_TAG_PHASE2_METHOD = "Phase2Method";
         public static final String XML_TAG_PLMN = "PLMN";
         public static final String XML_TAG_REALM = "Realm";
+        public static final String XML_TAG_SIMNUM = "SimNum";
 
         /**
          * Write the WifiEnterpriseConfig data elements from the provided config to the XML
@@ -1046,6 +1047,7 @@ public class XmlUtil {
             XmlUtil.writeNextValue(out, XML_TAG_PHASE2_METHOD, enterpriseConfig.getPhase2Method());
             XmlUtil.writeNextValue(out, XML_TAG_PLMN, enterpriseConfig.getPlmn());
             XmlUtil.writeNextValue(out, XML_TAG_REALM, enterpriseConfig.getRealm());
+            XmlUtil.writeNextValue(out, XML_TAG_SIMNUM, enterpriseConfig.getSimNum());
         }
 
         /**
@@ -1126,6 +1128,17 @@ public class XmlUtil {
                         break;
                     case XML_TAG_REALM:
                         enterpriseConfig.setRealm((String) value);
+                        break;
+                    case XML_TAG_SIMNUM:
+                        int sim_num;
+                        try {
+                            sim_num = Integer.parseInt((String) value);
+                        } catch (NumberFormatException e) {
+                            sim_num = -1;
+                        }
+                        if (sim_num > 0) {
+                            enterpriseConfig.setSimNum(sim_num);
+                        }
                         break;
                     default:
                         throw new XmlPullParserException(
