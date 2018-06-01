@@ -24,6 +24,7 @@
 #include <cutils/misc.h>
 #include <cutils/properties.h>
 #include <sys/syscall.h>
+#include <android-base/properties.h>
 
 extern "C" int init_module(void *, unsigned long, const char *);
 extern "C" int delete_module(const char *, unsigned int);
@@ -74,6 +75,12 @@ static int insmod(const char *filename, const char *args) {
 static int rmmod(const char *modname) {
   int ret = -1;
   int maxtry = 10;
+
+  std::string powerCtl = android::base::GetProperty("sys.powerctl", "");
+  if (!powerCtl.empty()) {
+    PLOG(ERROR) << powerCtl<<" :skipping rmmod";
+    return ret;
+  }
 
   while (maxtry-- > 0) {
     ret = delete_module(modname, O_NONBLOCK | O_EXCL);
