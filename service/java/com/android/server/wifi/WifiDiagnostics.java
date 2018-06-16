@@ -19,6 +19,10 @@ package com.android.server.wifi;
 import android.annotation.NonNull;
 import android.content.Context;
 import android.util.Base64;
+import android.content.Intent;
+
+import android.net.wifi.WifiManager;
+import android.os.UserHandle;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
@@ -81,6 +85,9 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     public static final int REPORT_REASON_WIFINATIVE_FAILURE        = 8;
     public static final int REPORT_REASON_NUD_FAILURE               = 9;
 
+    /** Data stall offset */
+    private static final int  DATA_STALL_OFFSET_REASON_CODE         = 256;
+
     /** number of bug reports to hold */
     public static final int MAX_BUG_REPORTS                         = 4;
 
@@ -110,6 +117,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private final WifiMetrics mWifiMetrics;
     private int mMaxRingBufferSizeBytes;
     private WifiInjector mWifiInjector;
+    private Context mContext;
 
     public WifiDiagnostics(Context context, WifiInjector wifiInjector,
                            WifiNative wifiNative, BuildProperties buildProperties,
@@ -128,6 +136,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         mJavaRuntime = wifiInjector.getJavaRuntime();
         mWifiMetrics = wifiInjector.getWifiMetrics();
         mWifiInjector = wifiInjector;
+        mContext = context;
     }
 
     @Override
@@ -412,8 +421,17 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     }
 
     synchronized void onWifiAlert(int errorCode, @NonNull byte[] buffer) {
-        captureAlertData(errorCode, buffer);
-        mWifiMetrics.incrementAlertReasonCount(errorCode);
+        if (errorCode < DATA_STALL_OFFSET_REASON_CODE) {
+            captureAlertData(errorCode, buffer);
+            mWifiMetrics.incrementAlertReasonCount(errorCode);
+        } else {
+            errorCode = errorCode - DATA_STALL_OFFSET_REASON_CODE;
+            captureAlertData(errorCode, buffer);
+            mWifiMetrics.incrementAlertReasonCount(errorCode);
+            Intent intent = new Intent(WifiManager.WIFI_DATA_STALL);
+            intent.putExtra(WifiManager.EXTRA_WIFI_DATA_STALL_REASON, errorCode);
+            mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+        }
     }
 
     private boolean isVerboseLoggingEnabled() {
@@ -518,6 +536,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
 
     private BugReport captureBugreport(int errorCode, boolean captureFWDump) {
         BugReport report = new BugReport();
+        mLog.warn("CaptureBugReport %").c(errorCode).flush();
         report.errorCode = errorCode;
         report.systemTimeMs = System.currentTimeMillis();
         report.kernelTimeNanos = System.nanoTime();

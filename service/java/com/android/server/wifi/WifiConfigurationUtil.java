@@ -202,6 +202,9 @@ public class WifiConfigurationUtil {
                     != newEnterpriseConfig.getPhase2Method()) {
                 return true;
             }
+            if (getEapSimNum(existingEnterpriseConfig) != getEapSimNum(newEnterpriseConfig)){
+                return true;
+            }
             if (!TextUtils.equals(existingEnterpriseConfig.getIdentity(),
                                   newEnterpriseConfig.getIdentity())
                     || !TextUtils.equals(existingEnterpriseConfig.getAnonymousIdentity(),
@@ -224,6 +227,15 @@ public class WifiConfigurationUtil {
             }
         }
         return false;
+    }
+
+    public static int getEapSimNum(WifiEnterpriseConfig enterpriseConfig){
+        int mSimNum =0;
+        if (enterpriseConfig.getSimNum() != null
+                             && !enterpriseConfig.getSimNum().isEmpty()) {
+            mSimNum = Integer.parseInt(enterpriseConfig.getSimNum());
+        }
+        return mSimNum;
     }
 
     /**
