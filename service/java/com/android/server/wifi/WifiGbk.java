@@ -48,7 +48,10 @@ public class WifiGbk {
     private static final String BSSID_REGIX = "(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}";
 
     // Max SSID Length
-    private static final int MAX_SSID_LENGTH = 30;
+    public static final int MAX_SSID_LENGTH = 32;
+
+    // Max UTF-8 SSID length: GBK SSID 32 bytes equals to UTF SSID 48 bytes
+    public static final int MAX_SSID_UTF_LENGTH = 48;
 
     // BSS cache of 'Non-ASCII SSID' (e.g. 'Chinese SSID').
     private static final ArrayList<BssCache> mBssCacheList = new ArrayList<>();
@@ -308,28 +311,41 @@ public class WifiGbk {
      */
     public static byte[] getRandUtfOrGbkBytes(String SSID)
                 throws IllegalArgumentException {
-        byte [] ssidBytes = NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(SSID));
+        byte [] utfBytes;
+        byte [] gbkBytes;
+        boolean utfSsidValid = false;
+        boolean gbkSsidValid = false;
 
-        // Important! check if ssidBytes exceed max length
-        if (ssidBytes.length > MAX_SSID_LENGTH) {
-            throw new IllegalArgumentException("Exceed max length 32, ssid=" + SSID);
+        // utfSsid
+        utfBytes = NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(SSID));
+        if (utfBytes == null || (utfBytes.length > MAX_SSID_UTF_LENGTH)) {
+            // Important! check if ssidBytes exceed max length
+            throw new IllegalArgumentException("Exceed max length " +
+                    MAX_SSID_UTF_LENGTH +  ", ssid=" + SSID);
+        }
+        if (utfBytes != null && (utfBytes.length <= MAX_SSID_LENGTH)) {
+            utfSsidValid = true;
         }
 
-        // check if need to consider GBK bytes
-        if (!isAllAscii(ssidBytes)) {
-            byte [] gbkBytes = getSsidBytes(SSID, "GBK");
-            if (gbkBytes != null) {
-                int rand = getBssRandom(SSID, BssCache.SECURITY_NONE);
-                logd("getRandUtfOrGbkBytes - ssid=" + SSID + " rand=" + rand);
-
-                // Randomly pick between UTF and GBK.
-                if (rand % 2 == 0) {
-                    return gbkBytes;
-                }
-            }
+        // gbkSsid
+        gbkBytes = isAllAscii(utfBytes) ? null : getSsidBytes(SSID, "GBK");
+        if (gbkBytes != null && gbkBytes.length <= MAX_SSID_LENGTH) {
+            gbkSsidValid = true;
         }
 
-        return ssidBytes;
+        if ((utfSsidValid == false) && (gbkSsidValid == true)) {
+            return gbkBytes;
+        } else if ((utfSsidValid == true) && (gbkSsidValid == false)){
+            return utfBytes;
+        } else if ((utfSsidValid == true) && (gbkSsidValid == true)) {
+            // random pick
+            int rand = getBssRandom(SSID, BssCache.SECURITY_NONE);
+            logd("getRandUtfOrGbkBytes - ssid=" + SSID + " rand=" + rand);
+            return (rand % 2 == 0) ? gbkBytes : utfBytes;
+        }
+
+        throw new IllegalArgumentException("No valid utfBytes or " +
+                "gbkBytes for ssid=" + SSID);
     }
 
 
@@ -422,8 +438,11 @@ public class WifiGbk {
            // Unsupported
         }
 
-        if (ssidBytes.length > MAX_SSID_LENGTH) {
-            loge("getSsidBytes - converted SSID exceed max length, ssid=" + ssid);
+        int maxlen = "UTF-8".equals(charsetName) ?
+                MAX_SSID_UTF_LENGTH : MAX_SSID_LENGTH;
+        if (ssidBytes.length > maxlen) {
+            loge("getSsidBytes - converted SSID exceed max length " +
+                    maxlen + ", ssid=" + ssid);
             ssidBytes = null;
         }
         return ssidBytes;
@@ -443,8 +462,11 @@ public class WifiGbk {
         } catch (CharacterCodingException cce) {
         }
 
-        if (ssid != null && ssid.length() > (MAX_SSID_LENGTH + 2)) {
-            loge("encodeSsid - converted SSID exceed max length, ssid=" + ssid);
+        int maxlen = "UTF-8".equals(name) ?
+                MAX_SSID_UTF_LENGTH : MAX_SSID_LENGTH;
+        if (ssid != null && ssid.length() > (maxlen + 2)) {
+            loge("encodeSsid - converted SSID exceed max length " +
+                    maxlen +  ", ssid=" + ssid);
             ssid = null;
         }
 
