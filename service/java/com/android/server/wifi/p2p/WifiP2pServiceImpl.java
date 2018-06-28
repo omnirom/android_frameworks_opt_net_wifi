@@ -1206,7 +1206,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             break;
                         }
                         mInterfaceName = mWifiNative.setupInterface((String ifaceName) -> {
+                            mIsInterfaceAvailable = false;
                             sendMessage(DISABLE_P2P);
+                            checkAndSendP2pStateChangedBroadcast();
                         }, getHandler());
                         if (mInterfaceName == null) {
                             Log.e(TAG, "Failed to setup interface for P2P");
