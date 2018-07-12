@@ -32,10 +32,12 @@ import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.WifiNative.HostapdDeathEventHandler;
 import com.android.server.wifi.util.NativeUtil;
+import com.android.server.wifi.WifiNative.SoftApListener;
 
 import javax.annotation.concurrent.ThreadSafe;
 
 import vendor.qti.hardware.wifi.hostapd.V1_0.IHostapdVendor;
+import vendor.qti.hardware.wifi.hostapd.V1_0.IHostapdVendorIfaceCallback;
 
 /**
  * To maintain thread-safety, the locking protocol is that every non-static method (regardless of
@@ -358,13 +360,13 @@ public class HostapdHal {
      *
      * @param ifaceName Name of the softap interface.
      * @param config Configuration to use for the AP.
+     * @param listener Callback for AP events.
      * @return true on success, false otherwise.
      */
-    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config) {
+    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config, SoftApListener listener) {
         synchronized (mLock) {
             final String methodStr = "addVendorAccessPoint";
             WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
-
             IHostapdVendor.VendorIfaceParams vendorIfaceParams = new IHostapdVendor.VendorIfaceParams();
             IHostapd.IfaceParams ifaceParams = vendorIfaceParams.ifaceParams;
             ifaceParams.ifaceName = ifaceName;
@@ -408,11 +410,23 @@ public class HostapdHal {
                 }
 
                 HostapdStatus status = mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams, nwParams);
-                return checkVendorStatusAndLogFailure(status, methodStr);
+                if (checkVendorStatusAndLogFailure(status, methodStr) && (mIHostapdVendor != null)) {
+                    IHostapdVendorIfaceCallback vendorcallback = new HostapdVendorIfaceHalCallback(ifaceName, listener);
+                    if (vendorcallback != null) {
+                        if (!registerVendorCallback(ifaceParams.ifaceName, mIHostapdVendor, vendorcallback)) {
+                            Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                            return false;
+                        }
+                    } else {
+                        Log.e(TAG, "Failed to create vendorcallback instance");
+                    }
+                    return true;
+                }
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
             }
+            return false;
         }
     }
 
@@ -679,7 +693,7 @@ public class HostapdHal {
                 return false;
             } else {
                 if (mVerboseLoggingEnabled) {
-                    Log.d(TAG, "IHostapdVendor." + methodStr + " succeeded");
+                    Log.e(TAG, "IHostapdVendor." + methodStr + " succeeded");
                 }
                 return true;
             }
@@ -703,5 +717,41 @@ public class HostapdHal {
 
     private static void loge(String s) {
         Log.e(TAG, s);
+    }
+
+    private class HostapdVendorIfaceHalCallback extends IHostapdVendorIfaceCallback.Stub {
+        private SoftApListener mSoftApListener;
+
+        HostapdVendorIfaceHalCallback(@NonNull String ifaceName, SoftApListener listener) {
+           mSoftApListener = listener;
+        }
+
+        @Override
+        public void onStaConnected(byte[/* 6 */] bssid) {
+                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
+                mSoftApListener.onStaConnected(bssidStr);
+        }
+
+        @Override
+        public void onStaDisconnected(byte[/* 6 */] bssid) {
+                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
+                mSoftApListener.onStaDisconnected(bssidStr);
+        }
+    }
+
+    /** See IHostapdVendor.hal for documentation */
+    private boolean registerVendorCallback(@NonNull String ifaceName,
+            IHostapdVendor service, IHostapdVendorIfaceCallback callback) {
+        synchronized (mLock) {
+            final String methodStr = "registerVendorCallback";
+            if (service == null) return false;
+            try {
+                HostapdStatus status =  service.registerVendorCallback(ifaceName, callback);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
     }
 }

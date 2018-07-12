@@ -401,7 +401,7 @@ public class SupplicantStaIfaceHal {
             mISupplicantStaIfaceCallbacks.put(ifaceName, callback);
         }
         /** creation vendor sta iface binder */
-        if (!vendor_setupIface(ifaceName))
+        if (!vendor_setupIface(ifaceName, callback))
             Log.e(TAG, "Failed to create vendor setupiface");
 
         return true;
@@ -413,7 +413,7 @@ public class SupplicantStaIfaceHal {
      * @param ifaceName Name of the interface.
      * @return true on success, false otherwise.
      */
-    public boolean vendor_setupIface(@NonNull String ifaceName) {
+    public boolean vendor_setupIface(@NonNull String ifaceName, SupplicantStaIfaceHalCallback callback) {
         final String methodStr = "vendor_setupIface";
         if (checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr) != null) {
             Log.e(TAG, "Already created vendor setupinterface");
@@ -443,7 +443,8 @@ public class SupplicantStaIfaceHal {
         }
 
         if (vendor_iface != null) {
-            ISupplicantVendorStaIfaceCallback vendorcallback = new SupplicantVendorStaIfaceHalCallback(ifaceName);
+            ISupplicantVendorStaIfaceCallback vendorcallback =
+                    new SupplicantVendorStaIfaceHalCallback(ifaceName, callback);
             if (!registerVendorCallback(vendor_iface, vendorcallback)) {
                 Log.e(TAG, "Failed to register Vendor callback");
             } else {
@@ -2742,10 +2743,11 @@ public class SupplicantStaIfaceHal {
 
     private class SupplicantVendorStaIfaceHalCallback extends ISupplicantVendorStaIfaceCallback.Stub {
         private String mIfaceName;
-        private boolean mStateIsFourway = false; // Used to help check for PSK password mismatch
+        private SupplicantStaIfaceHalCallback mSupplicantStaIfacecallback;
 
-        SupplicantVendorStaIfaceHalCallback(@NonNull String ifaceName) {
+        SupplicantVendorStaIfaceHalCallback(@NonNull String ifaceName, SupplicantStaIfaceHalCallback callback) {
             mIfaceName = ifaceName;
+            mSupplicantStaIfacecallback = callback;
         }
 
         @Override
@@ -2754,10 +2756,11 @@ public class SupplicantStaIfaceHal {
             synchronized (mLock) {
                 logCallback("onVendorStateChanged");
                 SupplicantState newSupplicantState = supplicantHidlStateToFrameworkState(newState);
-                WifiSsid wifiSsid =
-                        WifiSsid.createFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
+                WifiSsid wifiSsid = // wifigbk++
+                        WifiGbk.createWifiSsidFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
                 String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
-                mStateIsFourway = (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE);
+                mSupplicantStaIfacecallback.updateStateIsFourway(
+                        (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE));
                 if (newSupplicantState == SupplicantState.COMPLETED) {
                     if (filsHlpSent == false) {
                         mWifiMonitor.broadcastNetworkConnectionEvent(
@@ -3097,6 +3100,13 @@ public class SupplicantStaIfaceHal {
         public void onExtRadioWorkTimeout(int id) {
             synchronized (mLock) {
                 logCallback("onExtRadioWorkTimeout");
+            }
+        }
+
+        public void updateStateIsFourway(boolean stateIsFourway) {
+            synchronized (mLock) {
+                logCallback("updateStateIsFourway");
+                mStateIsFourway = stateIsFourway;
             }
         }
 

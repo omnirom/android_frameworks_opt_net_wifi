@@ -1256,6 +1256,16 @@ public class WifiNative {
          * Invoked when the channel switch event happens.
          */
         void onSoftApChannelSwitched(int frequency, int bandwidth);
+
+        /**
+         * Invoked when the station connected to Any AP.
+         */
+        void onStaConnected(String bssidStr);
+
+        /**
+         * Invoked when the station disconnected to Any AP.
+         */
+        void onStaDisconnected(String bssidStr);
     }
 
     private static final int CONNECT_TO_HOSTAPD_RETRY_INTERVAL_MS = 100;
@@ -1314,7 +1324,7 @@ public class WifiNative {
         }
 
         if (mHostapdHal.isVendorHostapdHal()) {
-            if (!mHostapdHal.addVendorAccessPoint(ifaceName, config)) {
+            if (!mHostapdHal.addVendorAccessPoint(ifaceName, config, listener)) {
                 Log.e(TAG, "Failed to add Vendor acccess point");
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
                 return false;
