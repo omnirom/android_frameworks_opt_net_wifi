@@ -91,6 +91,7 @@ public class SoftApManager implements ActiveModeManager {
     private int mReportedBandwidth = -1;
 
     private int mNumAssociatedStations = 0;
+    private int mQCNumAssociatedStations = 0;
     private boolean mTimeoutEnabled = false;
     private String[] mdualApInterfaces;
 
@@ -108,6 +109,18 @@ public class SoftApManager implements ActiveModeManager {
         public void onSoftApChannelSwitched(int frequency, int bandwidth) {
             mStateMachine.sendMessage(
                     SoftApStateMachine.CMD_SOFT_AP_CHANNEL_SWITCHED, frequency, bandwidth);
+        }
+
+        @Override
+        public void onStaConnected(String Macaddr) {
+            mStateMachine.sendMessage(
+                    SoftApStateMachine.CMD_CONNECTED_STATIONS, Macaddr);
+        }
+
+        @Override
+        public void onStaDisconnected(String Macaddr) {
+            mStateMachine.sendMessage(
+                    SoftApStateMachine.CMD_DISCONNECTED_STATIONS, Macaddr);
         }
     };
 
@@ -289,6 +302,8 @@ public class SoftApManager implements ActiveModeManager {
         public static final int CMD_INTERFACE_DESTROYED = 7;
         public static final int CMD_INTERFACE_DOWN = 8;
         public static final int CMD_SOFT_AP_CHANNEL_SWITCHED = 9;
+        public static final int CMD_CONNECTED_STATIONS = 10;
+        public static final int CMD_DISCONNECTED_STATIONS = 11;
 
         private final State mIdleState = new IdleState();
         private final State mStartedState = new StartedState();
@@ -541,7 +556,36 @@ public class SoftApManager implements ActiveModeManager {
                 }
             }
 
-            private void onUpChanged(boolean isUp) {
+            /**
+             * Set New connected stations with this soft AP
+             * @param Macaddr Mac address of connected stations
+             */
+            private void setConnectedStations(String Macaddr) {
+
+                mQCNumAssociatedStations++;
+                if (mCallback != null) {
+                    mCallback.onStaConnected(Macaddr,mQCNumAssociatedStations);
+                } else {
+                    Log.e(TAG, "SoftApCallback is null. Dropping onStaConnected event.");
+                }
+            }
+
+            /**
+             * Set Disconnected stations with this soft AP
+             * @param Macaddr Mac address of Disconnected stations
+             */
+            private void setDisConnectedStations(String Macaddr) {
+
+                if (mQCNumAssociatedStations > 0)
+                     mQCNumAssociatedStations--;
+                if (mCallback != null) {
+                    mCallback.onStaDisconnected(Macaddr, mQCNumAssociatedStations);
+                } else {
+                    Log.e(TAG, "SoftApCallback is null. Dropping onStaDisconnected event.");
+                }
+            }
+
+           private void onUpChanged(boolean isUp) {
                 if (isUp == mIfaceIsUp) {
                     return;  // no change
                 }
@@ -643,6 +687,22 @@ public class SoftApManager implements ActiveModeManager {
                                     + mReportedFrequency);
                             mWifiMetrics.incrementNumSoftApUserBandPreferenceUnsatisfied();
                         }
+                        break;
+                    case CMD_CONNECTED_STATIONS:
+                        if (message.obj == null) {
+                            Log.e(TAG, "Invalid Macaddr of connected station: " + message.obj);
+                            break;
+                        }
+                        Log.d(TAG, "Setting Macaddr of stations on CMD_CONNECTED_STATIONS");
+                        setConnectedStations((String) message.obj);
+                        break;
+                    case CMD_DISCONNECTED_STATIONS:
+                        if (message.obj == null) {
+                            Log.e(TAG, "Invalid Macaddr of disconnected station: " + message.obj);
+                            break;
+                        }
+                        Log.d(TAG, "Setting Macaddr of stations on CMD_DISCONNECTED_STATIONS");
+                        setDisConnectedStations((String) message.obj);
                         break;
                     case CMD_TIMEOUT_TOGGLE_CHANGED:
                         boolean isEnabled = (message.arg1 == 1);
