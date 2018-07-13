@@ -69,12 +69,14 @@ import android.net.wifi.WifiDppConfig.DppResult;
 import android.os.BatteryStats;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.INetworkManagementService;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.PowerManager;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.WorkSource;
@@ -191,6 +193,7 @@ public class WifiStateMachine extends StateMachine {
     private BaseWifiDiagnostics mWifiDiagnostics;
     private ScanRequestProxy mScanRequestProxy;
     private WifiP2pServiceImpl wifiP2pServiceImpl;
+    private WifiTrafficPoller mTrafficPoller;
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
@@ -211,6 +214,8 @@ public class WifiStateMachine extends StateMachine {
     private boolean mScreenOn = false;
 
     private String mInterfaceName;
+    /* The interface for ipClient */
+    private String mDataInterfaceName;
 
     private int mLastSignalLevel = -1;
     private String mLastBssid;
@@ -1103,6 +1108,12 @@ public class WifiStateMachine extends StateMachine {
         mWifiDiagnostics = WifiDiagnostics;
     }
 
+    public void setTrafficPoller(WifiTrafficPoller trafficPoller) {
+        mTrafficPoller = trafficPoller;
+        if (mTrafficPoller != null) {
+            mTrafficPoller.setInterface(mDataInterfaceName);
+        }
+    }
 
     PendingIntent getPrivateBroadcast(String action, int requestCode) {
         Intent intent = new Intent(action, null);
@@ -1160,6 +1171,26 @@ public class WifiStateMachine extends StateMachine {
     public void clearANQPCache() {
         // TODO(b/31065385)
         // mWifiConfigManager.trimANQPCache(true);
+    }
+
+    private void updateDataInterface() {
+        String dataInterfaceName = mWifiNative.getFstDataInterfaceName();
+        if (TextUtils.isEmpty(dataInterfaceName)) {
+            dataInterfaceName = mInterfaceName;
+        }
+        mDataInterfaceName = dataInterfaceName;
+
+        if (mIpClient != null) {
+            mIpClient.shutdown();
+        }
+
+        mIpClient = mFacade.makeIpClient(
+                mContext, mDataInterfaceName, new IpClientCallback());
+        mIpClient.setMulticastFilter(true);
+
+        if (mTrafficPoller != null) {
+            mTrafficPoller.setInterface(mDataInterfaceName);
+        }
     }
 
     private boolean setRandomMacOui() {
@@ -1313,8 +1344,8 @@ public class WifiStateMachine extends StateMachine {
             mRunningBeaconCount = stats.beacon_rx;
             mWifiInfo.updatePacketRates(stats, lastLinkLayerStatsUpdate);
         } else {
-            long mTxPkts = mFacade.getTxPackets(mInterfaceName);
-            long mRxPkts = mFacade.getRxPackets(mInterfaceName);
+            long mTxPkts = mFacade.getTxPackets(mDataInterfaceName);
+            long mRxPkts = mFacade.getRxPackets(mDataInterfaceName);
             mWifiInfo.updatePacketRates(mTxPkts, mRxPkts, lastLinkLayerStatsUpdate);
         }
         return stats;
@@ -3814,8 +3845,7 @@ public class WifiStateMachine extends StateMachine {
             }
         }
 
-        mIpClient = mFacade.makeIpClient(mContext, mInterfaceName, new IpClientCallback());
-        mIpClient.setMulticastFilter(true);
+        updateDataInterface();
         registerForWifiMonitorEvents();
         mWifiInjector.getWifiLastResortWatchdog().clearAllFailureCounts();
         setSupplicantLogLevel();
@@ -3902,6 +3932,7 @@ public class WifiStateMachine extends StateMachine {
         if (mNetworkAgent != null) mNetworkAgent.sendNetworkInfo(mNetworkInfo);
         mCountryCode.setReadyForChange(false);
         mInterfaceName = null;
+        mDataInterfaceName = null;
         // TODO: b/79504296 This broadcast has been deprecated and should be removed
         sendSupplicantConnectionChangedBroadcast(false);
     }
