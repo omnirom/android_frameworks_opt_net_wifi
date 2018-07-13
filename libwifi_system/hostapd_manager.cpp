@@ -18,25 +18,36 @@
 
 #include <android-base/logging.h>
 #include <cutils/properties.h>
+#include "wifi_fst.h"
 
 namespace android {
 namespace wifi_system {
 const char kHostapdServiceName[] = "hostapd";
+const char kHostapdFSTServiceName[] = "hostapd_fst";
 const char kHostapdFullServiceName[] = "init.svc.hostapd";
+const char kHostapdFSTFullServiceName[] = "init.svc.hostapd_fst";
 
 bool HostapdManager::StartHostapd() {
 
   // Check if hostapd already started
   char hostapd_status[PROPERTY_VALUE_MAX];
-  property_get(kHostapdFullServiceName, hostapd_status, "");
+  property_get(is_fst_softap_enabled() ? kHostapdFSTFullServiceName :
+    kHostapdFullServiceName, hostapd_status, "");
 
   if (strcmp(hostapd_status, "running") == 0) {
     LOG(DEBUG) << "SoftAP already started. Skip another start";
     return true;
   }
 
-  if (property_set("ctl.start", kHostapdServiceName) != 0) {
+  if (wifi_start_fstman(1)) {
+    return false;
+  }
+
+  if (property_set("ctl.start",
+                   is_fst_softap_enabled() ?
+                     kHostapdFSTServiceName : kHostapdServiceName) != 0) {
     LOG(ERROR) << "Failed to start SoftAP";
+    wifi_stop_fstman(1);
     return false;
   }
 
@@ -49,18 +60,24 @@ bool HostapdManager::StopHostapd() {
 
   // Check if hostapd already stopped
   char hostapd_status[PROPERTY_VALUE_MAX];
-  property_get(kHostapdFullServiceName, hostapd_status, "");
+  property_get(is_fst_softap_enabled() ? kHostapdFSTFullServiceName :
+    kHostapdFullServiceName, hostapd_status, "");
 
   if (!strlen(hostapd_status) || strcmp(hostapd_status, "stopped") == 0) {
     LOG(DEBUG) << "SoftAP already stopped. Skip another stop";
+    wifi_stop_fstman(1);
     return true;
   }
 
-  if (property_set("ctl.stop", kHostapdServiceName) < 0) {
+  if (property_set("ctl.stop",
+                   is_fst_softap_enabled() ?
+                     kHostapdFSTServiceName : kHostapdServiceName) < 0) {
     LOG(ERROR) << "Failed to stop hostapd service!";
+    wifi_stop_fstman(1);
     return false;
   }
 
+  wifi_stop_fstman(1);
   LOG(DEBUG) << "SoftAP stopped successfully";
   return true;
 }

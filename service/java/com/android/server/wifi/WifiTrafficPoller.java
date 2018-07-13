@@ -72,6 +72,8 @@ public class WifiTrafficPoller {
     private final WifiNative mWifiNative;
     private NetworkInfo mNetworkInfo;
 
+    private String mInterface;
+
     private boolean mVerboseLoggingEnabled = false;
 
     WifiTrafficPoller(@NonNull Context context, @NonNull Looper looper,
@@ -110,6 +112,16 @@ public class WifiTrafficPoller {
         Message.obtain(mTrafficHandler, ADD_CLIENT, client).sendToTarget();
     }
 
+    void setInterface(String iface) {
+        if (DBG) {
+            Log.e(TAG, "setInterface: " + iface);
+        }
+        mTxPkts = mRxPkts = 0;
+        mDataActivity = 0;
+        mNetworkInfo = null;
+        mInterface = iface;
+    }
+
     /** */
     public void removeClient(Messenger client) {
         Message.obtain(mTrafficHandler, REMOVE_CLIENT, client).sendToTarget();
@@ -139,7 +151,8 @@ public class WifiTrafficPoller {
                                 + Integer.toString(mTrafficStatsPollToken));
                     }
                     mTrafficStatsPollToken++;
-                    ifaceName = mWifiNative.getClientInterfaceName();
+                    ifaceName = TextUtils.isEmpty(mInterface) ?
+                                mWifiNative.getClientInterfaceName() : mInterface;
                     if (mEnableTrafficStatsPoll && !TextUtils.isEmpty(ifaceName)) {
                         notifyOnDataActivity(ifaceName);
                         sendMessageDelayed(Message.obtain(this, TRAFFIC_STATS_POLL,
@@ -154,7 +167,8 @@ public class WifiTrafficPoller {
                                 + " num clients " + mClients.size());
                     }
                     if (msg.arg1 == mTrafficStatsPollToken) {
-                        ifaceName = mWifiNative.getClientInterfaceName();
+                        ifaceName = TextUtils.isEmpty(mInterface) ?
+                                    mWifiNative.getClientInterfaceName() : mInterface;
                         if (!TextUtils.isEmpty(ifaceName)) {
                             notifyOnDataActivity(ifaceName);
                             sendMessageDelayed(Message.obtain(this, TRAFFIC_STATS_POLL,
