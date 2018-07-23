@@ -365,46 +365,49 @@ public class SupplicantStaIfaceHal {
      * @return true on success, false otherwise.
      */
     public boolean setupIface(@NonNull String ifaceName) {
-        final String methodStr = "setupIface";
-        if (checkSupplicantStaIfaceAndLogFailure(ifaceName, methodStr) != null) return false;
-        ISupplicantIface ifaceHwBinder;
+        synchronized (mLock) {
+            final String methodStr = "setupIface";
+            if (checkSupplicantStaIfaceAndLogFailure(ifaceName, methodStr) != null) return false;
+            if (!checkSupplicantAndLogFailure(methodStr)) return false;
+            ISupplicantIface ifaceHwBinder;
 
-        if (isV1_1()) {
-            ifaceHwBinder = addIfaceV1_1(ifaceName);
-        } else {
-            ifaceHwBinder = getIfaceV1_0(ifaceName);
-        }
-        if (ifaceHwBinder == null) {
-            Log.e(TAG, "setupIface got null iface");
-            return false;
-        }
-        SupplicantStaIfaceHalCallback callback = new SupplicantStaIfaceHalCallback(ifaceName);
-
-        if (isV1_1()) {
-            android.hardware.wifi.supplicant.V1_1.ISupplicantStaIface iface =
-                getStaIfaceMockableV1_1(ifaceHwBinder);
-            SupplicantStaIfaceHalCallbackV1_1 callbackV1_1 =
-                new SupplicantStaIfaceHalCallbackV1_1(ifaceName, callback);
-
-            if (!registerCallbackV1_1(iface, callbackV1_1)) {
+            if (isV1_1()) {
+                ifaceHwBinder = addIfaceV1_1(ifaceName);
+            } else {
+                ifaceHwBinder = getIfaceV1_0(ifaceName);
+            }
+            if (ifaceHwBinder == null) {
+                Log.e(TAG, "setupIface got null iface");
                 return false;
             }
-            mISupplicantStaIfaces.put(ifaceName, iface);
-            mISupplicantStaIfaceCallbacks.put(ifaceName, callbackV1_1);
-        } else {
-            ISupplicantStaIface iface = getStaIfaceMockable(ifaceHwBinder);
+            SupplicantStaIfaceHalCallback callback = new SupplicantStaIfaceHalCallback(ifaceName);
 
-            if (!registerCallback(iface, callback)) {
-                return false;
+            if (isV1_1()) {
+                android.hardware.wifi.supplicant.V1_1.ISupplicantStaIface iface =
+                    getStaIfaceMockableV1_1(ifaceHwBinder);
+                SupplicantStaIfaceHalCallbackV1_1 callbackV1_1 =
+                    new SupplicantStaIfaceHalCallbackV1_1(ifaceName, callback);
+
+                if (!registerCallbackV1_1(iface, callbackV1_1)) {
+                    return false;
+                }
+                mISupplicantStaIfaces.put(ifaceName, iface);
+                mISupplicantStaIfaceCallbacks.put(ifaceName, callbackV1_1);
+            } else {
+                ISupplicantStaIface iface = getStaIfaceMockable(ifaceHwBinder);
+
+                if (!registerCallback(iface, callback)) {
+                    return false;
+                }
+                mISupplicantStaIfaces.put(ifaceName, iface);
+                mISupplicantStaIfaceCallbacks.put(ifaceName, callback);
             }
-            mISupplicantStaIfaces.put(ifaceName, iface);
-            mISupplicantStaIfaceCallbacks.put(ifaceName, callback);
-        }
-        /** creation vendor sta iface binder */
-        if (!vendor_setupIface(ifaceName, callback))
-            Log.e(TAG, "Failed to create vendor setupiface");
+            /** creation vendor sta iface binder */
+            if (!vendor_setupIface(ifaceName, callback))
+                Log.e(TAG, "Failed to create vendor setupiface");
 
-        return true;
+            return true;
+        }
     }
 
     /**
@@ -518,8 +521,10 @@ public class SupplicantStaIfaceHal {
      */
     private ISupplicantIface getIfaceV1_0(@NonNull String ifaceName) {
         synchronized (mLock) {
+            final String methodStr = "getIfaceV1_0";
             /** List all supplicant Ifaces */
             final ArrayList<ISupplicant.IfaceInfo> supplicantIfaces = new ArrayList<>();
+            if (!checkSupplicantAndLogFailure(methodStr)) return null;
             try {
                 mISupplicant.listInterfaces((SupplicantStatus status,
                                              ArrayList<ISupplicant.IfaceInfo> ifaces) -> {
@@ -654,11 +659,13 @@ public class SupplicantStaIfaceHal {
      * @return Returns true on success.
      */
     public boolean registerDeathHandler(@NonNull SupplicantDeathEventHandler handler) {
-        if (mDeathEventHandler != null) {
-            Log.e(TAG, "Death handler already present");
+        synchronized (mLock) {
+            if (mDeathEventHandler != null) {
+                Log.e(TAG, "Death handler already present");
+            }
+            mDeathEventHandler = handler;
+            return true;
         }
-        mDeathEventHandler = handler;
-        return true;
     }
 
     /**
@@ -666,11 +673,13 @@ public class SupplicantStaIfaceHal {
      * @return Returns true on success.
      */
     public boolean deregisterDeathHandler() {
-        if (mDeathEventHandler == null) {
-            Log.e(TAG, "No Death handler present");
+        synchronized (mLock) {
+            if (mDeathEventHandler == null) {
+                Log.e(TAG, "No Death handler present");
+            }
+            mDeathEventHandler = null;
+            return true;
         }
-        mDeathEventHandler = null;
-        return true;
     }
 
 
