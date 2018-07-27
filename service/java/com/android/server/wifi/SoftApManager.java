@@ -603,6 +603,7 @@ public class SoftApManager implements ActiveModeManager {
                     mWifiMetrics.incrementSoftApStartResult(true, 0);
                     if (mCallback != null) {
                         mCallback.onNumClientsChanged(mNumAssociatedStations);
+                        mCallback.onStaConnected("", mQCNumAssociatedStations);
                     }
                 } else {
                     // the interface was up, but goes down
@@ -628,6 +629,7 @@ public class SoftApManager implements ActiveModeManager {
                 }
                 Log.d(TAG, "Resetting num stations on start");
                 mNumAssociatedStations = 0;
+                mQCNumAssociatedStations = 0;
                 scheduleTimeoutMessage();
             }
 
@@ -641,6 +643,7 @@ public class SoftApManager implements ActiveModeManager {
                 }
                 Log.d(TAG, "Resetting num stations on stop");
                 mNumAssociatedStations = 0;
+                mQCNumAssociatedStations = 0;
                 cancelTimeoutMessage();
                 // Need this here since we are exiting |Started| state and won't handle any
                 // future CMD_INTERFACE_STATUS_CHANGED events after this point
