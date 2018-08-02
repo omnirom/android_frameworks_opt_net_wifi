@@ -25,11 +25,12 @@ import android.util.Log;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.Locale;
 
 /**
  * Provide functions for making changes to WiFi country code.
  * This Country Code is from MCC or phone default setting. This class sends Country Code
- * to driver through wpa_supplicant when WifiStateMachine marks current state as ready
+ * to driver through wpa_supplicant when ClientModeImpl marks current state as ready
  * using setReadyForChange(true).
  */
 public class WifiCountryCode {
@@ -58,7 +59,7 @@ public class WifiCountryCode {
         mRevertCountryCodeOnCellularLoss = revertCountryCodeOnCellularLoss;
 
         if (!TextUtils.isEmpty(oemDefaultCountryCode)) {
-            mDefaultCountryCode = oemDefaultCountryCode.toUpperCase();
+            mDefaultCountryCode = oemDefaultCountryCode.toUpperCase(Locale.US);
         } else {
             if (mRevertCountryCodeOnCellularLoss) {
                 Log.w(TAG, "config_wifi_revert_country_code_on_cellular_loss is set, "
@@ -138,7 +139,7 @@ public class WifiCountryCode {
                 mTelephonyCountryCode = null;
             }
         } else {
-            mTelephonyCountryCode = countryCode.toUpperCase();
+            mTelephonyCountryCode = countryCode.toUpperCase(Locale.US);
         }
         // If wpa_supplicant is ready we set the country code now, otherwise it will be
         // set once wpa_supplicant is ready.

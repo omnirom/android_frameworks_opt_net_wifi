@@ -80,7 +80,7 @@ public class OpenNetworkNotifierTest {
     @Mock private WifiConfigStore mWifiConfigStore;
     @Mock private WifiConfigManager mWifiConfigManager;
     @Mock private NotificationManager mNotificationManager;
-    @Mock private WifiStateMachine mWifiStateMachine;
+    @Mock private ClientModeImpl mClientModeImpl;
     @Mock private ConnectToNetworkNotificationBuilder mNotificationBuilder;
     @Mock private UserManager mUserManager;
     private OpenNetworkNotifier mNotificationController;
@@ -117,7 +117,7 @@ public class OpenNetworkNotifierTest {
         mLooper = new TestLooper();
         mNotificationController = new OpenNetworkNotifier(
                 mContext, mLooper.getLooper(), mFrameworkFacade, mClock, mWifiMetrics,
-                mWifiConfigManager, mWifiConfigStore, mWifiStateMachine, mNotificationBuilder);
+                mWifiConfigManager, mWifiConfigStore, mClientModeImpl, mNotificationBuilder);
         ArgumentCaptor<BroadcastReceiver> broadcastReceiverCaptor =
                 ArgumentCaptor.forClass(BroadcastReceiver.class);
         verify(mContext).registerReceiver(broadcastReceiverCaptor.capture(), any(), any(), any());
@@ -395,10 +395,33 @@ public class OpenNetworkNotifierTest {
         List<ScanDetail> scanResults = mOpenNetworks;
         mNotificationController.handleScanResults(scanResults);
 
-        Set<String> expectedBlacklist = new ArraySet<>();
-        expectedBlacklist.add(mDummyNetwork.SSID);
-        verify(mWifiMetrics).setNetworkRecommenderBlacklistSize(OPEN_NET_NOTIFIER_TAG,
-                expectedBlacklist.size());
+        verify(mWifiMetrics).setNetworkRecommenderBlacklistSize(OPEN_NET_NOTIFIER_TAG, 1);
+    }
+
+    /**
+     * When the user chooses to connect to recommended network, network ssid should be
+     * blacklisted so that if the user removes the network in the future the same notification
+     * won't show up again.
+     */
+    @Test
+    public void userConnectedNotification_shouldBlacklistNetwork() {
+        mNotificationController.handleScanResults(mOpenNetworks);
+
+        verify(mNotificationBuilder).createConnectToAvailableNetworkNotification(
+                OPEN_NET_NOTIFIER_TAG, mDummyNetwork);
+        verify(mWifiMetrics).incrementConnectToNetworkNotification(OPEN_NET_NOTIFIER_TAG,
+                ConnectToNetworkNotificationAndActionCount.NOTIFICATION_RECOMMEND_NETWORK);
+        verify(mNotificationManager).notify(anyInt(), any());
+
+        mBroadcastReceiver.onReceive(mContext, createIntent(ACTION_CONNECT_TO_NETWORK));
+
+        verify(mWifiConfigManager).saveToStore(false /* forceWrite */);
+
+        mNotificationController.clearPendingNotification(true);
+        List<ScanDetail> scanResults = mOpenNetworks;
+        mNotificationController.handleScanResults(scanResults);
+
+        verify(mWifiMetrics).setNetworkRecommenderBlacklistSize(OPEN_NET_NOTIFIER_TAG, 1);
     }
 
     /**
@@ -467,7 +490,7 @@ public class OpenNetworkNotifierTest {
     public void actionConnectToNetwork_notificationNotShowing_doesNothing() {
         mBroadcastReceiver.onReceive(mContext, createIntent(ACTION_CONNECT_TO_NETWORK));
 
-        verify(mWifiStateMachine, never()).sendMessage(any(Message.class));
+        verify(mClientModeImpl, never()).sendMessage(any(Message.class));
     }
 
     /**
@@ -487,7 +510,7 @@ public class OpenNetworkNotifierTest {
 
         mBroadcastReceiver.onReceive(mContext, createIntent(ACTION_CONNECT_TO_NETWORK));
 
-        verify(mWifiStateMachine).sendMessage(any(Message.class));
+        verify(mClientModeImpl).sendMessage(any(Message.class));
         // Connecting Notification
         verify(mNotificationBuilder).createNetworkConnectingNotification(OPEN_NET_NOTIFIER_TAG,
                 mDummyNetwork);
@@ -645,7 +668,7 @@ public class OpenNetworkNotifierTest {
 
     /**
      * When a {@link WifiManager#CONNECT_NETWORK_FAILED} is received from the connection callback
-     * of {@link WifiStateMachine#sendMessage(Message)}, a Failed to Connect notification should
+     * of {@link ClientModeImpl#sendMessage(Message)}, a Failed to Connect notification should
      * be posted. On tapping this notification, Wi-Fi Settings should be launched.
      */
     @Test
@@ -662,7 +685,7 @@ public class OpenNetworkNotifierTest {
         mBroadcastReceiver.onReceive(mContext, createIntent(ACTION_CONNECT_TO_NETWORK));
 
         ArgumentCaptor<Message> connectMessageCaptor = ArgumentCaptor.forClass(Message.class);
-        verify(mWifiStateMachine).sendMessage(connectMessageCaptor.capture());
+        verify(mClientModeImpl).sendMessage(connectMessageCaptor.capture());
         Message connectMessage = connectMessageCaptor.getValue();
 
         // Connecting Notification

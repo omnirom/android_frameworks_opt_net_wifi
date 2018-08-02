@@ -70,7 +70,9 @@ LOCAL_STATIC_JAVA_LIBRARIES := \
 	vendor.qti.hardware.wifi.hostapd-V1.0-java \
 	android.hardware.wifi.supplicant-V1.0-java \
 	vendor.qti.hardware.wifi.supplicant-V2.0-java \
-	android.hardware.wifi.supplicant-V1.1-java
+	android.hardware.wifi.supplicant-V1.1-java \
+	ksoap2
+
 LOCAL_REQUIRED_MODULES := \
 	services \
 	libwifi-service \

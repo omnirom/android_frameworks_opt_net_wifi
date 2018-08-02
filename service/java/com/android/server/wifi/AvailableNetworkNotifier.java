@@ -59,7 +59,7 @@ import java.util.Set;
 /**
  * Base class for all network notifiers (e.g. OpenNetworkNotifier, CarrierNetworkNotifier).
  *
- * NOTE: These API's are not thread safe and should only be used from WifiStateMachine thread.
+ * NOTE: These API's are not thread safe and should only be used from WifiCoreThread.
  */
 public class AvailableNetworkNotifier {
 
@@ -124,7 +124,7 @@ public class AvailableNetworkNotifier {
     private final WifiMetrics mWifiMetrics;
     private final Clock mClock;
     private final WifiConfigManager mConfigManager;
-    private final WifiStateMachine mWifiStateMachine;
+    private final ClientModeImpl mClientModeImpl;
     private final Messenger mSrcMessenger;
     private final ConnectToNetworkNotificationBuilder mNotificationBuilder;
 
@@ -152,7 +152,7 @@ public class AvailableNetworkNotifier {
             WifiMetrics wifiMetrics,
             WifiConfigManager wifiConfigManager,
             WifiConfigStore wifiConfigStore,
-            WifiStateMachine wifiStateMachine,
+            ClientModeImpl clientModeImpl,
             ConnectToNetworkNotificationBuilder connectToNetworkNotificationBuilder) {
         mTag = tag;
         mStoreDataIdentifier = storeDataIdentifier;
@@ -164,7 +164,7 @@ public class AvailableNetworkNotifier {
         mWifiMetrics = wifiMetrics;
         mClock = clock;
         mConfigManager = wifiConfigManager;
-        mWifiStateMachine = wifiStateMachine;
+        mClientModeImpl = clientModeImpl;
         mNotificationBuilder = connectToNetworkNotificationBuilder;
         mScreenOn = false;
         mSrcMessenger = new Messenger(new Handler(looper, mConnectionStateCallback));
@@ -425,7 +425,8 @@ public class AvailableNetworkNotifier {
         msg.arg1 = WifiConfiguration.INVALID_NETWORK_ID;
         msg.obj = network;
         msg.replyTo = mSrcMessenger;
-        mWifiStateMachine.sendMessage(msg);
+        mClientModeImpl.sendMessage(msg);
+        addNetworkToBlacklist(mRecommendedNetwork.SSID);
 
         mState = STATE_CONNECTING_IN_NOTIFICATION;
         mHandler.postDelayed(
@@ -435,6 +436,14 @@ public class AvailableNetworkNotifier {
                     }
                 },
                 TIME_TO_SHOW_CONNECTING_MILLIS);
+    }
+
+    private void addNetworkToBlacklist(String ssid) {
+        mBlacklistedSsids.add(ssid);
+        mWifiMetrics.setNetworkRecommenderBlacklistSize(mTag, mBlacklistedSsids.size());
+        mConfigManager.saveToStore(false /* forceWrite */);
+        Log.d(mTag, "Network is added to the network notification blacklist: "
+                + ssid);
     }
 
     WifiConfiguration createRecommendedNetworkConfig(ScanResult recommendedNetwork) {
@@ -474,11 +483,7 @@ public class AvailableNetworkNotifier {
                 ConnectToNetworkNotificationAndActionCount.ACTION_USER_DISMISSED_NOTIFICATION);
         if (mState == STATE_SHOWING_RECOMMENDATION_NOTIFICATION) {
             // blacklist dismissed network
-            mBlacklistedSsids.add(mRecommendedNetwork.SSID);
-            mWifiMetrics.setNetworkRecommenderBlacklistSize(mTag, mBlacklistedSsids.size());
-            mConfigManager.saveToStore(false /* forceWrite */);
-            Log.d(mTag, "Network is added to the network notification blacklist: "
-                    + mRecommendedNetwork.SSID);
+            addNetworkToBlacklist(mRecommendedNetwork.SSID);
         }
         resetStateAndDelayNotification();
     }

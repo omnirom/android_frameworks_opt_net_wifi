@@ -423,7 +423,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     synchronized void onWifiAlert(int errorCode, @NonNull byte[] buffer) {
         if (errorCode < DATA_STALL_OFFSET_REASON_CODE) {
             captureAlertData(errorCode, buffer);
-            mWifiMetrics.incrementAlertReasonCount(errorCode);
+            mWifiMetrics.logFirmwareAlert(errorCode);
         } else {
             errorCode = errorCode - DATA_STALL_OFFSET_REASON_CODE;
             captureAlertData(errorCode, buffer);

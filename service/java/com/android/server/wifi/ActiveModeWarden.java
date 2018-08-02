@@ -39,12 +39,9 @@ import java.io.PrintWriter;
 
 /**
  * This class provides the implementation for different WiFi operating modes.
- *
- * NOTE: The class is a WIP and is in active development.  It is intended to replace the existing
- * WifiStateMachine.java class when the rearchitecture is complete.
  */
-public class WifiStateMachinePrime {
-    private static final String TAG = "WifiStateMachinePrime";
+public class ActiveModeWarden {
+    private static final String TAG = "WifiActiveModeWarden";
 
     private ModeStateMachine mModeStateMachine;
 
@@ -66,7 +63,7 @@ public class WifiStateMachinePrime {
     // The base for wifi message types
     static final int BASE = Protocol.BASE_WIFI;
 
-    // The message identifiers below are mapped to those in WifiStateMachine when applicable.
+    // The message identifiers below are mapped to those in ClientModeImpl when applicable.
     // Start the soft access point
     static final int CMD_START_AP                                       = BASE + 21;
     // Indicates soft ap start failed
@@ -125,12 +122,12 @@ public class WifiStateMachinePrime {
         mClientModeCallback = callback;
     }
 
-    WifiStateMachinePrime(WifiInjector wifiInjector,
-                          Context context,
-                          Looper looper,
-                          WifiNative wifiNative,
-                          DefaultModeManager defaultModeManager,
-                          IBatteryStats batteryStats) {
+    ActiveModeWarden(WifiInjector wifiInjector,
+                     Context context,
+                     Looper looper,
+                     WifiNative wifiNative,
+                     DefaultModeManager defaultModeManager,
+                     IBatteryStats batteryStats) {
         mWifiInjector = wifiInjector;
         mContext = context;
         mLooper = looper;
@@ -222,7 +219,7 @@ public class WifiStateMachinePrime {
     /**
      * Dump current state for active mode managers.
      *
-     * Must be called from WifiStateMachine thread.
+     * Must be called from ClientModeImpl thread.
      */
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println("Dump of " + TAG);

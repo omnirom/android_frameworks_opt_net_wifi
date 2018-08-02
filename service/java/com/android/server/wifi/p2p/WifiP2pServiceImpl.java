@@ -79,8 +79,8 @@ import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
+import com.android.server.wifi.ClientModeImpl;
 import com.android.server.wifi.WifiInjector;
-import com.android.server.wifi.WifiStateMachine;
 import com.android.server.wifi.util.WifiAsyncChannel;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.util.WifiHandler;
@@ -158,7 +158,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     public static final int DISABLE_P2P_TIMED_OUT           =   BASE + 6;
 
 
-    // Commands to the WifiStateMachine
+    // Commands to the ClientModeImpl
     public static final int P2P_CONNECTION_CHANGED          =   BASE + 11;
 
     // These commands are used to temporarily disconnect wifi when we detect
@@ -533,7 +533,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     }
 
     /**
-     * Get a reference to handler. This is used by a WifiStateMachine to establish
+     * Get a reference to handler. This is used by a ClientModeImpl to establish
      * an AsyncChannel communication with P2pStateMachine
      * @hide
      */
@@ -566,7 +566,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             mDeathDataByBinder.remove(binder);
 
             // clean-up if there are no more clients registered
-            // TODO: what does the WifiStateMachine client do? It isn't tracked through here!
+            // TODO: what does the ClientModeImpl client do? It isn't tracked through here!
             if (dhd.mMessenger != null && mDeathDataByBinder.isEmpty()) {
                 try {
                     dhd.mMessenger.send(
@@ -648,7 +648,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
 
     /**
-     * Handles interaction with WifiStateMachine
+     * Handles interaction with ClientModeImpl
      */
     private class P2pStateMachine extends StateMachine {
 
@@ -852,7 +852,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 switch (message.what) {
                     case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED:
                         if (message.arg1 == AsyncChannel.STATUS_SUCCESSFUL) {
-                            if (DBG) logd("Full connection with WifiStateMachine established");
+                            if (DBG) logd("Full connection with ClientModeImpl established");
                             mWifiChannel = (AsyncChannel) message.obj;
                         } else {
                             loge("Full connection failure, error = " + message.arg1);
@@ -1024,7 +1024,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case DISABLE_P2P:
                         // If we end up handling in default, p2p is not enabled
                         if (mWifiChannel !=  null) {
-                            mWifiChannel.sendMessage(WifiStateMachine.CMD_DISABLE_P2P_RSP);
+                            mWifiChannel.sendMessage(ClientModeImpl.CMD_DISABLE_P2P_RSP);
                         } else {
                             loge("Unexpected disable request when WifiChannel is null");
                         }
@@ -1183,7 +1183,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             @Override
             public void exit() {
                 if (mWifiChannel != null) {
-                    mWifiChannel.sendMessage(WifiStateMachine.CMD_DISABLE_P2P_RSP);
+                    mWifiChannel.sendMessage(ClientModeImpl.CMD_DISABLE_P2P_RSP);
                 } else {
                     loge("P2pDisablingState exit(): WifiChannel is null");
                 }
@@ -2182,7 +2182,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         mTemporarilyDisconnectedWifi = true;
                         break;
                     case DISCONNECT_WIFI_RESPONSE:
-                        // Got a response from wifistatemachine, retry p2p
+                        // Got a response from ClientModeImpl, retry p2p
                         if (DBG) logd(getName() + "Wifi disconnected, retry p2p");
                         transitionTo(mInactiveState);
                         sendMessage(WifiP2pManager.CONNECT, mSavedPeerConfig);
@@ -2305,7 +2305,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                 mNwService.addInterfaceToLocalNetwork(
                                         ifname, mDhcpResults.getRoutes(ifname));
                             }
-                        } catch (RemoteException e) {
+                        } catch (Exception e) {
                             loge("Failed to add iface to local network " + e);
                         }
                         break;
@@ -2453,7 +2453,14 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         } else {
                             mSavedPeerConfig.wps.setup = WpsInfo.PBC;
                         }
-                        transitionTo(mUserAuthorizingJoinState);
+
+                        // According to section 3.2.3 in SPEC, only GO can handle group join.
+                        // Multiple groups is not supported, ignore this discovery for GC.
+                        if (mGroup.isGroupOwner()) {
+                            transitionTo(mUserAuthorizingJoinState);
+                        } else {
+                            if (DBG) logd("Ignore provision discovery for GC");
+                        }
                         break;
                     case WifiP2pMonitor.P2P_GROUP_STARTED_EVENT:
                         loge("Duplicate group creation event notice, ignore");

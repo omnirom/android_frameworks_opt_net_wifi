@@ -116,16 +116,17 @@ public class WifiNative {
     private static class Iface {
         /** Type of ifaces possible */
         public static final int IFACE_TYPE_AP = 0;
-        public static final int IFACE_TYPE_STA = 1;
-        public static final int IFACE_TYPE_FST = 2;
+        public static final int IFACE_TYPE_STA_FOR_CONNECTIVITY = 1;
+        public static final int IFACE_TYPE_STA_FOR_SCAN = 2;
+        public static final int IFACE_TYPE_FST = 3;
 
-        @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA, IFACE_TYPE_FST})
+       @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA_FOR_CONNECTIVITY, IFACE_TYPE_STA_FOR_SCAN, IFACE_TYPE_FST})
         @Retention(RetentionPolicy.SOURCE)
         public @interface IfaceType{}
 
         /** Identifier allocated for the interface */
         public final int id;
-        /** Type of the iface: STA or AP */
+        /** Type of the iface: STA (for Connectivity or Scan) or AP */
         public final @IfaceType int type;
         /** Name of the interface */
         public String name;
@@ -144,14 +145,31 @@ public class WifiNative {
         @Override
         public String toString() {
             StringBuffer sb = new StringBuffer();
+            String typeString;
+            switch(type) {
+                case IFACE_TYPE_STA_FOR_CONNECTIVITY:
+                    typeString = "STA_CONNECTIVITY";
+                    break;
+                case IFACE_TYPE_STA_FOR_SCAN:
+                    typeString = "STA_SCAN";
+                    break;
+                case IFACE_TYPE_AP:
+                    typeString = "AP";
+                    break;
+                case IFACE_TYPE_FST:
+                    typeString = "FST";
+                    break;
+                default:
+                    typeString = "<UNKNOWN>";
+                    break;
+            }
             sb.append("Iface:")
                 .append("{")
                 .append("Name=").append(name)
                 .append(",")
                 .append("Id=").append(id)
                 .append(",")
-                .append("Type=").append(type == IFACE_TYPE_STA ? "STA" :
-                                        type == IFACE_TYPE_AP ? "AP" : "FST")
+                .append("Type=").append(typeString)
                 .append("}");
             return sb.toString();
         }
@@ -224,9 +242,14 @@ public class WifiNative {
             return null;
         }
 
-        /** Checks if there are any STA iface active. */
-        private boolean hasAnyStaIface() {
-            return hasAnyIfaceOfType(Iface.IFACE_TYPE_STA);
+        /** Checks if there are any STA (for connectivity) iface active. */
+        private boolean hasAnyStaIfaceForConnectivity() {
+            return hasAnyIfaceOfType(Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY);
+        }
+
+        /** Checks if there are any STA (for scan) iface active. */
+        private boolean hasAnyStaIfaceForScan() {
+            return hasAnyIfaceOfType(Iface.IFACE_TYPE_STA_FOR_SCAN);
         }
 
         /** Checks if there are any AP iface active. */
@@ -234,14 +257,19 @@ public class WifiNative {
             return hasAnyIfaceOfType(Iface.IFACE_TYPE_AP);
         }
 
+        /** Finds the name of any STA iface active. */
         private String findAnyStaIfaceName() {
-            Iface iface = findAnyIfaceOfType(Iface.IFACE_TYPE_STA);
+            Iface iface = findAnyIfaceOfType(Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY);
+            if (iface == null) {
+                iface = findAnyIfaceOfType(Iface.IFACE_TYPE_STA_FOR_SCAN);
+            }
             if (iface == null) {
                 return null;
             }
             return iface.name;
         }
 
+        /** Finds the name of any AP iface active. */
         private String findAnyApIfaceName() {
             Iface iface = findAnyIfaceOfType(Iface.IFACE_TYPE_AP);
             if (iface == null) {
@@ -338,7 +366,7 @@ public class WifiNative {
     /** Helper method invoked to start supplicant if there were no STA ifaces */
     private boolean startSupplicant() {
         synchronized (mLock) {
-            if (!mIfaceMgr.hasAnyStaIface()) {
+            if (!mIfaceMgr.hasAnyStaIfaceForConnectivity()) {
                 if (!mWificondControl.enableSupplicant()) {
                     Log.e(TAG, "Failed to enable supplicant");
                     return false;
@@ -360,7 +388,7 @@ public class WifiNative {
     /** Helper method invoked to stop supplicant if there are no more STA ifaces */
     private void stopSupplicantIfNecessary() {
         synchronized (mLock) {
-            if (!mIfaceMgr.hasAnyStaIface()) {
+            if (!mIfaceMgr.hasAnyStaIfaceForConnectivity()) {
                 if (!mSupplicantStaIfaceHal.deregisterDeathHandler()) {
                     Log.e(TAG, "Failed to deregister supplicant death handler");
                 }
@@ -393,8 +421,11 @@ public class WifiNative {
         return true;
     }
 
-    /** Helper method invoked to teardown client iface and perform necessary cleanup */
-    private void onClientInterfaceDestroyed(@NonNull Iface iface) {
+    /**
+     * Helper method invoked to teardown client iface (for connectivity) and perform
+     * necessary cleanup
+     */
+    private void onClientInterfaceForConnectivityDestroyed(@NonNull Iface iface) {
         synchronized (mLock) {
             mWifiMonitor.stopMonitoring(iface.name);
             if (!unregisterNetworkObserver(iface.networkObserver)) {
@@ -407,6 +438,19 @@ public class WifiNative {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopSupplicantIfNecessary();
+            stopHalAndWificondIfNecessary();
+        }
+    }
+
+    /** Helper method invoked to teardown client iface (for scan) and perform necessary cleanup */
+    private void onClientInterfaceForScanDestroyed(@NonNull Iface iface) {
+        synchronized (mLock) {
+            if (!unregisterNetworkObserver(iface.networkObserver)) {
+                Log.e(TAG, "Failed to unregister network observer on " + iface);
+            }
+            if (!mWificondControl.tearDownClientInterface(iface.name)) {
+                Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
+            }
             stopHalAndWificondIfNecessary();
             removeFstInterface();
         }
@@ -443,8 +487,10 @@ public class WifiNative {
     /** Helper method invoked to teardown iface and perform necessary cleanup */
     private void onInterfaceDestroyed(@NonNull Iface iface) {
         synchronized (mLock) {
-            if (iface.type == Iface.IFACE_TYPE_STA) {
-                onClientInterfaceDestroyed(iface);
+            if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY) {
+                onClientInterfaceForConnectivityDestroyed(iface);
+            } else if (iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
+                onClientInterfaceForScanDestroyed(iface);
             } else if (iface.type == Iface.IFACE_TYPE_AP) {
                 onSoftApInterfaceDestroyed(iface);
             }
@@ -559,7 +605,8 @@ public class WifiNative {
                 iface.externalListener.onUp(iface.name);
             } else {
                 iface.externalListener.onDown(iface.name);
-                if (iface.type == Iface.IFACE_TYPE_STA) {
+                if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY
+                        || iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
                     mWifiMetrics.incrementNumClientInterfaceDown();
                 } else if (iface.type == Iface.IFACE_TYPE_AP) {
                     mWifiMetrics.incrementNumSoftApInterfaceDown();
@@ -913,17 +960,15 @@ public class WifiNative {
     }
 
     /**
-     * Setup an interface for Client mode operations.
+     * Setup an interface for client mode (for connectivity) operations.
      *
      * This method configures an interface in STA mode in all the native daemons
      * (wificond, wpa_supplicant & vendor HAL).
      *
-     * @param lowPrioritySta The requested STA has a low request priority (lower probability of
-     *                       getting created, higher probability of getting destroyed).
      * @param interfaceCallback Associated callback for notifying status changes for the iface.
      * @return Returns the name of the allocated interface, will be null on failure.
      */
-    public String setupInterfaceForClientMode(boolean lowPrioritySta,
+    public String setupInterfaceForClientInConnectivityMode(
             @NonNull InterfaceCallback interfaceCallback) {
         synchronized (mLock) {
             if (!startHal()) {
@@ -936,13 +981,13 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToSupplicant();
                 return null;
             }
-            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_STA);
+            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY);
             if (iface == null) {
                 Log.e(TAG, "Failed to allocate new STA iface");
                 return null;
             }
             iface.externalListener = interfaceCallback;
-            iface.name = createStaIface(iface, lowPrioritySta);
+            iface.name = createStaIface(iface, /* lowPrioritySta */ false);
             if (TextUtils.isEmpty(iface.name)) {
                 Log.e(TAG, "Failed to create STA iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
@@ -978,6 +1023,56 @@ public class WifiNative {
             // update the interface state before we exit.
             onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             initializeNwParamsForClientInterface(iface.name);
+            Log.i(TAG, "Successfully setup " + iface);
+            return iface.name;
+        }
+    }
+
+    /**
+     * Setup an interface for client mode (for scan) operations.
+     *
+     * This method configures an interface in STA mode in the native daemons
+     * (wificond, vendor HAL).
+     *
+     * @param interfaceCallback Associated callback for notifying status changes for the iface.
+     * @return Returns the name of the allocated interface, will be null on failure.
+     */
+    public String setupInterfaceForClientInScanMode(
+            @NonNull InterfaceCallback interfaceCallback) {
+        synchronized (mLock) {
+            if (!startHal()) {
+                Log.e(TAG, "Failed to start Hal");
+                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToHal();
+                return null;
+            }
+            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_STA_FOR_SCAN);
+            if (iface == null) {
+                Log.e(TAG, "Failed to allocate new STA iface");
+                return null;
+            }
+            iface.externalListener = interfaceCallback;
+            iface.name = createStaIface(iface, /* lowPrioritySta */ true);
+            if (TextUtils.isEmpty(iface.name)) {
+                Log.e(TAG, "Failed to create iface in vendor HAL");
+                mIfaceMgr.removeIface(iface.id);
+                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToHal();
+                return null;
+            }
+            if (mWificondControl.setupInterfaceForClientMode(iface.name) == null) {
+                Log.e(TAG, "Failed to setup iface in wificond=" + iface.name);
+                teardownInterface(iface.name);
+                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToWificond();
+                return null;
+            }
+            iface.networkObserver = new NetworkObserverInternal(iface.id);
+            if (!registerNetworkObserver(iface.networkObserver)) {
+                Log.e(TAG, "Failed to register network observer for iface=" + iface.name);
+                teardownInterface(iface.name);
+                return null;
+            }
+            // Just to avoid any race conditions with interface state change callbacks,
+            // update the interface state before we exit.
+            onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             Log.i(TAG, "Successfully setup " + iface);
             return iface.name;
         }
@@ -1125,7 +1220,8 @@ public class WifiNative {
             }
             // Trigger the iface removal from HAL. The rest of the cleanup will be triggered
             // from the interface destroyed callback.
-            if (iface.type == Iface.IFACE_TYPE_STA) {
+            if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY
+                    || iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
                 if (!removeStaIface(iface)) {
                     Log.e(TAG, "Failed to remove iface in vendor HAL=" + ifaceName);
                     return;
@@ -3019,21 +3115,14 @@ public class WifiNative {
     }
 
     /**
-     * Tx power level scenarios that can be selected.
-     */
-    public static final int TX_POWER_SCENARIO_NORMAL = 0;
-    public static final int TX_POWER_SCENARIO_VOICE_CALL = 1;
-
-    /**
-     * Select one of the pre-configured TX power level scenarios or reset it back to normal.
-     * Primarily used for meeting SAR requirements during voice calls.
+     * Select one of the pre-configured transmit power level scenarios or reset it back to normal.
+     * Primarily used for meeting SAR requirements.
      *
-     * @param scenario Should be one {@link #TX_POWER_SCENARIO_NORMAL} or
-     *        {@link #TX_POWER_SCENARIO_VOICE_CALL}.
+     * @param sarInfo The collection of inputs used to select the SAR scenario.
      * @return true for success; false for failure or if the HAL version does not support this API.
      */
-    public boolean selectTxPowerScenario(int scenario) {
-        return mWifiVendorHal.selectTxPowerScenario(scenario);
+    public boolean selectTxPowerScenario(SarInfo sarInfo) {
+        return mWifiVendorHal.selectTxPowerScenario(sarInfo);
     }
 
     /********************************************************
