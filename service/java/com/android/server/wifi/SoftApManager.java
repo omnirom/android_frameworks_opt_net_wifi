@@ -367,6 +367,10 @@ public class SoftApManager implements ActiveModeManager {
                         WifiManager.SAP_START_FAILURE_GENERAL);
                 return false;
             }
+            mDataInterfaceName = mWifiNative.getFstDataInterfaceName();
+            if (TextUtils.isEmpty(mDataInterfaceName)) {
+                mDataInterfaceName = mApInterfaceName;
+            }
             updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
                     WifiManager.WIFI_AP_STATE_DISABLED, 0);
 
