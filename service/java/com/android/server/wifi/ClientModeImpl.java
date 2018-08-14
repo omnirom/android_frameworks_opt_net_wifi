@@ -3035,7 +3035,7 @@ public class ClientModeImpl extends StateMachine {
             msg.what = WifiP2pServiceImpl.BLOCK_DISCOVERY;
             msg.arg1 = WifiP2pServiceImpl.ENABLED;
             msg.arg2 = DhcpClient.CMD_PRE_DHCP_ACTION_COMPLETE;
-            msg.obj = WifiStateMachine.this;
+            msg.obj = ClientModeImpl.this;
             mWifiP2pChannel.sendMessage(msg);
         } else {
             // If the p2p service is not running, we can proceed directly.
@@ -3606,7 +3606,7 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_DISABLE_EPHEMERAL_NETWORK:
                 case WifiMonitor.DPP_EVENT:
                 case CMD_IP_REACHABILITY_SESSION_END:
-                    messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
+                    mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_RELOAD_TLS_AND_RECONNECT:
                     mFirstUserSignOnSeen = true;
@@ -3780,7 +3780,7 @@ public class ClientModeImpl extends StateMachine {
                     replyToMessage(message, message.what, "Supplicant Not Started!!");
                     break;
                 case CMD_DPP_LISTEN_STOP:
-                    messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
+                    mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case 0:
                     // We want to notice any empty messages (with what == 0) that might crop up.
@@ -4634,8 +4634,8 @@ public class ClientModeImpl extends StateMachine {
 
                     ScanResult scanResult = getScanResultForBssid(mLastBssid);
                     boolean mConnectionInProgress =
-                        (targetWificonfiguration != null) && (scanResult != null) &&
-                        !targetWificonfiguration.SSID.equals("\""+scanResult.SSID+"\"");
+                        (mTargetWifiConfiguration != null) && (scanResult != null) &&
+                        !mTargetWifiConfiguration.SSID.equals("\""+scanResult.SSID+"\"");
                     handleNetworkDisconnect(mConnectionInProgress);
                     if (getCurrentState() != mFilsState || !mConnectionInProgress)
                         transitionTo(mDisconnectedState);
@@ -5981,8 +5981,8 @@ public class ClientModeImpl extends StateMachine {
                             WifiMetricsProto.ConnectionEvent.ROAM_UNRELATED);
                     if (mWifiNative.connectToNetwork(mInterfaceName, mFilsConfig)) {
                         mWifiMetrics.logStaEvent(StaEvent.TYPE_CMD_START_CONNECT, mFilsConfig);
-                        lastConnectAttemptTimestamp = mClock.getWallClockMillis();
-                        targetWificonfiguration = mFilsConfig;
+                        mLastConnectAttemptTimestamp = mClock.getWallClockMillis();
+                        mTargetWifiConfiguration = mFilsConfig;
                         mIsAutoRoaming = false;
                     } else {
                         loge("Failed to connect to FILS network " + mFilsConfig);

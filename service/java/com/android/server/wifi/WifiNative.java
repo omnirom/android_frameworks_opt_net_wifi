@@ -888,8 +888,8 @@ public class WifiNative {
             Log.d(TAG, "FST disabled, not creating FST interface");
             return true;
         }
-        boolean hasOther = mIfaceMgr.hasAnyIfaceOfType(iface.type == Iface.IFACE_TYPE_STA ?
-                                                       Iface.IFACE_TYPE_AP : Iface.IFACE_TYPE_STA);
+        boolean hasOther = mIfaceMgr.hasAnyIfaceOfType(iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY ?
+                                                       Iface.IFACE_TYPE_AP : Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY);
         if (hasOther) {
             Log.e(TAG, "FST not supported in STA/SAP concurrency");
             return false;

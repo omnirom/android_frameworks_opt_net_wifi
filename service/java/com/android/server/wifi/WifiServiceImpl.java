@@ -517,7 +517,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mCountryCode = mWifiInjector.getWifiCountryCode();
         mClientModeImpl = mWifiInjector.getClientModeImpl();
         mActiveModeWarden = mWifiInjector.getActiveModeWarden();
-        mWifiStateMachine.setTrafficPoller(mTrafficPoller);
+        mClientModeImpl.setTrafficPoller(mTrafficPoller);
         mClientModeImpl.enableRssiPolling(true);
         mScanRequestProxy = mWifiInjector.getScanRequestProxy();
         mSettingsStore = mWifiInjector.getWifiSettingsStore();
@@ -2295,7 +2295,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     }
 
     public String getCapabilities(String capaType) {
-        return mWifiStateMachine.getCapabilities(capaType);
+        return mClientModeImpl.getCapabilities(capaType);
     }
 
     /**
@@ -3004,7 +3004,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int dppAddBootstrapQrCode(String uri) {
-        return mWifiStateMachine.syncDppAddBootstrapQrCode(mWifiStateMachineChannel, uri);
+        return mClientModeImpl.syncDppAddBootstrapQrCode(mClientModeImplChannel, uri);
     }
 
     /**
@@ -3016,7 +3016,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int dppBootstrapGenerate(WifiDppConfig config) {
-        return mWifiStateMachine.syncDppBootstrapGenerate(mWifiStateMachineChannel, config);
+        return mClientModeImpl.syncDppBootstrapGenerate(mClientModeImplChannel, config);
     }
 
     /**
@@ -3028,7 +3028,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public String dppGetUri(int bootstrap_id) {
-        return mWifiStateMachine.syncDppGetUri(mWifiStateMachineChannel, bootstrap_id);
+        return mClientModeImpl.syncDppGetUri(mClientModeImplChannel, bootstrap_id);
     }
 
     /**
@@ -3040,7 +3040,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int dppBootstrapRemove(int bootstrap_id) {
-        return mWifiStateMachine.syncDppBootstrapRemove(mWifiStateMachineChannel, bootstrap_id);
+        return mClientModeImpl.syncDppBootstrapRemove(mClientModeImplChannel, bootstrap_id);
     }
 
     /**
@@ -3057,7 +3057,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int dppListen(String frequency, int dpp_role, boolean qr_mutual, boolean netrole_ap) {
-        return mWifiStateMachine.syncDppListen(mWifiStateMachineChannel, frequency, dpp_role,
+        return mClientModeImpl.syncDppListen(mClientModeImplChannel, frequency, dpp_role,
                                                qr_mutual, netrole_ap);
     }
 
@@ -3066,7 +3066,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public void dppStopListen() {
-        mWifiStateMachine.dppStopListen(mWifiStateMachineChannel);
+        mClientModeImpl.dppStopListen(mClientModeImplChannel);
     }
 
     /**
@@ -3080,8 +3080,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int dppConfiguratorAdd(String curve, String key, int expiry) {
-        return mWifiStateMachine.syncDppConfiguratorAdd(
-            mWifiStateMachineChannel, curve, key, expiry);
+        return mClientModeImpl.syncDppConfiguratorAdd(
+            mClientModeImplChannel, curve, key, expiry);
     }
 
     /**
@@ -3093,7 +3093,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int dppConfiguratorRemove(int config_id) {
-        return mWifiStateMachine.syncDppConfiguratorRemove(mWifiStateMachineChannel, config_id);
+        return mClientModeImpl.syncDppConfiguratorRemove(mClientModeImplChannel, config_id);
     }
 
     /**
@@ -3105,7 +3105,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     @Override
     public int  dppStartAuth(WifiDppConfig config) {
-        return mWifiStateMachine.syncDppStartAuth(mWifiStateMachineChannel, config);
+        return mClientModeImpl.syncDppStartAuth(mClientModeImplChannel, config);
     }
 
     /**
@@ -3116,7 +3116,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      * @return: KEY string else -1 on failure
      */
     public String dppConfiguratorGetKey(int id) {
-        return mWifiStateMachine.syncDppConfiguratorGetKey(mWifiStateMachineChannel, id);
+        return mClientModeImpl.syncDppConfiguratorGetKey(mClientModeImplChannel, id);
     }
 
     private boolean startDualSapMode(WifiConfiguration apConfig, boolean enable) {
@@ -3162,7 +3162,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     }
 
     public boolean isCurrentStaShareThisAp() {
-        WifiConfiguration currentStaConfig = mWifiStateMachine.getCurrentWifiConfiguration();
+        WifiConfiguration currentStaConfig = mClientModeImpl.getCurrentWifiConfiguration();
 
         if (isWifiCoverageExtendFeatureEnabled()
              && currentStaConfig != null
@@ -3175,7 +3175,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     }
 
     private boolean startSoftApInRepeaterMode(int mode) {
-        WifiConfiguration currentStaConfig = mWifiStateMachine.getCurrentWifiConfiguration();
+        WifiConfiguration currentStaConfig = mClientModeImpl.getCurrentWifiConfiguration();
         Slog.d(TAG,"Repeater mode: CurrentStaConfig - " + currentStaConfig);
         if (isCurrentStaShareThisAp()) {
             SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, currentStaConfig);
@@ -3187,7 +3187,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             softApConfig.mConfig.hiddenSSID = currentStaConfig.hiddenSSID;
             softApConfig.mConfig.preSharedKey = WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey);
             softApConfig.mConfig.allowedKeyManagement = currentStaConfig.allowedKeyManagement;
-            WifiInfo wifiInfo = mWifiStateMachine.getWifiInfo();
+            WifiInfo wifiInfo = mClientModeImpl.getWifiInfo();
             if (wifiInfo != null && softApConfig.mConfig.apChannel == 0) {
                 softApConfig.mConfig.apChannel = ApConfigUtil.convertFrequencyToChannel(wifiInfo.getFrequency());
             }

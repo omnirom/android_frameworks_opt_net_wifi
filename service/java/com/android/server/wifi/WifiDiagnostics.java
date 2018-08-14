@@ -427,7 +427,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         } else {
             errorCode = errorCode - DATA_STALL_OFFSET_REASON_CODE;
             captureAlertData(errorCode, buffer);
-            mWifiMetrics.incrementAlertReasonCount(errorCode);
+            mWifiMetrics.logFirmwareAlert(errorCode);
             Intent intent = new Intent(WifiManager.WIFI_DATA_STALL);
             intent.putExtra(WifiManager.EXTRA_WIFI_DATA_STALL_REASON, errorCode);
             mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
