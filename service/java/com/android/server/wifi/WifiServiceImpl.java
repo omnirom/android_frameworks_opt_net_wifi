@@ -167,6 +167,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private WifiTrafficPoller mTrafficPoller;
     /* Tracks the persisted states for wi-fi & airplane mode */
     final WifiSettingsStore mSettingsStore;
+
+    private boolean mIsControllerStarted = false;
     /* Logs connection events and some general router and scan stats */
     private final WifiMetrics mWifiMetrics;
 
@@ -575,6 +577,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             Log.wtf(TAG, "Failed to initialize WifiStateMachine");
         }
         mWifiController.start();
+        mIsControllerStarted = true;
 
         // If we are already disabled (could be due to airplane mode), avoid changing persist
         // state here
@@ -864,6 +867,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                     return true;
                 }
             }
+        }
+
+        if (!mIsControllerStarted) {
+            Slog.e(TAG,"WifiController is not yet started, abort setWifiEnabled");
+            return false;
         }
 
         mWifiController.sendMessage(CMD_WIFI_TOGGLED);
