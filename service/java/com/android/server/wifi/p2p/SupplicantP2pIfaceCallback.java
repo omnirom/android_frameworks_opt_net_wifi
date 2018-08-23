@@ -17,6 +17,7 @@
 package com.android.server.wifi.p2p;
 
 import android.hardware.wifi.supplicant.V1_0.ISupplicantP2pIfaceCallback;
+import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorP2PIfaceCallback;
 import android.hardware.wifi.supplicant.V1_0.WpsConfigMethods;
 import android.net.wifi.WpsInfo;
 import android.net.wifi.p2p.WifiP2pConfig;
@@ -29,6 +30,8 @@ import android.util.Log;
 
 import com.android.server.wifi.p2p.WifiP2pServiceImpl.P2pStatus;
 import com.android.server.wifi.util.NativeUtil;
+
+import libcore.util.HexEncoding;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -562,3 +565,98 @@ public class SupplicantP2pIfaceCallback extends ISupplicantP2pIfaceCallback.Stub
     }
 }
 
+class SupplicantVendorP2pIfaceCallback extends ISupplicantVendorP2PIfaceCallback.Stub {
+    private static final String TAG = "SupplicantVendorP2pIfaceCallback ";
+    private static final boolean DBG = true;
+
+    private final String mInterface;
+    private final WifiP2pMonitor mMonitor;
+
+    public SupplicantVendorP2pIfaceCallback(String iface, WifiP2pMonitor monitor) {
+        mInterface = iface;
+        mMonitor = monitor;
+    }
+
+
+    protected static void logd(String s) {
+        if (DBG) Log.d(TAG, s);
+    }
+
+    /**
+     * Used to indicate that a P2P device- with WFDR2 has been found.
+     *
+     * @param srcAddress MAC address of the device found. This must either
+     *        be the P2P device address or the P2P interface address.
+     * @param p2pDeviceAddress P2P device address.
+     * @param primaryDeviceType Type of device. Refer to section B.1 of Wifi P2P
+     *        Technical specification v1.2.
+     * @param deviceName Name of the device.
+     * @param configMethods Mask of WPS configuration methods supported by the
+     *        device.
+     * @param deviceCapabilities Refer to section 4.1.4 of Wifi P2P Technical
+     *        specification v1.2.
+     * @param groupCapabilities Refer to section 4.1.4 of Wifi P2P Technical
+     *        specification v1.2.
+     * @param wfdDeviceInfo WFD device info as described in section 5.1.2 of WFD
+     *        technical specification v1.0.0.
+     * @param wfdR2DeviceInfo WFD R2 device info as described in section 5.1.12
+     *        of WFD technical specification v2.0.0
+     */
+    @Override
+    public void onR2DeviceFound(byte[] srcAddress, byte[] p2pDeviceAddress, byte[] primaryDeviceType,
+            String deviceName, short configMethods, byte deviceCapabilities, int groupCapabilities,
+            byte[] wfdDeviceInfo, byte[] wfdR2DeviceInfo) {
+        WifiP2pDevice device = new WifiP2pDevice();
+        device.deviceName = deviceName;
+
+        if (deviceName == null) {
+            Log.e(TAG, "Missing device name.");
+            return;
+        }
+
+        try {
+            device.deviceAddress = NativeUtil.macAddressFromByteArray(p2pDeviceAddress);
+        } catch (Exception e) {
+            Log.e(TAG, "Could not decode device address.", e);
+            return;
+        }
+
+        try {
+            device.primaryDeviceType = new String(HexEncoding.encode(
+                    primaryDeviceType, 0, primaryDeviceType.length));
+        } catch (Exception e) {
+            Log.e(TAG, "Could not encode device primary type.", e);
+            return;
+        }
+
+        device.deviceCapability = deviceCapabilities;
+        device.groupCapability = groupCapabilities;
+        device.wpsConfigMethodsSupported = configMethods;
+        device.status = WifiP2pDevice.AVAILABLE;
+
+        if (wfdDeviceInfo != null && wfdDeviceInfo.length >= 6) {
+            device.wfdInfo = new WifiP2pWfdInfo(
+                    (wfdDeviceInfo[0] << 8) + wfdDeviceInfo[1],
+                    (wfdDeviceInfo[2] << 8) + wfdDeviceInfo[3],
+                    (wfdDeviceInfo[4] << 8) + wfdDeviceInfo[5]);
+        }
+        if (wfdR2DeviceInfo != null && wfdR2DeviceInfo.length >= 2) {
+            device.wfdInfo.setWfdR2Device(
+                    (wfdR2DeviceInfo[0] << 8) + wfdR2DeviceInfo[1]);
+        }
+        logd("R2 Device discovered on " + mInterface + ": " + device + "R2 Info:" + wfdR2DeviceInfo);
+        mMonitor.broadcastP2pDeviceFound(mInterface, device);
+    }
+
+    /**
+     * Used to indicate that a P2P device with some addition IEs has been found.
+     *
+     * @param info Vendor Extension Info as described in Section 12 of WSC
+     *        specification version 2.0.4
+     * @param type Vendor Extension Attribute for identification
+     *
+     */
+    @Override
+    public void onVendorExtensionFound(ArrayList<Byte> info, byte type) {
+    }
+}
