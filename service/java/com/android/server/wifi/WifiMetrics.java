@@ -19,14 +19,18 @@ package com.android.server.wifi;
 import android.content.Context;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.net.NetworkAgent;
+import android.net.wifi.EAPConstants;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.SystemProperties;
+
 import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
@@ -201,6 +205,8 @@ public class WifiMetrics {
             new SparseIntArray();
     private final SparseIntArray mAvailableSavedPasspointProviderBssidsInScanHistogram =
             new SparseIntArray();
+
+    private final SparseIntArray mInstalledPasspointProfileType = new SparseIntArray();
 
     /** Mapping of "Connect to Network" notifications to counts. */
     private final SparseIntArray mConnectToNetworkNotificationCount = new SparseIntArray();
@@ -899,6 +905,15 @@ public class WifiMetrics {
     }
 
     /**
+     * Increment the count of oneshot scans that include DFS channels.
+     */
+    public void incrementOneshotScanWithDfsCount() {
+        synchronized (mLock) {
+            mWifiLogProto.numOneshotHasDfsChannelScans++;
+        }
+    }
+
+    /**
      * Increment connectivity oneshot scan count.
      */
     public void incrementConnectivityOneshotScanCount() {
@@ -922,6 +937,15 @@ public class WifiMetrics {
     public int getConnectivityOneshotScanCount() {
         synchronized (mLock) {
             return mWifiLogProto.numConnectivityOneshotScans;
+        }
+    }
+
+    /**
+     * Get the count of oneshot scan requests that included DFS channels.
+     */
+    public int getOneshotScanWithDfsCount() {
+        synchronized (mLock) {
+            return mWifiLogProto.numOneshotHasDfsChannelScans;
         }
     }
 
@@ -1891,14 +1915,8 @@ public class WifiMetrics {
             consolidateScoringParams();
             if (args != null && args.length > 0 && PROTO_DUMP_ARG.equals(args[0])) {
                 // Dump serialized WifiLog proto
-                consolidateProto(true);
-                for (ConnectionEvent event : mConnectionEventList) {
-                    if (mCurrentConnectionEvent != event) {
-                        //indicate that automatic bug report has been taken for all valid
-                        //connection events
-                        event.mConnectionEvent.automaticBugReportTaken = true;
-                    }
-                }
+                consolidateProto();
+
                 byte[] wifiMetricsProto = WifiMetricsProto.WifiLog.toByteArray(mWifiLogProto);
                 String metricsProtoDump = Base64.encodeToString(wifiMetricsProto, Base64.DEFAULT);
                 if (args.length > 1 && CLEAN_DUMP_ARG.equals(args[1])) {
@@ -1945,6 +1963,8 @@ public class WifiMetrics {
                         + mWifiLogProto.numConnectivityOneshotScans);
                 pw.println("mWifiLogProto.numOneshotScans="
                         + mWifiLogProto.numOneshotScans);
+                pw.println("mWifiLogProto.numOneshotHasDfsChannelScans="
+                        + mWifiLogProto.numOneshotHasDfsChannelScans);
                 pw.println("mWifiLogProto.numBackgroundScans="
                         + mWifiLogProto.numBackgroundScans);
                 pw.println("mWifiLogProto.numExternalAppOneshotScanRequests="
@@ -2013,6 +2033,10 @@ public class WifiMetrics {
                         + mWifiLogProto.numLastResortWatchdogTriggersWithBadOther);
                 pw.println("mWifiLogProto.numLastResortWatchdogSuccesses="
                         + mWifiLogProto.numLastResortWatchdogSuccesses);
+                pw.println("mWifiLogProto.watchdogTotalConnectionFailureCountAfterTrigger="
+                        + mWifiLogProto.watchdogTotalConnectionFailureCountAfterTrigger);
+                pw.println("mWifiLogProto.watchdogTriggerToConnectionSuccessDurationMs="
+                        + mWifiLogProto.watchdogTriggerToConnectionSuccessDurationMs);
                 pw.println("mWifiLogProto.recordDurationSec="
                         + ((mClock.getElapsedSinceBootMillis() / 1000) - mRecordStartTimeSec));
 
@@ -2140,6 +2164,14 @@ public class WifiMetrics {
                         + mWifiLogProto.numPasspointProviderUninstallSuccess);
                 pw.println("mWifiLogProto.numPasspointProvidersSuccessfullyConnected="
                         + mWifiLogProto.numPasspointProvidersSuccessfullyConnected);
+
+                pw.println("mWifiLogProto.installedPasspointProfileType: ");
+                for (int i = 0; i < mInstalledPasspointProfileType.size(); i++) {
+                    int eapType = mInstalledPasspointProfileType.keyAt(i);
+                    pw.println("EAP_METHOD (" + eapType + "): "
+                            + mInstalledPasspointProfileType.valueAt(i));
+                }
+
                 pw.println("mWifiLogProto.numRadioModeChangeToMcc="
                         + mWifiLogProto.numRadioModeChangeToMcc);
                 pw.println("mWifiLogProto.numRadioModeChangeToScc="
@@ -2274,6 +2306,7 @@ public class WifiMetrics {
                 for (WifiIsUnusableWithTime event : mWifiIsUnusableList) {
                     pw.println(event);
                 }
+                pw.println("Hardware Version: " + SystemProperties.get("ro.boot.revision", ""));
             }
         }
     }
@@ -2330,34 +2363,70 @@ public class WifiMetrics {
     }
 
     /**
-     * append the separate ConnectionEvent, SystemStateEntry and ScanReturnCode collections to their
-     * respective lists within mWifiLogProto
+     * Update number of times for type of saved Passpoint profile.
      *
-     * @param incremental Only include ConnectionEvents created since last automatic bug report
+     * @param providers Passpoint providers installed on the device.
      */
-    private void consolidateProto(boolean incremental) {
-        List<WifiMetricsProto.ConnectionEvent> events = new ArrayList<>();
-        List<WifiMetricsProto.RssiPollCount> rssis = new ArrayList<>();
-        List<WifiMetricsProto.RssiPollCount> rssiDeltas = new ArrayList<>();
-        List<WifiMetricsProto.LinkSpeedCount> linkSpeeds = new ArrayList<>();
-        List<WifiMetricsProto.AlertReasonCount> alertReasons = new ArrayList<>();
-        List<WifiMetricsProto.WifiScoreCount> scores = new ArrayList<>();
+    public void updateSavedPasspointProfilesInfo(
+            Map<String, PasspointProvider> providers) {
+        int passpointType;
+        int eapType;
+        PasspointConfiguration config;
         synchronized (mLock) {
-            for (ConnectionEvent event : mConnectionEventList) {
-                // If this is not incremental, dump full ConnectionEvent list
-                // Else Dump all un-dumped events except for the current one
-                if (!incremental || ((mCurrentConnectionEvent != event)
-                        && !event.mConnectionEvent.automaticBugReportTaken)) {
-                    //Get all ConnectionEvents that haven not been dumped as a proto, also exclude
-                    //the current active un-ended connection event
-                    events.add(event.mConnectionEvent);
-                    if (incremental) {
-                        event.mConnectionEvent.automaticBugReportTaken = true;
-                    }
+            mInstalledPasspointProfileType.clear();
+            for (Map.Entry<String, PasspointProvider> entry : providers.entrySet()) {
+                config = entry.getValue().getConfig();
+                if (config.getCredential().getUserCredential() != null) {
+                    eapType = EAPConstants.EAP_TTLS;
+                } else if (config.getCredential().getCertCredential() != null) {
+                    eapType = EAPConstants.EAP_TLS;
+                } else if (config.getCredential().getSimCredential() != null) {
+                    eapType = config.getCredential().getSimCredential().getEapType();
+                } else {
+                    eapType = -1;
                 }
+                switch (eapType) {
+                    case EAPConstants.EAP_TLS:
+                        passpointType = WifiMetricsProto.PasspointProfileTypeCount.TYPE_EAP_TLS;
+                        break;
+                    case EAPConstants.EAP_TTLS:
+                        passpointType = WifiMetricsProto.PasspointProfileTypeCount.TYPE_EAP_TTLS;
+                        break;
+                    case EAPConstants.EAP_SIM:
+                        passpointType = WifiMetricsProto.PasspointProfileTypeCount.TYPE_EAP_SIM;
+                        break;
+                    case EAPConstants.EAP_AKA:
+                        passpointType = WifiMetricsProto.PasspointProfileTypeCount.TYPE_EAP_AKA;
+                        break;
+                    case EAPConstants.EAP_AKA_PRIME:
+                        passpointType =
+                                WifiMetricsProto.PasspointProfileTypeCount.TYPE_EAP_AKA_PRIME;
+                        break;
+                    default:
+                        passpointType = WifiMetricsProto.PasspointProfileTypeCount.TYPE_UNKNOWN;
+
+                }
+                int count = mInstalledPasspointProfileType.get(passpointType);
+                mInstalledPasspointProfileType.put(passpointType, count + 1);
             }
-            if (events.size() > 0) {
-                mWifiLogProto.connectionEvent = events.toArray(mWifiLogProto.connectionEvent);
+        }
+    }
+
+    /**
+     * Put all metrics that were being tracked separately into mWifiLogProto
+     */
+    private void consolidateProto() {
+        List<WifiMetricsProto.RssiPollCount> rssis = new ArrayList<>();
+        synchronized (mLock) {
+            int connectionEventCount = mConnectionEventList.size();
+            // Exclude the current active un-ended connection event
+            if (mCurrentConnectionEvent != null) {
+                connectionEventCount--;
+            }
+            mWifiLogProto.connectionEvent =
+                    new WifiMetricsProto.ConnectionEvent[connectionEventCount];
+            for (int i = 0; i < connectionEventCount; i++) {
+                mWifiLogProto.connectionEvent[i] = mConnectionEventList.get(i).mConnectionEvent;
             }
 
             //Convert the SparseIntArray of scanReturnEntry integers into ScanReturnEntry proto list
@@ -2409,47 +2478,46 @@ public class WifiMetrics {
              * Convert the SparseIntArray of RSSI delta rssi's and counts to the proto's repeated
              * IntKeyVal array.
              */
+            mWifiLogProto.rssiPollDeltaCount =
+                    new WifiMetricsProto.RssiPollCount[mRssiDeltaCounts.size()];
             for (int i = 0; i < mRssiDeltaCounts.size(); i++) {
-                WifiMetricsProto.RssiPollCount keyVal = new WifiMetricsProto.RssiPollCount();
-                keyVal.rssi = mRssiDeltaCounts.keyAt(i);
-                keyVal.count = mRssiDeltaCounts.valueAt(i);
-                rssiDeltas.add(keyVal);
+                mWifiLogProto.rssiPollDeltaCount[i] = new WifiMetricsProto.RssiPollCount();
+                mWifiLogProto.rssiPollDeltaCount[i].rssi = mRssiDeltaCounts.keyAt(i);
+                mWifiLogProto.rssiPollDeltaCount[i].count = mRssiDeltaCounts.valueAt(i);
             }
-            mWifiLogProto.rssiPollDeltaCount = rssiDeltas.toArray(mWifiLogProto.rssiPollDeltaCount);
-
-
 
             /**
              * Add LinkSpeedCount objects from mLinkSpeedCounts to proto.
              */
+            mWifiLogProto.linkSpeedCounts =
+                    new WifiMetricsProto.LinkSpeedCount[mLinkSpeedCounts.size()];
             for (int i = 0; i < mLinkSpeedCounts.size(); i++) {
-                linkSpeeds.add(mLinkSpeedCounts.valueAt(i));
+                mWifiLogProto.linkSpeedCounts[i] = mLinkSpeedCounts.valueAt(i);
             }
-            mWifiLogProto.linkSpeedCounts = linkSpeeds.toArray(mWifiLogProto.linkSpeedCounts);
 
             /**
              * Convert the SparseIntArray of alert reasons and counts to the proto's repeated
              * IntKeyVal array.
              */
+            mWifiLogProto.alertReasonCount =
+                    new WifiMetricsProto.AlertReasonCount[mWifiAlertReasonCounts.size()];
             for (int i = 0; i < mWifiAlertReasonCounts.size(); i++) {
-                WifiMetricsProto.AlertReasonCount keyVal = new WifiMetricsProto.AlertReasonCount();
-                keyVal.reason = mWifiAlertReasonCounts.keyAt(i);
-                keyVal.count = mWifiAlertReasonCounts.valueAt(i);
-                alertReasons.add(keyVal);
+                mWifiLogProto.alertReasonCount[i] = new WifiMetricsProto.AlertReasonCount();
+                mWifiLogProto.alertReasonCount[i].reason = mWifiAlertReasonCounts.keyAt(i);
+                mWifiLogProto.alertReasonCount[i].count = mWifiAlertReasonCounts.valueAt(i);
             }
-            mWifiLogProto.alertReasonCount = alertReasons.toArray(mWifiLogProto.alertReasonCount);
 
             /**
             *  Convert the SparseIntArray of Wifi Score and counts to proto's repeated
             * IntKeyVal array.
             */
+            mWifiLogProto.wifiScoreCount =
+                    new WifiMetricsProto.WifiScoreCount[mWifiScoreCounts.size()];
             for (int score = 0; score < mWifiScoreCounts.size(); score++) {
-                WifiMetricsProto.WifiScoreCount keyVal = new WifiMetricsProto.WifiScoreCount();
-                keyVal.score = mWifiScoreCounts.keyAt(score);
-                keyVal.count = mWifiScoreCounts.valueAt(score);
-                scores.add(keyVal);
+                mWifiLogProto.wifiScoreCount[score] = new WifiMetricsProto.WifiScoreCount();
+                mWifiLogProto.wifiScoreCount[score].score = mWifiScoreCounts.keyAt(score);
+                mWifiLogProto.wifiScoreCount[score].count = mWifiScoreCounts.valueAt(score);
             }
-            mWifiLogProto.wifiScoreCount = scores.toArray(mWifiLogProto.wifiScoreCount);
 
             /**
              * Convert the SparseIntArray of SoftAp Return codes and counts to proto's repeated
@@ -2538,6 +2606,23 @@ public class WifiMetrics {
                 keyVal.count = mConnectToNetworkNotificationActionCount.valueAt(i);
                 notificationActionCountArray[i] = keyVal;
             }
+
+            /**
+             * Convert the SparseIntArray of saved Passpoint profile types and counts to proto's
+             * repeated IntKeyVal array.
+             */
+            int counts = mInstalledPasspointProfileType.size();
+            mWifiLogProto.installedPasspointProfileType =
+                    new WifiMetricsProto.PasspointProfileTypeCount[counts];
+            for (int i = 0; i < counts; i++) {
+                mWifiLogProto.installedPasspointProfileType[i] =
+                        new WifiMetricsProto.PasspointProfileTypeCount();
+                mWifiLogProto.installedPasspointProfileType[i].eapMethodType =
+                        mInstalledPasspointProfileType.keyAt(i);
+                mWifiLogProto.installedPasspointProfileType[i].count =
+                        mInstalledPasspointProfileType.valueAt(i);
+            }
+
             mWifiLogProto.connectToNetworkNotificationActionCount = notificationActionCountArray;
 
             mWifiLogProto.openNetworkRecommenderBlacklistSize =
@@ -2589,6 +2674,7 @@ public class WifiMetrics {
             for (int i = 0; i < mWifiIsUnusableList.size(); i++) {
                 mWifiLogProto.wifiIsUnusableEventList[i] = mWifiIsUnusableList.get(i).event;
             }
+            mWifiLogProto.hardwareRevision = SystemProperties.get("ro.boot.revision", "");
         }
     }
 
@@ -2672,6 +2758,7 @@ public class WifiMetrics {
             mWifiWakeMetrics.clear();
             mObserved80211mcApInScanHistogram.clear();
             mWifiIsUnusableList.clear();
+            mInstalledPasspointProfileType.clear();
         }
     }
 
@@ -2798,6 +2885,8 @@ public class WifiMetrics {
             case StaEvent.TYPE_FRAMEWORK_DISCONNECT:
             case StaEvent.TYPE_SCORE_BREACH:
             case StaEvent.TYPE_MAC_CHANGE:
+            case StaEvent.TYPE_WIFI_ENABLED:
+            case StaEvent.TYPE_WIFI_DISABLED:
                 break;
             default:
                 Log.e(TAG, "Unknown StaEvent:" + type);
@@ -2992,6 +3081,12 @@ public class WifiMetrics {
                 break;
             case StaEvent.TYPE_MAC_CHANGE:
                 sb.append("MAC_CHANGE");
+                break;
+            case StaEvent.TYPE_WIFI_ENABLED:
+                sb.append("WIFI_ENABLED");
+                break;
+            case StaEvent.TYPE_WIFI_DISABLED:
+                sb.append("WIFI_DISABLED");
                 break;
             default:
                 sb.append("UNKNOWN " + event.type + ":");

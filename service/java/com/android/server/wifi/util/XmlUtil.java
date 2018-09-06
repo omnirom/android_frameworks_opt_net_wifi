@@ -427,6 +427,7 @@ public class XmlUtil {
         public static void writeToXmlForBackup(XmlSerializer out, WifiConfiguration configuration)
                 throws XmlPullParserException, IOException {
             writeCommonElementsToXml(out, configuration);
+            XmlUtil.writeNextValue(out, XML_TAG_METERED_OVERRIDE, configuration.meteredOverride);
         }
 
         /**

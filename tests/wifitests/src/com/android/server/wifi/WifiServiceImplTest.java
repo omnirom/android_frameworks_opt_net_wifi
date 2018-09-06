@@ -66,6 +66,7 @@ import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.net.Uri;
 import android.net.wifi.ISoftApCallback;
+import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
@@ -103,7 +104,6 @@ import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatcher;
@@ -137,6 +137,7 @@ public class WifiServiceImplTest {
     private static final int TEST_UID = 1200000;
     private static final int OTHER_TEST_UID = 1300000;
     private static final int TEST_USER_HANDLE = 13;
+    private static final int TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER = 17;
     private static final String WIFI_IFACE_NAME = "wlan0";
     private static final String TEST_COUNTRY_CODE = "US";
 
@@ -197,6 +198,7 @@ public class WifiServiceImplTest {
     @Mock PowerProfile mPowerProfile;
     @Mock WifiTrafficPoller mWifiTrafficPolller;
     @Mock ScanRequestProxy mScanRequestProxy;
+    @Mock ITrafficStateCallback mTrafficStateCallback;
 
     @Spy FakeWifiLog mLog;
 
@@ -549,7 +551,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_GRANTED);
 
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
@@ -569,7 +571,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_DENIED);
         when(mPackageManager.getApplicationInfoAsUser(
                 anyString(), anyInt(), anyInt()))
@@ -619,7 +621,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_DENIED);
         when(mPackageManager.getApplicationInfoAsUser(
                 anyString(), anyInt(), anyInt()))
@@ -675,8 +677,8 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that wifi can be disabled without consent UI popup when permission
-     * review is required but got permission granted.
+     * Verify that wifi can be disabled without consent UI popup when wireless
+     * consnet is required but got permission granted.
      */
     @Test
     public void testSetWifiDisabledSuccessWhenPermissionReviewRequiredAndPermissionGranted()
@@ -688,7 +690,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_GRANTED);
 
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
@@ -696,11 +698,11 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that wifi is not disabled but got consent UI popup when permission
-     * review is required but do not have permission.
+     * Verify that wifi is not disabled but got consent UI popup when wireless
+     * consent is required but do not have permission.
      */
     @Test
-    public void testSetWifiDisabledConsentUiWhenPermissionReviewRequiredAndPermissionDenied()
+    public void testSetWifiDisabledConsentUiWhenPermissionDenied()
             throws Exception {
         // Set PermissionReviewRequired to true explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(true);
@@ -709,7 +711,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_DENIED);
         when(mPackageManager.getApplicationInfoAsUser(
                 anyString(), anyInt(), anyInt()))
@@ -740,7 +742,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_GRANTED);
 
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
@@ -763,7 +765,7 @@ public class WifiServiceImplTest {
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
         when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED)))
+                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
                         .thenReturn(PackageManager.PERMISSION_DENIED);
         when(mPackageManager.getApplicationInfoAsUser(
                 anyString(), anyInt(), anyInt()))
@@ -905,7 +907,6 @@ public class WifiServiceImplTest {
     /**
      * Ensure we do not allow unpermitted callers to get the wifi ap state.
      */
-    @Ignore
     @Test
     public void testGetWifiApEnabledPermissionDenied() {
         // we should not be able to get the state
@@ -1053,7 +1054,6 @@ public class WifiServiceImplTest {
     /**
      * Ensure that we handle scan request failure when posting the runnable to handler fails.
      */
-    @Ignore
     @Test
     public void testStartScanFailureInRunWithScissors() {
         setupClientModeImplHandlerForRunWithScissors();
@@ -1159,7 +1159,6 @@ public class WifiServiceImplTest {
     /**
      * Ensure that we handle scan results failure when posting the runnable to handler fails.
      */
-    @Ignore
     @Test
     public void testGetScanResultsFailureInRunWithScissors() {
         setupClientModeImplHandlerForRunWithScissors();
@@ -1448,6 +1447,21 @@ public class WifiServiceImplTest {
     }
 
     /**
+     * Verifies that we handle softap callback registration failure if we encounter an exception
+     * while linking to death.
+     */
+    @Test
+    public void registerSoftApCallbackFailureOnLinkToDeath() throws Exception {
+        doThrow(new RemoteException())
+                .when(mAppBinder).linkToDeath(any(IBinder.DeathRecipient.class), anyInt());
+        mWifiServiceImpl.registerSoftApCallback(mAppBinder, mClientSoftApCallback, 1);
+        mLooper.dispatchAll();
+        verify(mClientSoftApCallback, never()).onStateChanged(WIFI_AP_STATE_DISABLED, 0);
+        verify(mClientSoftApCallback, never()).onNumClientsChanged(0);
+    }
+
+
+    /**
      * Registers a soft AP callback, then verifies that the current soft AP state and num clients
      * are sent to caller immediately after callback is registered.
      */
@@ -1550,7 +1564,6 @@ public class WifiServiceImplTest {
     /**
      * Verify that wifi service registers for callers BinderDeath event
      */
-    @Ignore
     @Test
     public void registersForBinderDeathOnRegisterSoftApCallback() throws Exception {
         final int callbackIdentifier = 1;
@@ -2271,7 +2284,6 @@ public class WifiServiceImplTest {
      * Verify that a call to {@link WifiServiceImpl#restoreSupplicantBackupData(byte[], byte[])} is
      * only allowed from callers with the signature only NETWORK_SETTINGS permission.
      */
-    @Ignore
     @Test(expected = SecurityException.class)
     public void testRestoreSupplicantBackupDataNotApprovedCaller() {
         doThrow(new SecurityException()).when(mContext)
@@ -2299,12 +2311,14 @@ public class WifiServiceImplTest {
      * Verify that a call to {@link WifiServiceImpl#enableVerboseLogging(int)} is allowed from
      * callers with the signature only NETWORK_SETTINGS permission.
      */
-    @Ignore("TODO: Investigate failure")
     @Test
     public void testEnableVerboseLoggingWithNetworkSettingsPermission() {
         doNothing().when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
                         eq("WifiService"));
+        // Vebose logging is enabled first in the constructor for WifiServiceImpl, so reset
+        // before invocation.
+        reset(mClientModeImpl);
         mWifiServiceImpl.enableVerboseLogging(1);
         verify(mClientModeImpl).enableVerboseLogging(anyInt());
     }
@@ -2318,6 +2332,9 @@ public class WifiServiceImplTest {
         doThrow(new SecurityException()).when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
                         eq("WifiService"));
+        // Vebose logging is enabled first in the constructor for WifiServiceImpl, so reset
+        // before invocation.
+        reset(mClientModeImpl);
         mWifiServiceImpl.enableVerboseLogging(1);
         verify(mClientModeImpl, never()).enableVerboseLogging(anyInt());
     }
@@ -2864,5 +2881,74 @@ public class WifiServiceImplTest {
             mWifiServiceImpl.notifyUserOfApBandConversion(TEST_PACKAGE_NAME);
             fail("Expected Security exception");
         } catch (SecurityException e) { }
+    }
+
+    /**
+     * Verify that a call to registerTrafficStateCallback throws a SecurityException if the caller
+     * does not have NETWORK_SETTINGS permission.
+     */
+    @Test
+    public void registerTrafficStateCallbackThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.registerTrafficStateCallback(mAppBinder, mTrafficStateCallback,
+                    TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER);
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verify that a call to registerTrafficStateCallback throws an IllegalArgumentException if the
+     * parameters are not provided.
+     */
+    @Test
+    public void registerTrafficStateCallbackThrowsIllegalArgumentExceptionOnInvalidArguments() {
+        try {
+            mWifiServiceImpl.registerTrafficStateCallback(
+                    mAppBinder, null, TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    /**
+     * Verify that a call to unregisterTrafficStateCallback throws a SecurityException if the caller
+     * does not have NETWORK_SETTINGS permission.
+     */
+    @Test
+    public void unregisterTrafficStateCallbackThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.unregisterTrafficStateCallback(TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER);
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verify that registerTrafficStateCallback adds callback to {@link WifiTrafficPoller}.
+     */
+    @Test
+    public void registerTrafficStateCallbackAndVerify() throws Exception {
+        mWifiServiceImpl.registerTrafficStateCallback(
+                mAppBinder, mTrafficStateCallback, TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER);
+        mLooper.dispatchAll();
+        verify(mWifiTrafficPoller).addCallback(
+                mAppBinder, mTrafficStateCallback, TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER);
+    }
+
+    /**
+     * Verify that unregisterTrafficStateCallback removes callback from {@link WifiTrafficPoller}.
+     */
+    @Test
+    public void unregisterTrafficStateCallbackAndVerify() throws Exception {
+        mWifiServiceImpl.unregisterTrafficStateCallback(0);
+        mLooper.dispatchAll();
+        verify(mWifiTrafficPoller).removeCallback(0);
     }
 }

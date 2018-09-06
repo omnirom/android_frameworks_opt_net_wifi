@@ -187,7 +187,6 @@ public class ClientModeImpl extends StateMachine {
     private WifiConnectivityManager mWifiConnectivityManager;
     private ConnectivityManager mCm;
     private BaseWifiDiagnostics mWifiDiagnostics;
-    private ScanRequestProxy mScanRequestProxy;
     private WifiP2pServiceImpl wifiP2pServiceImpl;
     private WifiTrafficPoller mTrafficPoller;
     private final boolean mP2pSupported;
@@ -637,7 +636,7 @@ public class ClientModeImpl extends StateMachine {
     static final int CMD_READ_PACKET_FILTER                             = BASE + 208;
 
     /* Indicates that diagnostics should time out a connection start event. */
-    private static final int CMD_DIAGS_CONNECT_TIMEOUT                  = BASE + 252;
+    static final int CMD_DIAGS_CONNECT_TIMEOUT                          = BASE + 252;
 
     // Start subscription provisioning with a given provider
     private static final int CMD_START_SUBSCRIPTION_PROVISIONING        = BASE + 254;
@@ -808,7 +807,7 @@ public class ClientModeImpl extends StateMachine {
                             WifiNative wifiNative,
                             WrongPasswordNotifier wrongPasswordNotifier,
                             SarManager sarManager) {
-        super("ClientModeImpl", looper);
+        super(TAG, looper);
         mWifiInjector = wifiInjector;
         mWifiMetrics = mWifiInjector.getWifiMetrics();
         mClock = wifiInjector.getClock();
@@ -838,7 +837,6 @@ public class ClientModeImpl extends StateMachine {
 
         mWifiMonitor = mWifiInjector.getWifiMonitor();
         mWifiDiagnostics = mWifiInjector.getWifiDiagnostics();
-        mScanRequestProxy = mWifiInjector.getScanRequestProxy();
         mWifiPermissionsWrapper = mWifiInjector.getWifiPermissionsWrapper();
         mWifiDataStall = mWifiInjector.getWifiDataStall();
 
@@ -2776,7 +2774,8 @@ public class ClientModeImpl extends StateMachine {
         Intent intent = new Intent(WifiManager.RSSI_CHANGED_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_NEW_RSSI, newRssi);
-        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL,
+                android.Manifest.permission.ACCESS_WIFI_STATE);
     }
 
     private void sendNetworkStateChangeBroadcast(String bssid) {
@@ -3067,22 +3066,21 @@ public class ClientModeImpl extends StateMachine {
         return mWifiNative.getCapabilities(mInterfaceName, capaType);
     }
 
-    private static final long DIAGS_CONNECT_TIMEOUT_MILLIS = 60 * 1000;
-    private long mDiagsConnectionStartMillis = -1;
+    @VisibleForTesting
+    public static final long DIAGS_CONNECT_TIMEOUT_MILLIS = 60 * 1000;
+
     /**
      * Inform other components that a new connection attempt is starting.
      */
     private void reportConnectionAttemptStart(
             WifiConfiguration config, String targetBSSID, int roamType) {
         mWifiMetrics.startConnectionEvent(config, targetBSSID, roamType);
-        mDiagsConnectionStartMillis = mClock.getElapsedSinceBootMillis();
-        mWifiDiagnostics.reportConnectionEvent(
-                mDiagsConnectionStartMillis, WifiDiagnostics.CONNECTION_EVENT_STARTED);
+        mWifiDiagnostics.reportConnectionEvent(WifiDiagnostics.CONNECTION_EVENT_STARTED);
         mWrongPasswordNotifier.onNewConnectionAttempt();
         // TODO(b/35329124): Remove CMD_DIAGS_CONNECT_TIMEOUT, once ClientModeImpl
         // grows a proper CONNECTING state.
-        sendMessageDelayed(CMD_DIAGS_CONNECT_TIMEOUT,
-                mDiagsConnectionStartMillis, DIAGS_CONNECT_TIMEOUT_MILLIS);
+        removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
+        sendMessageDelayed(CMD_DIAGS_CONNECT_TIMEOUT, DIAGS_CONNECT_TIMEOUT_MILLIS);
     }
 
     /**
@@ -3103,8 +3101,8 @@ public class ClientModeImpl extends StateMachine {
                 //   complete.
                 //
                 // TODO(b/34181219): Fix the above.
-                mWifiDiagnostics.reportConnectionEvent(
-                        mDiagsConnectionStartMillis, WifiDiagnostics.CONNECTION_EVENT_SUCCEEDED);
+                removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
+                mWifiDiagnostics.reportConnectionEvent(WifiDiagnostics.CONNECTION_EVENT_SUCCEEDED);
                 break;
             case WifiMetrics.ConnectionEvent.FAILURE_REDUNDANT_CONNECTION_ATTEMPT:
             case WifiMetrics.ConnectionEvent.FAILURE_CONNECT_NETWORK_FAILED:
@@ -3112,10 +3110,9 @@ public class ClientModeImpl extends StateMachine {
                 // where we failed to initiate a connection attempt with supplicant.
                 break;
             default:
-                mWifiDiagnostics.reportConnectionEvent(
-                        mDiagsConnectionStartMillis, WifiDiagnostics.CONNECTION_EVENT_FAILED);
+                removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
+                mWifiDiagnostics.reportConnectionEvent(WifiDiagnostics.CONNECTION_EVENT_FAILED);
         }
-        mDiagsConnectionStartMillis = -1;
     }
 
     private void handleIPv4Success(DhcpResults dhcpResults) {
@@ -3762,7 +3759,7 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_DIAGS_CONNECT_TIMEOUT:
                     mWifiDiagnostics.reportConnectionEvent(
-                            (Long) message.obj, BaseWifiDiagnostics.CONNECTION_EVENT_FAILED);
+                            BaseWifiDiagnostics.CONNECTION_EVENT_TIMEOUT);
                     break;
                 case CMD_GET_ALL_MATCHING_CONFIGS:
                     replyToMessage(message, message.what, new ArrayList<WifiConfiguration>());
@@ -4005,9 +4002,6 @@ public class ClientModeImpl extends StateMachine {
     void registerConnected() {
         if (mLastNetworkId != WifiConfiguration.INVALID_NETWORK_ID) {
             mWifiConfigManager.updateNetworkAfterConnect(mLastNetworkId);
-            // On connect, reset wifiScoreReport
-            mWifiScoreReport.reset();
-
             // Notify PasspointManager of Passpoint network connected event.
             WifiConfiguration currentNetwork = getCurrentWifiConfiguration();
             if (currentNetwork != null && currentNetwork.isPasspoint()) {
@@ -4068,7 +4062,6 @@ public class ClientModeImpl extends StateMachine {
             if (!mWifiNative.removeAllNetworks(mInterfaceName)) {
                 loge("Failed to remove networks on entering connect mode");
             }
-            mScanRequestProxy.enableScanningForHiddenNetworks(true);
             mWifiInfo.reset();
             mWifiInfo.setSupplicantState(SupplicantState.DISCONNECTED);
 
@@ -4084,6 +4077,7 @@ public class ClientModeImpl extends StateMachine {
             mWifiConnectivityManager.setWifiEnabled(true);
             // Inform metrics that Wifi is Enabled (but not yet connected)
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_DISCONNECTED);
+            mWifiMetrics.logStaEvent(StaEvent.TYPE_WIFI_ENABLED);
             // Inform p2p service that wifi is up and ready when applicable
             p2pSendMessage(ClientModeImpl.CMD_ENABLE_P2P);
             // Inform sar manager that wifi is Enabled
@@ -4101,15 +4095,13 @@ public class ClientModeImpl extends StateMachine {
             mWifiConnectivityManager.setWifiEnabled(false);
             // Inform metrics that Wifi is being disabled (Toggled, airplane enabled, etc)
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_DISABLED);
+            mWifiMetrics.logStaEvent(StaEvent.TYPE_WIFI_DISABLED);
             // Inform sar manager that wifi is being disabled
             mSarManager.setClientWifiState(WifiManager.WIFI_STATE_DISABLED);
 
             if (!mWifiNative.removeAllNetworks(mInterfaceName)) {
                 loge("Failed to remove networks on exiting connect mode");
             }
-            mScanRequestProxy.enableScanningForHiddenNetworks(false);
-            // Do we want to optimize when we move from client mode to scan only mode.
-            mScanRequestProxy.clearScanResults();
             mWifiInfo.reset();
             mWifiInfo.setSupplicantState(SupplicantState.DISCONNECTED);
             stopClientMode();
@@ -5243,6 +5235,7 @@ public class ClientModeImpl extends StateMachine {
                     mRssiPollToken++;
                     if (mEnableRssiPolling) {
                         // First poll
+                        mLastSignalLevel = -1;
                         fetchRssiLinkSpeedAndFrequencyNative();
                         sendMessageDelayed(obtainMessage(CMD_RSSI_POLL, mRssiPollToken, 0),
                                 mPollRssiIntervalMsecs);
@@ -5634,6 +5627,8 @@ public class ClientModeImpl extends StateMachine {
             registerConnected();
             mLastConnectAttemptTimestamp = 0;
             mTargetWifiConfiguration = null;
+            mWifiScoreReport.reset();
+            mLastSignalLevel = -1;
 
             // Not roaming anymore
             mIsAutoRoaming = false;

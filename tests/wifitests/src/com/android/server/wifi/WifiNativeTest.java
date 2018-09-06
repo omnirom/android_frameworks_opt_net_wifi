@@ -576,24 +576,12 @@ public class WifiNativeTest {
     }
 
     /**
-     * Test to check if the softap start failure metrics are incremented correctly.
-     */
-    @Test
-    public void testStartSoftApFailureIncrementsMetrics() throws Exception {
-        when(mWificondControl.startHostapd(any(), any())).thenReturn(false);
-        WifiNative.SoftApListener mockListener = mock(WifiNative.SoftApListener.class);
-        mWifiNative.startSoftAp(WIFI_IFACE_NAME, new WifiConfiguration(), mockListener);
-        verify(mWificondControl).startHostapd(WIFI_IFACE_NAME, mockListener);
-        verify(mWifiMetrics).incrementNumSetupSoftApInterfaceFailureDueToHostapd();
-    }
-
-    /**
      * Test that selectTxPowerScenario() calls into WifiVendorHal (success case)
      */
     @Test
     public void testSelectTxPowerScenario_success() throws Exception {
         when(mWifiVendorHal.selectTxPowerScenario(any(SarInfo.class))).thenReturn(true);
-        SarInfo sarInfo = new SarInfo(true);
+        SarInfo sarInfo = new SarInfo();
         assertTrue(mWifiNative.selectTxPowerScenario(sarInfo));
         verify(mWifiVendorHal).selectTxPowerScenario(sarInfo);
     }
@@ -604,7 +592,7 @@ public class WifiNativeTest {
     @Test
     public void testSelectTxPowerScenario_failure() throws Exception {
         when(mWifiVendorHal.selectTxPowerScenario(any(SarInfo.class))).thenReturn(false);
-        SarInfo sarInfo = new SarInfo(true);
+        SarInfo sarInfo = new SarInfo();
         assertFalse(mWifiNative.selectTxPowerScenario(sarInfo));
         verify(mWifiVendorHal).selectTxPowerScenario(sarInfo);
     }

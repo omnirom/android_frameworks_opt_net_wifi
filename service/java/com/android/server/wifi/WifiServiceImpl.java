@@ -61,6 +61,7 @@ import android.net.ip.IpClient;
 import android.net.StaticIpConfiguration;
 import android.net.IpConfiguration;
 import android.net.wifi.ISoftApCallback;
+import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.IWifiManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiActivityEnergyInfo;
@@ -77,7 +78,6 @@ import android.net.wifi.SupplicantState;
 import android.os.AsyncTask;
 import android.os.BatteryStats;
 import android.os.Binder;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -106,6 +106,7 @@ import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.util.AsyncChannel;
 import com.android.server.wifi.hotspot2.PasspointProvider;
+import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.GeneralUtil.Mutable;
 import com.android.server.wifi.util.WifiHandler;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -191,7 +192,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      */
     private AsyncChannel mClientModeImplChannel;
 
-    private final boolean mPermissionReviewRequired;
+    private final boolean mWirelessConsentRequired;
     private final FrameworkFacade mFrameworkFacade;
 
     private WifiPermissionsUtil mWifiPermissionsUtil;
@@ -203,10 +204,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     @GuardedBy("mLocalOnlyHotspotRequests")
     private final ConcurrentHashMap<String, Integer> mIfaceIpModes;
 
-    /* Limit on number of registered soft AP callbacks to track and prevent potential memory leak */
-    private static final int NUM_SOFT_AP_CALLBACKS_WARN_LIMIT = 10;
-    private static final int NUM_SOFT_AP_CALLBACKS_WTF_LIMIT = 20;
-    private final HashMap<Integer, ISoftApCallback> mRegisteredSoftApCallbacks;
+    private final ExternalCallbackTracker<ISoftApCallback> mRegisteredSoftApCallbacks;
 
     /**
      * One of:  {@link WifiManager#WIFI_AP_STATE_DISABLED},
@@ -262,26 +260,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         public void handleMessage(Message msg) {
             super.handleMessage(msg);
             switch (msg.what) {
-                case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED: {
-                    if (msg.arg1 == AsyncChannel.STATUS_SUCCESSFUL) {
-                        Slog.d(TAG, "New client listening to asynchronous messages");
-                        // We track the clients by the Messenger
-                        // since it is expected to be always available
-                        mTrafficPoller.addClient(msg.replyTo);
-                    } else {
-                        Slog.e(TAG, "Client connection failure, error=" + msg.arg1);
-                    }
-                    break;
-                }
-                case AsyncChannel.CMD_CHANNEL_DISCONNECTED: {
-                    if (msg.arg1 == AsyncChannel.STATUS_SEND_UNSUCCESSFUL) {
-                        Slog.w(TAG, "Send failed, client connection lost");
-                    } else {
-                        Slog.w(TAG, "Client connection lost with reason: " + msg.arg1);
-                    }
-                    mTrafficPoller.removeClient(msg.replyTo);
-                    break;
-                }
                 case AsyncChannel.CMD_CHANNEL_FULL_CONNECTION: {
                     AsyncChannel ac = mFrameworkFacade.makeWifiAsyncChannel(TAG);
                     ac.connect(mContext, this, msg.replyTo);
@@ -533,16 +511,16 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mWifiController = mWifiInjector.getWifiController();
         mWifiBackupRestore = mWifiInjector.getWifiBackupRestore();
         mWifiApConfigStore = mWifiInjector.getWifiApConfigStore();
-        mPermissionReviewRequired = Build.PERMISSIONS_REVIEW_REQUIRED
-                || context.getResources().getBoolean(
-                com.android.internal.R.bool.config_permissionReviewRequired);
+        mWirelessConsentRequired = context.getResources().getBoolean(
+                com.android.internal.R.bool.config_wirelessConsentRequired);
         mWifiPermissionsUtil = mWifiInjector.getWifiPermissionsUtil();
         mLog = mWifiInjector.makeLog(TAG);
         mFrameworkFacade = wifiInjector.getFrameworkFacade();
         mIfaceIpModes = new ConcurrentHashMap<>();
         mLocalOnlyHotspotRequests = new HashMap<>();
         enableVerboseLoggingInternal(getVerboseLoggingLevel());
-        mRegisteredSoftApCallbacks = new HashMap<>();
+        mRegisteredSoftApCallbacks =
+                new ExternalCallbackTracker<ISoftApCallback>(mClientModeImplHandler);
 
         mWifiInjector.getActiveModeWarden().registerSoftApCallback(new SoftApCallbackImpl());
         mPowerProfile = mWifiInjector.getPowerProfile();
@@ -846,20 +824,20 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     /**
      * Check if the caller must still pass permission check or if the caller is exempted
-     * from the consent UI via the MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED check.
+     * from the consent UI via the MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED check.
      *
      * Commands from some callers may be exempted from triggering the consent UI when
-     * enabling wifi. This exemption is checked via the MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED
+     * enabling wifi. This exemption is checked via the MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED
      * and allows calls to skip the consent UI where it may otherwise be required.
      *
      * @hide
      */
-    private boolean checkWifiPermissionWhenPermissionReviewRequired() {
-        if (!mPermissionReviewRequired) {
+    private boolean checkWifiPermissionWhenWirelessConsentRequired() {
+        if (!mWirelessConsentRequired) {
             return false;
         }
         int result = mContext.checkCallingPermission(
-                android.Manifest.permission.MANAGE_WIFI_WHEN_PERMISSION_REVIEW_REQUIRED);
+                android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED);
         return result == PackageManager.PERMISSION_GRANTED;
     }
 
@@ -913,7 +891,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         }
 
 
-        if (mPermissionReviewRequired) {
+        if (mWirelessConsentRequired) {
             final int wiFiEnabledState = getWifiEnabledState();
             if (enable) {
                 if (wiFiEnabledState == WifiManager.WIFI_STATE_DISABLING
@@ -1172,7 +1150,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         public void onStateChanged(int state, int failureReason) {
             mSoftApState = state;
 
-            Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.values().iterator();
+            Iterator<ISoftApCallback> iterator =
+                    mRegisteredSoftApCallbacks.getCallbacks().iterator();
             while (iterator.hasNext()) {
                 ISoftApCallback callback = iterator.next();
                 try {
@@ -1193,7 +1172,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         public void onNumClientsChanged(int numClients) {
             mSoftApNumClients = numClients;
 
-            Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.values().iterator();
+            Iterator<ISoftApCallback> iterator =
+                    mRegisteredSoftApCallbacks.getCallbacks().iterator();
             while (iterator.hasNext()) {
                 ISoftApCallback callback = iterator.next();
                 try {
@@ -1215,7 +1195,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         public void onStaConnected(String Macaddr,int numClients) {
             mQCSoftApNumClients = numClients;
 
-            Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.values().iterator();
+            Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.getCallbacks().iterator();
             while (iterator.hasNext()) {
                 ISoftApCallback callback = iterator.next();
                 try {
@@ -1239,7 +1219,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         public void onStaDisconnected(String Macaddr, int numClients) {
             mQCSoftApNumClients = numClients;
 
-            Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.values().iterator();
+            Iterator<ISoftApCallback> iterator = mRegisteredSoftApCallbacks.getCallbacks().iterator();
             while (iterator.hasNext()) {
                 ISoftApCallback callback = iterator.next();
                 try {
@@ -1282,33 +1262,12 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             mLog.info("registerSoftApCallback uid=%").c(Binder.getCallingUid()).flush();
         }
 
-        // register for binder death
-        IBinder.DeathRecipient dr = new IBinder.DeathRecipient() {
-            @Override
-            public void binderDied() {
-                binder.unlinkToDeath(this, 0);
-                mClientHandler.post(() -> {
-                    mRegisteredSoftApCallbacks.remove(callbackIdentifier);
-                });
-            }
-        };
-        try {
-            binder.linkToDeath(dr, 0);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Error on linkToDeath - " + e);
-            return;
-        }
-
         // post operation to handler thread
         mClientHandler.post(() -> {
-            mRegisteredSoftApCallbacks.put(callbackIdentifier, callback);
-
-            if (mRegisteredSoftApCallbacks.size() > NUM_SOFT_AP_CALLBACKS_WTF_LIMIT) {
-                Log.wtf(TAG, "Too many soft AP callbacks: " + mRegisteredSoftApCallbacks.size());
-            } else if (mRegisteredSoftApCallbacks.size() > NUM_SOFT_AP_CALLBACKS_WARN_LIMIT) {
-                Log.w(TAG, "Too many soft AP callbacks: " + mRegisteredSoftApCallbacks.size());
+            if (!mRegisteredSoftApCallbacks.add(binder, callback, callbackIdentifier)) {
+                Log.e(TAG, "registerSoftApCallback: Failed to add callback");
+                return;
             }
-
             // Update the client about the current state immediately after registering the callback
             try {
                 callback.onStateChanged(mSoftApState, 0);
@@ -2564,7 +2523,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private boolean startConsentUi(String packageName,
             int callingUid, String intentAction) throws RemoteException {
         if (UserHandle.getAppId(callingUid) == Process.SYSTEM_UID
-                || checkWifiPermissionWhenPermissionReviewRequired()) {
+                || checkWifiPermissionWhenWirelessConsentRequired()) {
             return false;
         }
         try {
@@ -2709,6 +2668,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                 wifiScoreReport.dump(fd, pw, args);
             }
             pw.println();
+            SarManager sarManager = mWifiInjector.getSarManager();
+            if (sarManager != null) {
+                sarManager.dump(fd, pw, args);
+            }
+            pw.println();
         }
     }
 
@@ -2759,10 +2723,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     }
 
     @Override
-    public void releaseMulticastLock() {
+    public void releaseMulticastLock(String tag) {
         enforceMulticastChangePermission();
         mLog.info("releaseMulticastLock uid=%").c(Binder.getCallingUid()).flush();
-        mWifiMulticastLockManager.releaseLock();
+        mWifiMulticastLockManager.releaseLock(tag);
     }
 
     @Override
@@ -2992,6 +2956,59 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             mLog.trace("Subscription provisioning started with %")
                     .c(provider.toString()).flush();
         }
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#registerTrafficStateCallback(
+     * TrafficStateCallback, Handler)}
+     *
+     * @param binder IBinder instance to allow cleanup if the app dies
+     * @param callback Traffic State callback to register
+     * @param callbackIdentifier Unique ID of the registering callback. This ID will be used to
+     *        unregister the callback. See {@link unregisterTrafficStateCallback(int)}
+     *
+     * @throws SecurityException if the caller does not have permission to register a callback
+     * @throws RemoteException if remote exception happens
+     * @throws IllegalArgumentException if the arguments are null or invalid
+     */
+    @Override
+    public void registerTrafficStateCallback(IBinder binder, ITrafficStateCallback callback,
+                                             int callbackIdentifier) {
+        // verify arguments
+        if (binder == null) {
+            throw new IllegalArgumentException("Binder must not be null");
+        }
+        if (callback == null) {
+            throw new IllegalArgumentException("Callback must not be null");
+        }
+        enforceNetworkSettingsPermission();
+        if (mVerboseLoggingEnabled) {
+            mLog.info("registerTrafficStateCallback uid=%").c(Binder.getCallingUid()).flush();
+        }
+        // Post operation to handler thread
+        mClientHandler.post(() -> {
+            mTrafficPoller.addCallback(binder, callback, callbackIdentifier);
+        });
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#unregisterTrafficStateCallback(
+     * WifiManager.TrafficStateCallback)}
+     *
+     * @param callbackIdentifier Unique ID of the callback to be unregistered.
+     *
+     * @throws SecurityException if the caller does not have permission to register a callback
+     */
+    @Override
+    public void unregisterTrafficStateCallback(int callbackIdentifier) {
+        enforceNetworkSettingsPermission();
+        if (mVerboseLoggingEnabled) {
+            mLog.info("unregisterTrafficStateCallback uid=%").c(Binder.getCallingUid()).flush();
+        }
+        // Post operation to handler thread
+        mClientHandler.post(() -> {
+            mTrafficPoller.removeCallback(callbackIdentifier);
+        });
     }
 
     /**

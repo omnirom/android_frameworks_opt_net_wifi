@@ -213,9 +213,9 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     }
 
     @Override
-    synchronized void reportConnectionEvent(long connectionId, byte event) {
-        mLastMileLogger.reportConnectionEvent(connectionId, event);
-        if (event == CONNECTION_EVENT_FAILED) {
+    public synchronized void reportConnectionEvent(byte event) {
+        mLastMileLogger.reportConnectionEvent(event);
+        if (event == CONNECTION_EVENT_FAILED || event == CONNECTION_EVENT_TIMEOUT) {
             mPacketFatesForLastFailure = fetchPacketFates();
         }
     }

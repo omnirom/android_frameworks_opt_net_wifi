@@ -18,6 +18,7 @@ package com.android.server.wifi;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
@@ -25,17 +26,21 @@ import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.net.NetworkAgent;
+import android.net.wifi.EAPConstants;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
+import android.net.wifi.hotspot2.PasspointConfiguration;
+import android.net.wifi.hotspot2.pps.Credential;
 import android.os.Handler;
 import android.os.test.TestLooper;
 import android.provider.Settings;
 import android.support.test.filters.SmallTest;
 import android.util.Base64;
 import android.util.Pair;
+import android.util.SparseIntArray;
 
 import com.android.server.wifi.aware.WifiAwareMetrics;
 import com.android.server.wifi.hotspot2.NetworkDetail;
@@ -44,6 +49,7 @@ import com.android.server.wifi.hotspot2.PasspointMatch;
 import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
+import com.android.server.wifi.nano.WifiMetricsProto.PasspointProfileTypeCount;
 import com.android.server.wifi.nano.WifiMetricsProto.PnoScanMetrics;
 import com.android.server.wifi.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
@@ -63,7 +69,9 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -278,12 +286,26 @@ public class WifiMetricsTest {
     private static final int NUM_SOFTAP_ON_FAILURE_DUE_TO_HOSTAPD = 31;
     private static final int NUM_SOFTAP_INTERFACE_DOWN = 65;
     private static final int NUM_CLIENT_INTERFACE_DOWN = 12;
-    private static final int NUM_PASSPOINT_PROVIDERS = 4;
+    private static final int NUM_PASSPOINT_PROVIDERS = 7;
     private static final int NUM_PASSPOINT_PROVIDER_INSTALLATION = 5;
     private static final int NUM_PASSPOINT_PROVIDER_INSTALL_SUCCESS = 4;
     private static final int NUM_PASSPOINT_PROVIDER_UNINSTALLATION = 3;
     private static final int NUM_PASSPOINT_PROVIDER_UNINSTALL_SUCCESS = 2;
     private static final int NUM_PASSPOINT_PROVIDERS_SUCCESSFULLY_CONNECTED = 1;
+    private static final int NUM_EAP_SIM_TYPE = 1;
+    private static final int NUM_EAP_TTLS_TYPE = 2;
+    private static final int NUM_EAP_TLS_TYPE = 3;
+    private static final int NUM_EAP_AKA_TYPE = 4;
+    private static final int NUM_EAP_AKA_PRIME_TYPE = 5;
+    private static final SparseIntArray SAVED_PASSPOINT_PROVIDERS_TYPE = new SparseIntArray();
+    static {
+        SAVED_PASSPOINT_PROVIDERS_TYPE.put(EAPConstants.EAP_SIM, NUM_EAP_SIM_TYPE);
+        SAVED_PASSPOINT_PROVIDERS_TYPE.put(EAPConstants.EAP_TTLS, NUM_EAP_TTLS_TYPE);
+        SAVED_PASSPOINT_PROVIDERS_TYPE.put(EAPConstants.EAP_TLS, NUM_EAP_TLS_TYPE);
+        SAVED_PASSPOINT_PROVIDERS_TYPE.put(EAPConstants.EAP_AKA, NUM_EAP_AKA_TYPE);
+        SAVED_PASSPOINT_PROVIDERS_TYPE.put(EAPConstants.EAP_AKA_PRIME, NUM_EAP_AKA_PRIME_TYPE);
+    }
+
     private static final int NUM_PARTIAL_SCAN_RESULTS = 73;
     private static final int NUM_PNO_SCAN_ATTEMPTS = 20;
     private static final int NUM_PNO_SCAN_FAILED = 5;
@@ -311,6 +333,7 @@ public class WifiMetricsTest {
     private static final int DATA_STALL_MIN_TX_BAD_SETTING = 5;
     private static final int DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX_SETTING = 75;
     private static final int NUM_SAR_SENSOR_LISTENER_REGISTRATION_FAILURES = 5;
+    private static final int NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS = 4;
 
     /** Number of notifications per "Connect to Network" notification type. */
     private static final int[] NUM_CONNECT_TO_NETWORK_NOTIFICATIONS = {0, 10, 20, 30, 40};
@@ -422,13 +445,48 @@ public class WifiMetricsTest {
         return testSavedNetworks;
     }
 
+    private PasspointProvider createMockProvider(int eapType) {
+        PasspointProvider provider = mock(PasspointProvider.class);
+        PasspointConfiguration config = new PasspointConfiguration();
+        Credential credential = new Credential();
+
+        config.setCredential(credential);
+        switch (eapType) {
+            case EAPConstants.EAP_TLS:
+                credential.setCertCredential(new Credential.CertificateCredential());
+                break;
+            case EAPConstants.EAP_TTLS:
+                credential.setUserCredential(new Credential.UserCredential());
+                break;
+            case EAPConstants.EAP_AKA:
+            case EAPConstants.EAP_AKA_PRIME:
+            case EAPConstants.EAP_SIM:
+                Credential.SimCredential simCredential = new Credential.SimCredential();
+                simCredential.setEapType(eapType);
+                credential.setSimCredential(simCredential);
+                break;
+        }
+        when(provider.getConfig()).thenReturn(config);
+        return provider;
+    }
+
     /**
      * Set simple metrics, increment others
      */
     public void setAndIncrementMetrics() throws Exception {
+        Map<String, PasspointProvider> providers = new HashMap<>();
         mWifiMetrics.updateSavedNetworks(buildSavedNetworkList());
         mWifiMetrics.updateSavedPasspointProfiles(NUM_PASSPOINT_PROVIDERS,
                 NUM_PASSPOINT_PROVIDERS_SUCCESSFULLY_CONNECTED);
+        for (int i = 0; i < SAVED_PASSPOINT_PROVIDERS_TYPE.size(); i++) {
+            int eapType = SAVED_PASSPOINT_PROVIDERS_TYPE.keyAt(i);
+            int count = SAVED_PASSPOINT_PROVIDERS_TYPE.valueAt(i);
+            for (int j = 0; j < count; j++) {
+                providers.put(Integer.toString(eapType) + j, createMockProvider(eapType));
+            }
+        }
+        mWifiMetrics.updateSavedPasspointProfilesInfo(providers);
+
         mWifiMetrics.setIsLocationEnabled(TEST_VAL_IS_LOCATION_ENABLED);
         mWifiMetrics.setIsScanningAlwaysEnabled(IS_SCANNING_ALWAYS_ENABLED);
 
@@ -706,6 +764,9 @@ public class WifiMetricsTest {
         for (int i = 0; i < NUM_SAR_SENSOR_LISTENER_REGISTRATION_FAILURES; i++) {
             mWifiMetrics.incrementNumSarSensorRegistrationFailures();
         }
+        for (int i = 0; i < NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS; i++) {
+            mWifiMetrics.incrementOneshotScanWithDfsCount();
+        }
 
         mWifiMetrics.setWatchdogSuccessTimeDurationMs(NUM_WATCHDOG_SUCCESS_DURATION_MS);
         mWifiMetrics.setIsMacRandomizationOn(IS_MAC_RANDOMIZATION_ON);
@@ -780,27 +841,27 @@ public class WifiMetricsTest {
      */
     public void assertDeserializedMetricsCorrect() throws Exception {
         assertEquals("mDecodedProto.numSavedNetworks == NUM_SAVED_NETWORKS",
-                mDecodedProto.numSavedNetworks, NUM_SAVED_NETWORKS);
+                NUM_SAVED_NETWORKS, mDecodedProto.numSavedNetworks);
         assertEquals("mDecodedProto.numOpenNetworks == NUM_OPEN_NETWORKS",
-                mDecodedProto.numOpenNetworks, NUM_OPEN_NETWORKS);
+                NUM_OPEN_NETWORKS, mDecodedProto.numOpenNetworks);
         assertEquals("mDecodedProto.numPersonalNetworks == NUM_PERSONAL_NETWORKS",
-                mDecodedProto.numPersonalNetworks, NUM_PERSONAL_NETWORKS);
+                NUM_PERSONAL_NETWORKS, mDecodedProto.numPersonalNetworks);
         assertEquals("mDecodedProto.numEnterpriseNetworks == NUM_ENTERPRISE_NETWORKS",
-                mDecodedProto.numEnterpriseNetworks, NUM_ENTERPRISE_NETWORKS);
+                NUM_ENTERPRISE_NETWORKS, mDecodedProto.numEnterpriseNetworks);
         assertEquals("mDecodedProto.numNetworksAddedByUser == NUM_NETWORKS_ADDED_BY_USER",
-                mDecodedProto.numNetworksAddedByUser, NUM_NETWORKS_ADDED_BY_USER);
+                NUM_NETWORKS_ADDED_BY_USER, mDecodedProto.numNetworksAddedByUser);
         assertEquals(NUM_HIDDEN_NETWORKS, mDecodedProto.numHiddenNetworks);
         assertEquals(NUM_PASSPOINT_NETWORKS, mDecodedProto.numPasspointNetworks);
         assertEquals("mDecodedProto.numNetworksAddedByApps == NUM_NETWORKS_ADDED_BY_APPS",
-                mDecodedProto.numNetworksAddedByApps, NUM_NETWORKS_ADDED_BY_APPS);
+                NUM_NETWORKS_ADDED_BY_APPS, mDecodedProto.numNetworksAddedByApps);
         assertEquals("mDecodedProto.isLocationEnabled == TEST_VAL_IS_LOCATION_ENABLED",
-                mDecodedProto.isLocationEnabled, TEST_VAL_IS_LOCATION_ENABLED);
+                TEST_VAL_IS_LOCATION_ENABLED, mDecodedProto.isLocationEnabled);
         assertEquals("mDecodedProto.isScanningAlwaysEnabled == IS_SCANNING_ALWAYS_ENABLED",
-                mDecodedProto.isScanningAlwaysEnabled, IS_SCANNING_ALWAYS_ENABLED);
+                IS_SCANNING_ALWAYS_ENABLED, mDecodedProto.isScanningAlwaysEnabled);
         assertEquals("mDecodedProto.numEmptyScanResults == NUM_EMPTY_SCAN_RESULTS",
-                mDecodedProto.numEmptyScanResults, NUM_EMPTY_SCAN_RESULTS);
+                NUM_EMPTY_SCAN_RESULTS, mDecodedProto.numEmptyScanResults);
         assertEquals("mDecodedProto.numNonEmptyScanResults == NUM_NON_EMPTY_SCAN_RESULTS",
-                mDecodedProto.numNonEmptyScanResults, NUM_NON_EMPTY_SCAN_RESULTS);
+                NUM_NON_EMPTY_SCAN_RESULTS, mDecodedProto.numNonEmptyScanResults);
         assertScanReturnEntryEquals(WifiMetricsProto.WifiLog.SCAN_UNKNOWN, NUM_SCAN_UNKNOWN);
         assertScanReturnEntryEquals(WifiMetricsProto.WifiLog.SCAN_SUCCESS, NUM_SCAN_SUCCESS);
         assertScanReturnEntryEquals(WifiMetricsProto.WifiLog.SCAN_FAILURE_INTERRUPTED,
@@ -815,14 +876,14 @@ public class WifiMetricsTest {
                 WifiMetricsProto.WifiLog.WIFI_ASSOCIATED, false, NUM_WIFI_ASSOCIATED_SCREEN_OFF);
         assertSystemStateEntryEquals(WifiMetricsProto.WifiLog.WIFI_ASSOCIATED, true,
                 NUM_WIFI_ASSOCIATED_SCREEN_ON);
-        assertEquals(mDecodedProto.numConnectivityWatchdogPnoGood,
-                NUM_CONNECTIVITY_WATCHDOG_PNO_GOOD);
-        assertEquals(mDecodedProto.numConnectivityWatchdogPnoBad,
-                NUM_CONNECTIVITY_WATCHDOG_PNO_BAD);
-        assertEquals(mDecodedProto.numConnectivityWatchdogBackgroundGood,
-                NUM_CONNECTIVITY_WATCHDOG_BACKGROUND_GOOD);
-        assertEquals(mDecodedProto.numConnectivityWatchdogBackgroundBad,
-                NUM_CONNECTIVITY_WATCHDOG_BACKGROUND_BAD);
+        assertEquals(NUM_CONNECTIVITY_WATCHDOG_PNO_GOOD,
+                mDecodedProto.numConnectivityWatchdogPnoGood);
+        assertEquals(NUM_CONNECTIVITY_WATCHDOG_PNO_BAD,
+                mDecodedProto.numConnectivityWatchdogPnoBad);
+        assertEquals(NUM_CONNECTIVITY_WATCHDOG_BACKGROUND_GOOD,
+                mDecodedProto.numConnectivityWatchdogBackgroundGood);
+        assertEquals(NUM_CONNECTIVITY_WATCHDOG_BACKGROUND_BAD,
+                mDecodedProto.numConnectivityWatchdogBackgroundBad);
         assertEquals(NUM_LAST_RESORT_WATCHDOG_TRIGGERS,
                 mDecodedProto.numLastResortWatchdogTriggers);
         assertEquals(NUM_LAST_RESORT_WATCHDOG_BAD_ASSOCIATION_NETWORKS_TOTAL,
@@ -933,6 +994,28 @@ public class WifiMetricsTest {
         assertEquals(NUM_CLIENT_INTERFACE_DOWN, mDecodedProto.numClientInterfaceDown);
         assertEquals(NUM_SOFTAP_INTERFACE_DOWN, mDecodedProto.numSoftApInterfaceDown);
         assertEquals(NUM_PASSPOINT_PROVIDERS, mDecodedProto.numPasspointProviders);
+        for (PasspointProfileTypeCount passpointProfileType : mDecodedProto
+                .installedPasspointProfileType) {
+            switch(passpointProfileType.eapMethodType) {
+                case PasspointProfileTypeCount.TYPE_EAP_AKA:
+                    assertEquals(NUM_EAP_AKA_TYPE, passpointProfileType.count);
+                    break;
+                case PasspointProfileTypeCount.TYPE_EAP_AKA_PRIME:
+                    assertEquals(NUM_EAP_AKA_PRIME_TYPE, passpointProfileType.count);
+                    break;
+                case PasspointProfileTypeCount.TYPE_EAP_SIM:
+                    assertEquals(NUM_EAP_SIM_TYPE, passpointProfileType.count);
+                    break;
+                case PasspointProfileTypeCount.TYPE_EAP_TLS:
+                    assertEquals(NUM_EAP_TLS_TYPE, passpointProfileType.count);
+                    break;
+                case PasspointProfileTypeCount.TYPE_EAP_TTLS:
+                    assertEquals(NUM_EAP_TTLS_TYPE, passpointProfileType.count);
+                    break;
+                default:
+                    fail("unknown type counted");
+            }
+        }
         assertEquals(NUM_PASSPOINT_PROVIDER_INSTALLATION,
                 mDecodedProto.numPasspointProviderInstallation);
         assertEquals(NUM_PASSPOINT_PROVIDER_INSTALL_SUCCESS,
@@ -1015,6 +1098,8 @@ public class WifiMetricsTest {
 
         assertEquals(NUM_SAR_SENSOR_LISTENER_REGISTRATION_FAILURES,
                 mDecodedProto.numSarSensorRegistrationFailures);
+        assertEquals(NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS,
+                mDecodedProto.numOneshotHasDfsChannelScans);
     }
 
     /**
@@ -1023,7 +1108,7 @@ public class WifiMetricsTest {
     public void assertScanReturnEntryEquals(int returnCode, int count) {
         for (int i = 0; i < mDecodedProto.scanReturnEntries.length; i++) {
             if (mDecodedProto.scanReturnEntries[i].scanReturnCode == returnCode) {
-                assertEquals(mDecodedProto.scanReturnEntries[i].scanResultsCount, count);
+                assertEquals(count, mDecodedProto.scanReturnEntries[i].scanResultsCount);
                 return;
             }
         }
@@ -1037,8 +1122,7 @@ public class WifiMetricsTest {
         for (int i = 0; i < mDecodedProto.wifiSystemStateEntries.length; i++) {
             if (mDecodedProto.wifiSystemStateEntries[i].wifiState == state
                     && mDecodedProto.wifiSystemStateEntries[i].isScreenOn == screenOn) {
-                assertEquals(mDecodedProto.wifiSystemStateEntries[i].wifiStateCount,
-                        count);
+                assertEquals(count, mDecodedProto.wifiSystemStateEntries[i].wifiStateCount);
                 return;
             }
         }
@@ -1133,16 +1217,13 @@ public class WifiMetricsTest {
         dumpProtoAndDeserialize();
 
         //Check that the correct values are being flowed through
-        assertEquals(mDecodedProto.connectionEvent.length, 2);
-        assertEquals(mDecodedProto.connectionEvent[0].routerFingerprint.dtim,
-                CONFIG_DTIM);
-        assertEquals(mDecodedProto.connectionEvent[0].signalStrength, SCAN_RESULT_LEVEL);
-        assertEquals(mDecodedProto.connectionEvent[1].routerFingerprint.dtim,
-                NETWORK_DETAIL_DTIM);
-        assertEquals(mDecodedProto.connectionEvent[1].signalStrength,
-                SCAN_RESULT_LEVEL);
-        assertEquals(mDecodedProto.connectionEvent[1].routerFingerprint.routerTechnology,
-                NETWORK_DETAIL_WIFIMODE);
+        assertEquals(2, mDecodedProto.connectionEvent.length);
+        assertEquals(CONFIG_DTIM, mDecodedProto.connectionEvent[0].routerFingerprint.dtim);
+        assertEquals(SCAN_RESULT_LEVEL, mDecodedProto.connectionEvent[0].signalStrength);
+        assertEquals(NETWORK_DETAIL_DTIM, mDecodedProto.connectionEvent[1].routerFingerprint.dtim);
+        assertEquals(SCAN_RESULT_LEVEL, mDecodedProto.connectionEvent[1].signalStrength);
+        assertEquals(NETWORK_DETAIL_WIFIMODE,
+                mDecodedProto.connectionEvent[1].routerFingerprint.routerTechnology);
     }
 
     /**
@@ -1160,9 +1241,9 @@ public class WifiMetricsTest {
         //This should clear all the metrics in mWifiMetrics,
         dumpProtoAndDeserialize();
         //Check there is only 1 connection events
-        assertEquals(mDecodedProto.connectionEvent.length, 1);
-        assertEquals(mDecodedProto.connectionEvent[0].level2FailureCode,
-                WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_TIMED_OUT);
+        assertEquals(1, mDecodedProto.connectionEvent.length);
+        assertEquals(WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_TIMED_OUT,
+                mDecodedProto.connectionEvent[0].level2FailureCode);
     }
 
     /**
@@ -1195,10 +1276,10 @@ public class WifiMetricsTest {
         //Dump proto and deserialize
         //This should clear all the metrics in mWifiMetrics,
         dumpProtoAndDeserialize();
-        //Check there are only 3 connection events
-        assertEquals(mDecodedProto.connectionEvent.length, 4);
-        assertEquals(mDecodedProto.rssiPollRssiCount.length, 0);
-        assertEquals(mDecodedProto.alertReasonCount.length, 0);
+        //Check there are 4 connection events
+        assertEquals(4, mDecodedProto.connectionEvent.length);
+        assertEquals(0, mDecodedProto.rssiPollRssiCount.length);
+        assertEquals(0, mDecodedProto.alertReasonCount.length);
 
         // Create 2 ConnectionEvents
         mWifiMetrics.startConnectionEvent(null,  "BLUE",
@@ -1215,7 +1296,41 @@ public class WifiMetricsTest {
         //Dump proto and deserialize
         dumpProtoAndDeserialize();
         //Check there are only 2 connection events
-        assertEquals(mDecodedProto.connectionEvent.length, 2);
+        assertEquals(2, mDecodedProto.connectionEvent.length);
+    }
+
+    /**
+     * Test that current ongoing ConnectionEvent is not cleared and logged
+     * when proto is dumped
+     */
+    @Test
+    public void testCurrentConnectionEventNotClearedAfterProtoRequested() throws Exception {
+        // Create 2 complete ConnectionEvents and 1 ongoing un-ended ConnectionEvent
+        mWifiMetrics.startConnectionEvent(null, "RED",
+                WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE);
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                WifiMetricsProto.ConnectionEvent.HLF_NONE);
+        mWifiMetrics.startConnectionEvent(null, "YELLOW",
+                WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE);
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                WifiMetricsProto.ConnectionEvent.HLF_NONE);
+        mWifiMetrics.startConnectionEvent(null, "GREEN",
+                WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE);
+
+        // Dump proto and deserialize
+        // This should clear the metrics in mWifiMetrics,
+        dumpProtoAndDeserialize();
+        assertEquals(2, mDecodedProto.connectionEvent.length);
+
+        // End the ongoing ConnectionEvent
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                WifiMetricsProto.ConnectionEvent.HLF_NONE);
+
+        dumpProtoAndDeserialize();
+        assertEquals(1, mDecodedProto.connectionEvent.length);
     }
 
     /**
@@ -1384,7 +1499,7 @@ public class WifiMetricsTest {
     private static final int ASSOC_TIMEOUT = 1;
     private static final int LOCAL_GEN = 1;
     private static final int AUTH_FAILURE_REASON = WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD;
-    private static final int NUM_TEST_STA_EVENTS = 16;
+    private static final int NUM_TEST_STA_EVENTS = 18;
     private static final String   sSSID = "\"SomeTestSsid\"";
     private static final WifiSsid sWifiSsid = WifiSsid.createFromAsciiEncoded(sSSID);
     private static final String   sBSSID = "01:02:03:04:05:06";
@@ -1434,7 +1549,9 @@ public class WifiMetricsTest {
         {StaEvent.TYPE_NETWORK_AGENT_VALID_NETWORK,     0,                          0},
         {StaEvent.TYPE_FRAMEWORK_DISCONNECT,            StaEvent.DISCONNECT_API,    0},
         {StaEvent.TYPE_SCORE_BREACH,                    0,                          0},
-        {StaEvent.TYPE_MAC_CHANGE,                      0,                          1}
+        {StaEvent.TYPE_MAC_CHANGE,                      0,                          1},
+        {StaEvent.TYPE_WIFI_ENABLED,                    0,                          0},
+        {StaEvent.TYPE_WIFI_DISABLED,                   0,                          0}
     };
     // Values used to generate the StaEvent log calls from WifiMonitor
     // <type>, <reason>, <status>, <local_gen>,
@@ -1471,7 +1588,11 @@ public class WifiMetricsTest {
         {StaEvent.TYPE_SCORE_BREACH,                    -1,            -1,         0,
             /**/                               0,             0,        0, 0},    /**/
         {StaEvent.TYPE_MAC_CHANGE,                      -1,            -1,         0,
-            /**/                               0,             0,        0, 1}     /**/
+            /**/                               0,             0,        0, 1},    /**/
+        {StaEvent.TYPE_WIFI_ENABLED,                    -1,            -1,         0,
+            /**/                               0,             0,        0, 0},    /**/
+        {StaEvent.TYPE_WIFI_DISABLED,                   -1,            -1,         0,
+            /**/                               0,             0,        0, 0}     /**/
     };
 
     /**

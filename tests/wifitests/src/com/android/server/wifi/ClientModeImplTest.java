@@ -87,7 +87,6 @@ import android.test.mock.MockContentProvider;
 import android.test.mock.MockContentResolver;
 import android.util.Log;
 
-import com.android.internal.R;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.IState;
@@ -95,6 +94,7 @@ import com.android.internal.util.StateMachine;
 import com.android.server.wifi.hotspot2.NetworkDetail;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvisioningTestUtil;
+import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -249,7 +249,6 @@ public class ClientModeImplTest {
 
     private MockResources getMockResources() {
         MockResources resources = new MockResources();
-        resources.setBoolean(R.bool.config_wifi_enable_wifi_firmware_debugging, false);
         return resources;
     }
 
@@ -369,7 +368,6 @@ public class ClientModeImplTest {
     @Mock HandlerThread mWifiServiceHandlerThread;
     @Mock WifiPermissionsWrapper mWifiPermissionsWrapper;
     @Mock WakeupController mWakeupController;
-    @Mock ScanRequestProxy mScanRequestProxy;
     @Mock WifiDataStall mWifiDataStall;
 
     final ArgumentCaptor<WifiNative.InterfaceCallback> mInterfaceCallbackCaptor =
@@ -415,7 +413,6 @@ public class ClientModeImplTest {
         when(mWifiInjector.getWifiServiceHandlerThread()).thenReturn(mWifiServiceHandlerThread);
         when(mWifiInjector.getWifiPermissionsWrapper()).thenReturn(mWifiPermissionsWrapper);
         when(mWifiInjector.getWakeupController()).thenReturn(mWakeupController);
-        when(mWifiInjector.getScanRequestProxy()).thenReturn(mScanRequestProxy);
         when(mWifiInjector.getScoringParams()).thenReturn(new ScoringParams());
         when(mWifiInjector.getWifiDataStall()).thenReturn(mWifiDataStall);
         when(mWifiNative.initialize()).thenReturn(true);
@@ -866,7 +863,6 @@ public class ClientModeImplTest {
                 eq(config.networkId))).thenReturn(config);
 
         verify(mWifiNative).removeAllNetworks(WIFI_IFACE_NAME);
-        verify(mScanRequestProxy).enableScanningForHiddenNetworks(true);
 
         mLooper.startAutoDispatch();
         assertTrue(mCmi.syncEnableNetwork(mCmiAsyncChannel, config.networkId, true));
@@ -1061,7 +1057,6 @@ public class ClientModeImplTest {
         when(mWifiConfigManager.getConfiguredNetwork(eq(0))).thenReturn(null);
 
         verify(mWifiNative).removeAllNetworks(WIFI_IFACE_NAME);
-        verify(mScanRequestProxy).enableScanningForHiddenNetworks(true);
 
         mLooper.startAutoDispatch();
         assertFalse(mCmi.syncEnableNetwork(mCmiAsyncChannel, 0, true));
@@ -1083,7 +1078,6 @@ public class ClientModeImplTest {
         initializeAndAddNetworkAndVerifySuccess();
 
         verify(mWifiNative).removeAllNetworks(WIFI_IFACE_NAME);
-        verify(mScanRequestProxy).enableScanningForHiddenNetworks(true);
 
         mLooper.startAutoDispatch();
         mCmi.syncEnableNetwork(mCmiAsyncChannel, 0, true);
@@ -1690,7 +1684,6 @@ public class ClientModeImplTest {
         when(mWifiConfigManager.updateLastConnectUid(eq(0), anyInt())).thenReturn(true);
 
         verify(mWifiNative).removeAllNetworks(WIFI_IFACE_NAME);
-        verify(mScanRequestProxy).enableScanningForHiddenNetworks(true);
 
         mLooper.startAutoDispatch();
         assertTrue(mCmi.syncEnableNetwork(mCmiAsyncChannel, 0, true));
@@ -1836,6 +1829,7 @@ public class ClientModeImplTest {
     public void testWifiInfoCleanedUpEnteringExitingConnectModeState() throws Exception {
         InOrder inOrder = inOrder(mWifiConnectivityManager);
         InOrder inOrderSarMgr = inOrder(mSarManager);
+        InOrder inOrderMetrics = inOrder(mWifiMetrics);
         Log.i(TAG, mCmi.getCurrentState().getName());
         String initialBSSID = "aa:bb:cc:dd:ee:ff";
         WifiInfo wifiInfo = mCmi.getWifiInfo();
@@ -1847,6 +1841,9 @@ public class ClientModeImplTest {
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
         inOrder.verify(mWifiConnectivityManager).setWifiEnabled(eq(true));
         inOrderSarMgr.verify(mSarManager).setClientWifiState(WifiManager.WIFI_STATE_ENABLED);
+        inOrderMetrics.verify(mWifiMetrics)
+                .setWifiState(WifiMetricsProto.WifiLog.WIFI_DISCONNECTED);
+        inOrderMetrics.verify(mWifiMetrics).logStaEvent(StaEvent.TYPE_WIFI_ENABLED);
         assertNull(wifiInfo.getBSSID());
 
         // Send a SUPPLICANT_STATE_CHANGE_EVENT, verify WifiInfo is updated
@@ -1867,6 +1864,8 @@ public class ClientModeImplTest {
         assertEquals(WifiManager.WIFI_STATE_DISABLED, mCmi.syncGetWifiState());
         inOrder.verify(mWifiConnectivityManager).setWifiEnabled(eq(false));
         inOrderSarMgr.verify(mSarManager).setClientWifiState(WifiManager.WIFI_STATE_DISABLED);
+        inOrderMetrics.verify(mWifiMetrics).setWifiState(WifiMetricsProto.WifiLog.WIFI_DISABLED);
+        inOrderMetrics.verify(mWifiMetrics).logStaEvent(StaEvent.TYPE_WIFI_DISABLED);
         assertNull(wifiInfo.getBSSID());
         assertEquals(SupplicantState.DISCONNECTED, wifiInfo.getSupplicantState());
 
@@ -1888,6 +1887,9 @@ public class ClientModeImplTest {
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
         inOrder.verify(mWifiConnectivityManager).setWifiEnabled(eq(true));
         inOrderSarMgr.verify(mSarManager).setClientWifiState(WifiManager.WIFI_STATE_ENABLED);
+        inOrderMetrics.verify(mWifiMetrics)
+                .setWifiState(WifiMetricsProto.WifiLog.WIFI_DISCONNECTED);
+        inOrderMetrics.verify(mWifiMetrics).logStaEvent(StaEvent.TYPE_WIFI_ENABLED);
         assertEquals("DisconnectedState", getCurrentState().getName());
         assertEquals(SupplicantState.DISCONNECTED, wifiInfo.getSupplicantState());
         assertNull(wifiInfo.getBSSID());
@@ -2323,6 +2325,130 @@ public class ClientModeImplTest {
                 Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED, 0)).thenReturn(0);
         mContentObserver.onChange(false);
         verify(mWifiMetrics, times(2)).setIsMacRandomizationOn(false);
+    }
+
+    /**
+     * Verifies that CMD_START_CONNECT make WifiDiagnostics report
+     * CONNECTION_EVENT_STARTED
+     * @throws Exception
+     */
+    @Test
+    public void testReportConnectionEventIsCalledAfterCmdStartConnect() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        verify(mWifiDiagnostics, never()).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_STARTED));
+        mLooper.dispatchAll();
+        verify(mWifiDiagnostics).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_STARTED));
+    }
+
+    /**
+     * Verifies that CMD_DIAG_CONNECT_TIMEOUT is processed after the timeout threshold if we
+     * start a connection but do not finish it.
+     * @throws Exception
+     */
+    @Test
+    public void testCmdDiagsConnectTimeoutIsGeneratedAfterCmdStartConnect() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+        mLooper.moveTimeForward(ClientModeImpl.DIAGS_CONNECT_TIMEOUT_MILLIS);
+        mLooper.dispatchAll();
+        verify(mWifiDiagnostics).reportConnectionEvent(
+                eq(BaseWifiDiagnostics.CONNECTION_EVENT_TIMEOUT));
+    }
+
+    /**
+     * Verifies that CMD_DIAG_CONNECT_TIMEOUT does not get processed before the timeout threshold.
+     * @throws Exception
+     */
+    @Test
+    public void testCmdDiagsConnectTimeoutIsNotProcessedBeforeTimerExpires() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+        mLooper.moveTimeForward(ClientModeImpl.DIAGS_CONNECT_TIMEOUT_MILLIS - 1000);
+        mLooper.dispatchAll();
+        verify(mWifiDiagnostics, never()).reportConnectionEvent(
+                eq(BaseWifiDiagnostics.CONNECTION_EVENT_TIMEOUT));
+    }
+
+    private void verifyConnectionEventTimeoutDoesNotOccur() {
+        mLooper.moveTimeForward(ClientModeImpl.DIAGS_CONNECT_TIMEOUT_MILLIS);
+        mLooper.dispatchAll();
+        verify(mWifiDiagnostics, never()).reportConnectionEvent(
+                eq(BaseWifiDiagnostics.CONNECTION_EVENT_TIMEOUT));
+    }
+
+    /**
+     * Verifies that association failures make WifiDiagnostics report CONNECTION_EVENT_FAILED
+     * and then cancel any pending timeouts.
+     * @throws Exception
+     */
+    @Test
+    public void testReportConnectionEventIsCalledAfterAssociationFailure() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mCmi.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT, 0,
+                ISupplicantStaIfaceCallback.StatusCode.AP_UNABLE_TO_HANDLE_NEW_STA, sBSSID);
+        verify(mWifiDiagnostics, never()).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_FAILED));
+        mLooper.dispatchAll();
+        verify(mWifiDiagnostics).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_FAILED));
+        verifyConnectionEventTimeoutDoesNotOccur();
+    }
+
+    /**
+     * Verifies that authentication failures make WifiDiagnostics report
+     * CONNECTION_EVENT_FAILED and then cancel any pending timeouts.
+     * @throws Exception
+     */
+    @Test
+    public void testReportConnectionEventIsCalledAfterAuthenticationFailure() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD);
+        verify(mWifiDiagnostics, never()).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_FAILED));
+        mLooper.dispatchAll();
+        verify(mWifiDiagnostics).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_FAILED));
+        verifyConnectionEventTimeoutDoesNotOccur();
+
+    }
+
+    /**
+     * Verifies that dhcp failures make WifiDiagnostics report CONNECTION_EVENT_FAILED and then
+     * cancel any pending timeouts.
+     * @throws Exception
+     */
+    @Test
+    public void testReportConnectionEventIsCalledAfterDhcpFailure() throws Exception {
+        testDhcpFailure();
+        verify(mWifiDiagnostics, atLeastOnce()).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_FAILED));
+        verifyConnectionEventTimeoutDoesNotOccur();
+    }
+
+    /**
+     * Verifies that a successful connection make WifiDiagnostics report CONNECTION_EVENT_SUCCEEDED
+     * and then cancel any pending timeouts.
+     * @throws Exception
+     */
+    @Test
+    public void testReportConnectionEventIsCalledAfterSuccessfulConnection() throws Exception {
+        connect();
+        verify(mWifiDiagnostics).reportConnectionEvent(
+                eq(WifiDiagnostics.CONNECTION_EVENT_SUCCEEDED));
+        verifyConnectionEventTimeoutDoesNotOccur();
     }
 
     /**

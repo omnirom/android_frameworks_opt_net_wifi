@@ -141,8 +141,6 @@ public class WifiInjector {
     private final BaseWifiDiagnostics mWifiDiagnostics;
     private final WifiDataStall mWifiDataStall;
 
-    private final boolean mUseRealLogger;
-
     public WifiInjector(Context context) {
         if (context == null) {
             throw new IllegalStateException(
@@ -157,8 +155,6 @@ public class WifiInjector {
         sWifiInjector = this;
 
         mContext = context;
-        mUseRealLogger = mContext.getResources().getBoolean(
-                R.bool.config_wifi_enable_wifi_firmware_debugging);
         mSettingsStore = new WifiSettingsStore(mContext);
         mWifiPermissionsWrapper = new WifiPermissionsWrapper(mContext);
         mNetworkScoreManager = mContext.getSystemService(NetworkScoreManager.class);
@@ -188,7 +184,8 @@ public class WifiInjector {
         mHalDeviceManager = new HalDeviceManager(mClock);
         mWifiVendorHal =
                 new WifiVendorHal(mHalDeviceManager, mWifiCoreHandlerThread.getLooper());
-        mSupplicantStaIfaceHal = new SupplicantStaIfaceHal(mContext, mWifiMonitor);
+        mSupplicantStaIfaceHal =
+                new SupplicantStaIfaceHal(mContext, mWifiMonitor, mPropertyService);
         mHostapdHal = new HostapdHal(mContext);
         mWificondControl = new WificondControl(this, mWifiMonitor, mCarrierNetworkConfig);
         mNwManagementService = INetworkManagementService.Stub.asInterface(
@@ -256,17 +253,14 @@ public class WifiInjector {
                 (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE),
                 (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE),
                 this, mWifiConfigManager,
-                mWifiPermissionsUtil, mWifiMetrics, mClock);
+                mWifiPermissionsUtil, mWifiMetrics, mClock, mFrameworkFacade,
+                new Handler(clientModeImplLooper));
         mSarManager = new SarManager(mContext, makeTelephonyManager(), clientModeImplLooper,
                 mWifiNative, new SystemSensorManager(mContext, clientModeImplLooper),
                 mWifiMetrics);
-        if (mUseRealLogger) {
-            mWifiDiagnostics = new WifiDiagnostics(
-                    mContext, this, mWifiNative, mBuildProperties,
-                    new LastMileLogger(this));
-        } else {
-            mWifiDiagnostics = new BaseWifiDiagnostics(mWifiNative);
-        }
+        mWifiDiagnostics = new WifiDiagnostics(
+                mContext, this, mWifiNative, mBuildProperties,
+                new LastMileLogger(this));
         mWifiDataStall = new WifiDataStall(mContext, mFrameworkFacade, mWifiMetrics);
         mWifiMetrics.setWifiDataStall(mWifiDataStall);
         mClientModeImpl = new ClientModeImpl(mContext, mFrameworkFacade,
@@ -486,7 +480,7 @@ public class WifiInjector {
     public ScanOnlyModeManager makeScanOnlyModeManager(
             @NonNull ScanOnlyModeManager.Listener listener) {
         return new ScanOnlyModeManager(mContext, mWifiCoreHandlerThread.getLooper(),
-                mWifiNative, listener, mWifiMetrics, mScanRequestProxy, mWakeupController,
+                mWifiNative, listener, mWifiMetrics, mWakeupController,
                 mSarManager);
     }
 
@@ -498,7 +492,7 @@ public class WifiInjector {
      */
     public ClientModeManager makeClientModeManager(ClientModeManager.Listener listener) {
         return new ClientModeManager(mContext, mWifiCoreHandlerThread.getLooper(),
-                mWifiNative, listener, mWifiMetrics, mScanRequestProxy, mClientModeImpl);
+                mWifiNative, listener, mWifiMetrics, mClientModeImpl);
     }
 
     /**
