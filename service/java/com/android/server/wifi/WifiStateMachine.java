@@ -5135,6 +5135,7 @@ public class WifiStateMachine extends StateMachine {
                         sendNetworkStateChangeBroadcast(mLastBssid);
                     }
                     mIpReachabilityMonitorActive = true;
+                    sendMessageDelayed(obtainMessage(CMD_IP_REACHABILITY_SESSION_END, 0, 0), 10000);
                     break;
                 case CMD_RSSI_POLL:
                     if (message.arg1 == mRssiPollToken) {
@@ -5816,6 +5817,7 @@ public class WifiStateMachine extends StateMachine {
             /** clear the roaming state, if we were roaming, we failed */
             mIsAutoRoaming = false;
             mIpReachabilityMonitorActive = false;
+            removeMessages(CMD_IP_REACHABILITY_SESSION_END);
 
             mWifiConnectivityManager.handleConnectionStateChanged(
                     WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
