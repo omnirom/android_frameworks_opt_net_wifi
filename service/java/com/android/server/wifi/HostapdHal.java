@@ -34,6 +34,7 @@ import com.android.server.wifi.WifiNative.HostapdDeathEventHandler;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.WifiNative.SoftApListener;
 
+import java.util.HashMap;
 import java.util.NoSuchElementException;
 
 import javax.annotation.concurrent.ThreadSafe;
@@ -48,6 +49,8 @@ import vendor.qti.hardware.wifi.hostapd.V1_0.IHostapdVendorIfaceCallback;
 @ThreadSafe
 public class HostapdHal {
     private static final String TAG = "HostapdHal";
+    @VisibleForTesting
+    public static final String HAL_INSTANCE_NAME = "default";
 
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
@@ -59,6 +62,7 @@ public class HostapdHal {
     private IServiceManager mIServiceManager = null;
     private IHostapd mIHostapd;
     private IHostapdVendor mIHostapdVendor;
+    private HashMap<String, WifiNative.SoftApListener> mSoftApListeners = new HashMap<>();
     private HostapdDeathEventHandler mDeathEventHandler;
 
     private final IServiceNotification mServiceNotificationCallback =
@@ -116,6 +120,30 @@ public class HostapdHal {
     void enableVerboseLogging(boolean enable) {
         synchronized (mLock) {
             mVerboseLoggingEnabled = enable;
+        }
+    }
+
+    /**
+     * Uses the IServiceManager to check if the device is running V1_1 of the HAL from the VINTF for
+     * the device.
+     * @return true if supported, false otherwise.
+     */
+    private boolean isV1_1() {
+        synchronized (mLock) {
+            if (mIServiceManager == null) {
+                Log.e(TAG, "isV1_1: called but mServiceManager is null!?");
+                return false;
+            }
+            try {
+                return (mIServiceManager.getTransport(
+                        android.hardware.wifi.hostapd.V1_1.IHostapd.kInterfaceName,
+                        HAL_INSTANCE_NAME)
+                        != IServiceManager.Transport.EMPTY);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Exception while operating on IServiceManager: " + e);
+                handleRemoteException(e, "getTransport");
+                return false;
+            }
         }
     }
 
@@ -209,6 +237,22 @@ public class HostapdHal {
         }
     }
 
+    private boolean registerCallback(
+            android.hardware.wifi.hostapd.V1_1.IHostapdCallback callback) {
+        synchronized (mLock) {
+            String methodStr = "registerCallback_1_1";
+            try {
+                android.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 = getHostapdMockableV1_1();
+                if (iHostapdV1_1 == null) return false;
+                HostapdStatus status =  iHostapdV1_1.registerCallback(callback);
+                return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /**
      * Initialize the IHostapd object.
      * @return true on success, false otherwise.
@@ -220,12 +264,21 @@ public class HostapdHal {
             } catch (RemoteException e) {
                 Log.e(TAG, "IHostapd.getService exception: " + e);
                 return false;
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "IHostapd.getService exception: " + e);
+                return false;
             }
             if (mIHostapd == null) {
                 Log.e(TAG, "Got null IHostapd service. Stopping hostapd HIDL startup");
                 return false;
             }
             if (!linkToHostapdDeath()) {
+                mIHostapd = null;
+                return false;
+            }
+            // Register for callbacks for 1.1 hostapd.
+            if (isV1_1() && !registerCallback(new HostapdCallback())) {
+                mIHostapd = null;
                 return false;
             }
         }
@@ -286,9 +339,11 @@ public class HostapdHal {
      *
      * @param ifaceName Name of the interface.
      * @param config Configuration to use for the AP.
+     * @param listener Callback for AP events.
      * @return true on success, false otherwise.
      */
-    public boolean addAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config) {
+    public boolean addAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config,
+                                  @NonNull WifiNative.SoftApListener listener) {
         synchronized (mLock) {
             final String methodStr = "addAccessPoint";
             IHostapd.IfaceParams ifaceParams = new IHostapd.IfaceParams();
@@ -329,7 +384,11 @@ public class HostapdHal {
             if (!checkHostapdAndLogFailure(methodStr)) return false;
             try {
                 HostapdStatus status = mIHostapd.addAccessPoint(ifaceParams, nwParams);
-                return checkStatusAndLogFailure(status, methodStr);
+                if (!checkStatusAndLogFailure(status, methodStr)) {
+                    return false;
+                }
+                mSoftApListeners.put(ifaceName, listener);
+                return true;
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -349,7 +408,11 @@ public class HostapdHal {
             if (!checkHostapdAndLogFailure(methodStr)) return false;
             try {
                 HostapdStatus status = mIHostapd.removeAccessPoint(ifaceName);
-                return checkStatusAndLogFailure(status, methodStr);
+                if (!checkStatusAndLogFailure(status, methodStr)) {
+                    return false;
+                }
+                mSoftApListeners.remove(ifaceName);
+                return true;
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -557,6 +620,9 @@ public class HostapdHal {
                         + e);
                 hostapdServiceDiedHandler();
                 return false;
+            } catch (NoSuchElementException e) {
+                // We're starting the daemon, so expect |NoSuchElementException|.
+                Log.d(TAG, "Successfully triggered start of hostapd using HIDL");
             }
             return true;
         }
@@ -590,8 +656,16 @@ public class HostapdHal {
     @VisibleForTesting
     protected IHostapd getHostapdMockable() throws RemoteException {
         synchronized (mLock) {
+            return IHostapd.getService();
+        }
+    }
+
+    @VisibleForTesting
+    protected android.hardware.wifi.hostapd.V1_1.IHostapd getHostapdMockableV1_1()
+            throws RemoteException {
+        synchronized (mLock) {
             try {
-                return IHostapd.getService();
+                return android.hardware.wifi.hostapd.V1_1.IHostapd.castFrom(mIHostapd);
             } catch (NoSuchElementException e) {
                 Log.e(TAG, "Failed to get IHostapd", e);
                 return null;
@@ -734,16 +808,16 @@ public class HostapdHal {
         }
     }
 
-    private static void logd(String s) {
-        Log.d(TAG, s);
-    }
-
-    private static void logi(String s) {
-        Log.i(TAG, s);
-    }
-
-    private static void loge(String s) {
-        Log.e(TAG, s);
+    private class HostapdCallback extends
+            android.hardware.wifi.hostapd.V1_1.IHostapdCallback.Stub {
+        @Override
+        public void onFailure(String ifaceName) {
+            Log.w(TAG, "Failure on iface " + ifaceName);
+            WifiNative.SoftApListener listener = mSoftApListeners.get(ifaceName);
+            if (listener != null) {
+                listener.onFailure();
+            }
+        }
     }
 
     private class HostapdVendorIfaceHalCallback extends IHostapdVendorIfaceCallback.Stub {

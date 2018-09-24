@@ -473,6 +473,7 @@ public class WifiNative {
     /** Helper method invoked to teardown client iface (for scan) and perform necessary cleanup */
     private void onClientInterfaceForScanDestroyed(@NonNull Iface iface) {
         synchronized (mLock) {
+            mWifiMonitor.stopMonitoring(iface.name);
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
@@ -1092,6 +1093,7 @@ public class WifiNative {
                 teardownInterface(iface.name);
                 return null;
             }
+            mWifiMonitor.startMonitoring(iface.name);
             // Just to avoid any race conditions with interface state change callbacks,
             // update the interface state before we exit.
             onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
@@ -1457,6 +1459,11 @@ public class WifiNative {
      */
     public interface SoftApListener {
         /**
+         * Invoked when there is some fatal failure in the lower layers.
+         */
+        void onFailure();
+
+        /**
          * Invoked when the number of associated stations changes.
          */
         void onNumAssociatedStationsChanged(int numStations);
@@ -1531,7 +1538,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
                 return false;
             }
-        } else if (!mHostapdHal.addAccessPoint(ifaceName, config)) {
+        } else if (!mHostapdHal.addAccessPoint(ifaceName, config, listener)) {
             Log.e(TAG, "Failed to add acccess point");
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;

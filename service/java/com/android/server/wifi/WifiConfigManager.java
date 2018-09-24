@@ -2525,23 +2525,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Any network using certificates to authenticate access requires unlocked key store; unless
-     * the certificates can be stored with hardware encryption
-     *
-     * @return true if we need an unlocked keystore, false otherwise.
-     */
-    public boolean needsUnlockedKeyStore() {
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if (WifiConfigurationUtil.isConfigForEapNetwork(config)) {
-                if (mWifiKeyStore.needsSoftwareBackedKeyStore(config.enterpriseConfig)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /**
      * Helper method to perform the following operations during user switch/unlock:
      * - Remove private networks of the old user.
      * - Load from the new user store file.
@@ -2586,7 +2569,11 @@ public class WifiConfigManager {
             return new HashSet<>();
         }
         if (mPendingStoreRead) {
-            Log.wtf(TAG, "Unexpected user switch before store is read!");
+            Log.w(TAG, "User switch before store is read!");
+            mConfiguredNetworks.setNewUser(userId);
+            mCurrentUserId = userId;
+            // Cannot read data from new user's CE store file before they log-in.
+            mPendingUnlockStoreRead = true;
             return new HashSet<>();
         }
         if (mUserManager.isUserUnlockingOrUnlocked(mCurrentUserId)) {
