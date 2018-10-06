@@ -1791,9 +1791,9 @@ public class WifiStateMachine extends StateMachine {
         int supportedFeatureSet = resultMsg.arg1;
         resultMsg.recycle();
 
-        // Mask the feature set against system properties.
-        boolean disableRtt = mPropertyService.getBoolean("config.disable_rtt", false);
-        if (disableRtt) {
+        boolean checkRtt = mContext.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_WIFI_RTT);
+        if (!checkRtt) {
             supportedFeatureSet &=
                     ~(WifiManager.WIFI_FEATURE_D2D_RTT | WifiManager.WIFI_FEATURE_D2AP_RTT);
         }
