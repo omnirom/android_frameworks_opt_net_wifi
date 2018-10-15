@@ -178,13 +178,13 @@ public class ClientModeImpl extends StateMachine {
     protected void log(String s) {
         Log.d(getName(), s);
     }
-    private WifiMetrics mWifiMetrics;
-    private WifiInjector mWifiInjector;
-    private WifiMonitor mWifiMonitor;
-    private WifiNative mWifiNative;
-    private WifiPermissionsUtil mWifiPermissionsUtil;
-    private WifiConfigManager mWifiConfigManager;
-    private WifiConnectivityManager mWifiConnectivityManager;
+    private final WifiMetrics mWifiMetrics;
+    private final WifiInjector mWifiInjector;
+    private final WifiMonitor mWifiMonitor;
+    private final WifiNative mWifiNative;
+    private final WifiPermissionsUtil mWifiPermissionsUtil;
+    private final WifiConfigManager mWifiConfigManager;
+    private final WifiConnectivityManager mWifiConnectivityManager;
     private ConnectivityManager mCm;
     private BaseWifiDiagnostics mWifiDiagnostics;
     private WifiP2pServiceImpl wifiP2pServiceImpl;
@@ -835,6 +835,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiInfo = new ExtendedWifiInfo();
         mSupplicantStateTracker =
                 mFacade.makeSupplicantStateTracker(context, mWifiConfigManager, getHandler());
+        mWifiConnectivityManager = mWifiInjector.makeWifiConnectivityManager(this);
 
         mLinkProperties = new LinkProperties();
         mMcastLockManagerFilterController = new McastLockManagerFilterController();
@@ -2029,11 +2030,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_USER_ACTION);
         mWifiDiagnostics.dump(fd, pw, args);
         dumpIpClient(fd, pw, args);
-        if (mWifiConnectivityManager != null) {
-            mWifiConnectivityManager.dump(fd, pw, args);
-        } else {
-            pw.println("mWifiConnectivityManager is not initialized");
-        }
+        mWifiConnectivityManager.dump(fd, pw, args);
         mWifiInjector.getWakeupController().dump(fd, pw, args);
     }
 
@@ -2532,9 +2529,7 @@ public class ClientModeImpl extends StateMachine {
 
         mWifiMetrics.setScreenState(screenOn);
 
-        if (mWifiConnectivityManager != null) {
-            mWifiConnectivityManager.handleScreenStateChanged(screenOn);
-        }
+        mWifiConnectivityManager.handleScreenStateChanged(screenOn);
 
         if (mVerboseLoggingEnabled) log("handleScreenStateChanged Exit: " + screenOn);
     }
@@ -3280,7 +3275,7 @@ public class ClientModeImpl extends StateMachine {
         protected void needNetworkFor(NetworkRequest networkRequest, int score) {
             synchronized (mWifiReqCountLock) {
                 if (++mConnectionReqCount == 1) {
-                    if (mWifiConnectivityManager != null && mUntrustedReqCount == 0) {
+                    if (mUntrustedReqCount == 0) {
                         mWifiConnectivityManager.enable(true);
                     }
                 }
@@ -3291,7 +3286,7 @@ public class ClientModeImpl extends StateMachine {
         protected void releaseNetworkFor(NetworkRequest networkRequest) {
             synchronized (mWifiReqCountLock) {
                 if (--mConnectionReqCount == 0) {
-                    if (mWifiConnectivityManager != null && mUntrustedReqCount == 0) {
+                    if (mUntrustedReqCount == 0) {
                         mWifiConnectivityManager.enable(false);
                     }
                 }
@@ -3316,12 +3311,10 @@ public class ClientModeImpl extends StateMachine {
                     NetworkCapabilities.NET_CAPABILITY_TRUSTED)) {
                 synchronized (mWifiReqCountLock) {
                     if (++mUntrustedReqCount == 1) {
-                        if (mWifiConnectivityManager != null) {
-                            if (mConnectionReqCount == 0) {
-                                mWifiConnectivityManager.enable(true);
-                            }
-                            mWifiConnectivityManager.setUntrustedConnectionAllowed(true);
+                        if (mConnectionReqCount == 0) {
+                            mWifiConnectivityManager.enable(true);
                         }
+                        mWifiConnectivityManager.setUntrustedConnectionAllowed(true);
                     }
                 }
             }
@@ -3333,11 +3326,9 @@ public class ClientModeImpl extends StateMachine {
                     NetworkCapabilities.NET_CAPABILITY_TRUSTED)) {
                 synchronized (mWifiReqCountLock) {
                     if (--mUntrustedReqCount == 0) {
-                        if (mWifiConnectivityManager != null) {
-                            mWifiConnectivityManager.setUntrustedConnectionAllowed(false);
-                            if (mConnectionReqCount == 0) {
-                                mWifiConnectivityManager.enable(false);
-                            }
+                        mWifiConnectivityManager.setUntrustedConnectionAllowed(false);
+                        if (mConnectionReqCount == 0) {
+                            mWifiConnectivityManager.enable(false);
                         }
                     }
                 }
@@ -3878,16 +3869,6 @@ public class ClientModeImpl extends StateMachine {
         setHighPerfModeEnabled(false);
 
         mWifiStateTracker.updateState(WifiStateTracker.INVALID);
-
-        if (mWifiConnectivityManager == null) {
-            synchronized (mWifiReqCountLock) {
-                mWifiConnectivityManager =
-                        mWifiInjector.makeWifiConnectivityManager(mWifiInfo,
-                                                                  hasConnectionRequests());
-                mWifiConnectivityManager.setUntrustedConnectionAllowed(mUntrustedReqCount > 0);
-                mWifiConnectivityManager.handleScreenStateChanged(mScreenOn);
-            }
-        }
 
         updateDataInterface();
         registerForWifiMonitorEvents();
@@ -5179,6 +5160,7 @@ public class ClientModeImpl extends StateMachine {
                     if (message.arg1 == mRssiPollToken) {
                         WifiLinkLayerStats stats = getWifiLinkLayerStats();
                         mWifiDataStall.checkForDataStall(mLastLinkLayerStats, stats);
+                        mWifiMetrics.incrementWifiLinkLayerUsageStats(stats);
                         mLastLinkLayerStats = stats;
 
                         // Get Info and continue polling
