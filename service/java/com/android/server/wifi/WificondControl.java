@@ -196,7 +196,6 @@ public class WificondControl implements IBinder.DeathRecipient {
             Log.e(TAG, "Death handler already present");
         }
         mDeathEventHandler = handler;
-        disableHostapd();
         tearDownInterfaces();
         return true;
     }
@@ -403,23 +402,6 @@ public class WificondControl implements IBinder.DeathRecipient {
     private IClientInterface getClientInterface(@NonNull String ifaceName) {
         return mClientInterfaces.get(ifaceName);
     }
-
-    /**
-    * Disable hostapd via wificond.
-    * @return Returns true on success.
-    */
-    public boolean disableHostapd() {
-        if (!retrieveWificondAndRegisterForDeath()) {
-            return false;
-        }
-        try {
-            return mWificond.disableHostapd();
-        } catch (RemoteException e) {
-            Log.e(TAG, "Failed to disable hostapd due to remote exception");
-        }
-        return false;
-    }
-
 
     /**
      * Request signal polling to wificond.
