@@ -25,7 +25,6 @@ import android.net.apf.ApfCapabilities;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
-import android.net.wifi.WifiWakeReasonAndCounts;
 import android.os.INetworkManagementService;
 import android.os.RemoteException;
 import android.net.wifi.WifiDppConfig;
@@ -2990,9 +2989,9 @@ public class WifiNative {
     /**
      * Fetch the host wakeup reasons stats from wlan driver.
      *
-     * @return the |WifiWakeReasonAndCounts| object retrieved from the wlan driver.
+     * @return the |WlanWakeReasonAndCounts| object retrieved from the wlan driver.
      */
-    public WifiWakeReasonAndCounts getWlanWakeReasonCount() {
+    public WlanWakeReasonAndCounts getWlanWakeReasonCount() {
         return mWifiVendorHal.getWlanWakeReasonCount();
     }
 

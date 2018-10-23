@@ -98,6 +98,8 @@ public class SoftApManager implements ActiveModeManager {
 
     private final SarManager mSarManager;
 
+    private long mStartTimestamp = -1;
+
     /**
      * Listener for soft AP events.
      */
@@ -212,6 +214,7 @@ public class SoftApManager implements ActiveModeManager {
         pw.println("mTimeoutEnabled: " + mTimeoutEnabled);
         pw.println("mReportedFrequency: " + mReportedFrequency);
         pw.println("mReportedBandwidth: " + mReportedBandwidth);
+        pw.println("mStartTimestamp: " + mStartTimestamp);
     }
 
     private String getCurrentStateName() {
@@ -298,6 +301,7 @@ public class SoftApManager implements ActiveModeManager {
             Log.e(TAG, "Soft AP start failed");
             return ERROR_GENERIC;
         }
+        mStartTimestamp = SystemClock.elapsedRealtime();
         Log.d(TAG, "Soft AP is started");
 
         return SUCCESS;
