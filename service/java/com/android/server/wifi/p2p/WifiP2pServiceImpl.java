@@ -47,6 +47,7 @@ import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.WifiP2pProvDiscEvent;
 import android.net.wifi.p2p.WifiP2pWfdInfo;
+import android.net.wifi.p2p.WifiWscVendorInfo;
 import android.net.wifi.p2p.nsd.WifiP2pServiceInfo;
 import android.net.wifi.p2p.nsd.WifiP2pServiceRequest;
 import android.net.wifi.p2p.nsd.WifiP2pServiceResponse;
@@ -339,6 +340,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 case WifiP2pManager.SET_DEVICE_NAME:
                 case WifiP2pManager.SET_WFD_INFO:
                 case WifiP2pManager.SET_WFDR2_INFO:
+                case WifiP2pManager.SET_WSC_VENDOR_IE_INFO:
                 case WifiP2pManager.DISCOVER_PEERS:
                 case WifiP2pManager.STOP_DISCOVERY:
                 case WifiP2pManager.CONNECT:
@@ -807,6 +809,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             mWifiMonitor.registerHandler(mInterfaceName,
                     WifiP2pMonitor.P2P_DEVICE_LOST_EVENT, getHandler());
             mWifiMonitor.registerHandler(mInterfaceName,
+                    WifiP2pMonitor.WSC_VENDOR_INFO_FOUND_EVENT, getHandler());
+            mWifiMonitor.registerHandler(mInterfaceName,
                     WifiP2pMonitor.P2P_FIND_STOPPED_EVENT, getHandler());
             mWifiMonitor.registerHandler(mInterfaceName,
                     WifiP2pMonitor.P2P_GO_NEGOTIATION_FAILURE_EVENT, getHandler());
@@ -974,6 +978,15 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                     WifiP2pManager.BUSY);
                         }
                         break;
+                    case WifiP2pManager.SET_WSC_VENDOR_IE_INFO:
+                        if (!getWfdPermission(message.sendingUid)) {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        } else {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_FAILED,
+                                    WifiP2pManager.BUSY);
+                        }
+                        break;
                     case WifiP2pManager.REQUEST_PEERS:
                         replyToMessage(message, WifiP2pManager.RESPONSE_PEERS,
                                 getPeers((Bundle) message.obj, message.sendingUid));
@@ -1009,6 +1022,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pMonitor.P2P_GROUP_REMOVED_EVENT:
                     case WifiP2pMonitor.P2P_DEVICE_FOUND_EVENT:
                     case WifiP2pMonitor.P2P_DEVICE_LOST_EVENT:
+                    case WifiP2pMonitor.WSC_VENDOR_INFO_FOUND_EVENT:
                     case WifiP2pMonitor.P2P_FIND_STOPPED_EVENT:
                     case WifiP2pMonitor.P2P_SERV_DISC_RESP_EVENT:
                     case PEER_CONNECTION_USER_ACCEPT:
@@ -1144,6 +1158,15 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                     WifiP2pManager.ERROR);
                         } else {
                             replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.P2P_UNSUPPORTED);
+                        }
+                        break;
+                    case WifiP2pManager.SET_WSC_VENDOR_IE_INFO:
+                        if (!getWfdPermission(message.sendingUid)) {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        } else {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_FAILED,
                                     WifiP2pManager.P2P_UNSUPPORTED);
                         }
                         break;
@@ -1319,6 +1342,20 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         }
                         break;
                     }
+                    case WifiP2pManager.SET_WSC_VENDOR_IE_INFO:
+                    {
+                        WifiWscVendorInfo d = (WifiWscVendorInfo) message.obj;
+                        if (!getWfdPermission(message.sendingUid)) {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        } else if (d != null && setWscVendorIe(d)) {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_SUCCEEDED);
+                        } else {
+                            replyToMessage(message, WifiP2pManager.SET_WSC_VENDOR_IE_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        }
+                        break;
+                    }
                     case BLOCK_DISCOVERY:
                         boolean blocked = (message.arg1 == ENABLED ? true : false);
                         if (mDiscoveryBlocked == blocked) break;
@@ -1399,6 +1436,15 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         if (mThisDevice.deviceAddress.equals(device.deviceAddress)) break;
                         mPeers.updateSupplicantDetails(device);
                         sendPeersChangedBroadcast();
+                        break;
+                    case WifiP2pMonitor.WSC_VENDOR_INFO_FOUND_EVENT:
+                        if (message.obj == null) {
+                            Log.e(TAG, "Illegal argument(s)");
+                            break;
+                        }
+                        WifiWscVendorInfo info = (WifiWscVendorInfo) message.obj;
+                        mPeers.updateSupplicantDetailsExt(info);
+                        sendWscVendorIEBroadcast(info);
                         break;
                     case WifiP2pMonitor.P2P_DEVICE_LOST_EVENT:
                         if (message.obj == null) {
@@ -2642,6 +2688,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
         }
 
+        private void sendWscVendorIEBroadcast(WifiWscVendorInfo info) {
+            final Intent intent = new Intent(WifiP2pManager.WIFI_WSC_VENDOR_IE_CHANGED_ACTION);
+            intent.putExtra(WifiP2pManager.WSC_VENDOR_IE_INFO, new WifiWscVendorInfo(info));
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+            mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+        }
+
         private void sendP2pConnectionChangedBroadcast() {
             if (DBG) logd("sending p2p connection changed broadcast");
             Intent intent = new Intent(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
@@ -3186,6 +3239,21 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             }
 
             mThisDevice.wfdInfo = wfdInfo;
+            sendThisDeviceChangedBroadcast();
+            return true;
+        }
+
+        private boolean setWscVendorIe(WifiWscVendorInfo info) {
+            boolean success;
+
+           success = mWifiNative.setWscVendorIe(info.toArray());
+
+            if (!success) {
+                loge("Failed to set wfd properties");
+                return false;
+            }
+
+            mThisDevice.wscVendorExtInfo=info;
             sendThisDeviceChangedBroadcast();
             return true;
         }

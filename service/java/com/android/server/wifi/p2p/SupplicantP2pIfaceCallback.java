@@ -25,6 +25,7 @@ import android.net.wifi.p2p.WifiP2pDevice;
 import android.net.wifi.p2p.WifiP2pGroup;
 import android.net.wifi.p2p.WifiP2pProvDiscEvent;
 import android.net.wifi.p2p.WifiP2pWfdInfo;
+import android.net.wifi.p2p.WifiWscVendorInfo;
 import android.net.wifi.p2p.nsd.WifiP2pServiceResponse;
 import android.util.Log;
 
@@ -648,15 +649,102 @@ class SupplicantVendorP2pIfaceCallback extends ISupplicantVendorP2PIfaceCallback
         mMonitor.broadcastP2pDeviceFound(mInterface, device);
     }
 
+    private int parseAttribute(List <Byte> ip) {
+        return (ip.get(0)<<8|ip.get(1));
+    }
+
+    private int parseInteger(List <Byte> ip) {
+        return (ip.get(0)<<24|ip.get(1)<<16|ip.get(2)<<8|ip.get(3));
+    }
+
     /**
-     * Used to indicate that a P2P device with some addition IEs has been found.
+     * Used to indicate that a P2P device- with WSC Vendor Extensions has been found.
      *
-     * @param info Vendor Extension Info as described in Section 12 of WSC
-     *        specification version 2.0.4
-     * @param type Vendor Extension Attribute for identification
-     *
+     * @param infoAttributes an array consisting of MAC address
+     *        and  Vendor Extension IE of the device found.
+     *        It could be any protocol. WSC Vendor IE is currently supported
+     * @param type Type of Information Element contained in the array
      */
-    @Override
-    public void onVendorExtensionFound(ArrayList<Byte> info, byte type) {
+    public void onVendorExtensionFound(ArrayList <Byte> infoAttributes,
+            byte type){
+        logd("Printing received array"+infoAttributes.toString());
+        boolean miceFound = false;
+        if (WifiWscVendorInfo.WSC_VENDOR == type) {
+            WifiWscVendorInfo info = new WifiWscVendorInfo();
+            int length = 0;
+            int attribute = 0;
+            byte [] macByteArray = new byte[6];
+            for (int i = 0; i < 6; i++){
+                macByteArray[i] = infoAttributes.get(i).byteValue();
+            }
+            info.mP2pMacAddress = NativeUtil.macAddressFromByteArray(macByteArray);
+            int pos = 6;//First 6 bytes contain p2p mac address
+            if (infoAttributes.get(pos)==(byte)0x00 &&
+                infoAttributes.get(pos+1)==(byte)0x01 &&
+                infoAttributes.get(pos+2)==(byte)0x37) {
+
+                logd("WSC Vendor extension found");
+                pos+=3;
+
+                // Now Parsing rest of the attributes
+                while (pos < infoAttributes.size()) {
+                    attribute = parseAttribute(infoAttributes.subList(pos,pos+2));
+                    logd("printing parseAttribute return value" + attribute);
+                    pos+=2;
+                    switch (attribute) {
+                        case WifiWscVendorInfo.CAPABILITY_ATTRIBUTE:
+                            pos+=2;
+                            info.setCapability(infoAttributes.get(pos));
+                            pos++;
+                            miceFound = true;
+                            break;
+
+                        case WifiWscVendorInfo.HOSTNAME_ATTRIBUTE:
+                        case WifiWscVendorInfo.BSSID_ATTRIBUTE:
+                            length = parseAttribute(infoAttributes.subList(pos,pos+2));
+                            pos+=2;
+                            byte [] byteArray = new byte[infoAttributes.size()];
+                            for (int i =0 ; i < infoAttributes.size(); i++)
+                                byteArray[i] = infoAttributes.get(i).byteValue();
+
+                            info.setHostName( new String(byteArray,pos,length));
+                            pos+=length;
+                            miceFound = true;
+                            break;
+
+                        case WifiWscVendorInfo.CONNECTION_PREFERENCE_ATTRIBUTE:
+                            info.setConnectionPreference(parseInteger(infoAttributes.subList(pos,pos+4)));
+                            pos+=6;
+                            miceFound = true;
+                            break;
+
+                        case WifiWscVendorInfo.IPADDRESS_ATTRIBUTE:
+                            length = parseAttribute(infoAttributes.subList(pos,pos+2));
+                            pos+=2;
+                            byte [] byteArray1 = new byte[infoAttributes.size()];
+                            for (int i =0 ; i < infoAttributes.size(); i++)
+                                byteArray1[i] = infoAttributes.get(i).byteValue();
+
+                            info.setIpAddress(new  String(byteArray1,pos,length));
+                            pos+=length;
+                            miceFound = true;
+                            break;
+
+                        default:
+                            length = parseAttribute(infoAttributes.subList(pos,pos+2));
+                            pos+=length+2;
+                            break;
+
+                    }
+                }
+            }
+
+            logd("WSC Device discovered Info : " + info);
+            if (miceFound)
+                mMonitor.broadcastWSCVendorIEFound(mInterface,info);
+        }
+        else {
+            logd("Unsupported vendor info");
+        }
     }
 }
