@@ -19,6 +19,7 @@ package com.android.server.wifi.p2p;
 import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pDevice;
 import android.net.wifi.p2p.WifiP2pGroup;
+import android.net.wifi.p2p.WifiWscVendorInfo;
 import android.net.wifi.p2p.WifiP2pProvDiscEvent;
 import android.net.wifi.p2p.nsd.WifiP2pServiceResponse;
 import android.os.Handler;
@@ -77,7 +78,7 @@ public class WifiP2pMonitor {
     /* hostap events */
     public static final int AP_STA_DISCONNECTED_EVENT            = BASE + 41;
     public static final int AP_STA_CONNECTED_EVENT               = BASE + 42;
-
+    public static final int WSC_VENDOR_INFO_FOUND_EVENT          = BASE + 43;
 
     private final WifiInjector mWifiInjector;
     private boolean mVerboseLoggingEnabled = false;
@@ -286,6 +287,17 @@ public class WifiP2pMonitor {
         }
     }
 
+    /**
+     * Broadcast device with WSC Vendor IE discovered event to all handlers registered for this event.
+     *
+     * @param iface Name of iface on which this occurred.
+     * @param device Device that has been discovered during recent scan.
+     */
+    public void broadcastWSCVendorIEFound(String iface, WifiWscVendorInfo info) {
+        if (info != null) {
+            sendMessage(iface, WSC_VENDOR_INFO_FOUND_EVENT, info);
+        }
+    }
     /**
      * Broadcast scan termination event to all handlers registered for this event.
      *
