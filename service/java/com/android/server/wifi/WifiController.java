@@ -465,6 +465,17 @@ public class WifiController extends StateMachine {
 
     class StaEnabledState extends State {
 
+        private final BroadcastReceiver br = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                 log("delayed disconnect cancelled. disconnecting...");
+                 if (hasMessages(CMD_DELAY_DISCONNECT)) {
+                     removeMessages(CMD_DELAY_DISCONNECT);
+                     sendMessage(CMD_DELAY_DISCONNECT);
+                 }
+            }
+        };
+
         private boolean checkAndHandleDelayDisconnectDuration() {
             int delay = Settings.Secure.getInt(mContext.getContentResolver(),
                             Settings.Secure.WIFI_DISCONNECT_DELAY_DURATION, 0);
@@ -472,7 +483,8 @@ public class WifiController extends StateMachine {
                 log("DISCONNECT_DELAY_DURATION set. Delaying disconnection by: " +delay+ " seconds");
                 Intent intent = new Intent(WifiManager.ACTION_WIFI_DISCONNECT_IN_PROGRESS);
                 intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-                mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+                mContext.sendOrderedBroadcastAsUser(intent,
+                         UserHandle.ALL, null, br, mWifiStateMachine.getHandler(), 0, null, null);
 
                 sendMessageDelayed(obtainMessage(CMD_DELAY_DISCONNECT), delay * 1000);
                 transitionTo(mQcStaDisablingState);
