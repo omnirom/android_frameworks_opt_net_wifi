@@ -3035,6 +3035,14 @@ public class WifiNative {
         return mWifiVendorHal.selectTxPowerScenario(sarInfo);
     }
 
+    /**
+     * Set Latency level to driver
+     * @param ifaceName Name of the interface.
+     */
+    public boolean setLatencyLevel(@NonNull String ifaceName, int level) {
+        return mWifiVendorHal.setLatencyLevel(ifaceName, level);
+    }
+
     /********************************************************
      * JNI operations
      ********************************************************/

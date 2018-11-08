@@ -89,6 +89,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import vendor.qti.hardware.wifi.V1_0.IWifiVendorStaIface;
+
 /**
  * Vendor HAL via HIDL
  */
@@ -2618,6 +2620,26 @@ public class WifiVendorHal {
     }
 
     /**
+     * Set Latency level configuration
+     */
+    public boolean setLatencyLevel(@NonNull String ifaceName, int level) {
+        synchronized (sLock) {
+            mLog.info("setLatencyLevel iface=% level=%").c(ifaceName).c(level).flush();
+            try {
+                vendor.qti.hardware.wifi.V1_0.IWifiVendorStaIface iface =
+                        getWifiVendorStaIfaceForV1_0Mockable(ifaceName);
+                if (iface == null) return boolResult(false);
+                WifiStatus status = iface.setLatencyLevel(level);
+                if (!ok(status)) return false;
+                return true;
+            } catch (RemoteException e) {
+                handleRemoteException(e);
+                return false;
+            }
+        }
+    }
+
+    /**
      * Method to mock out the V1_1 IWifiChip retrieval in unit tests.
      *
      * @return 1.1 IWifiChip object if the device is running the 1.1 wifi hal service, null
@@ -2651,6 +2673,20 @@ public class WifiVendorHal {
         IWifiStaIface iface = getStaIface(ifaceName);
         if (iface == null) return null;
         return android.hardware.wifi.V1_2.IWifiStaIface.castFrom(iface);
+    }
+
+    /**
+     * Method to mock out the V1_0 IWifiVendorStaIface retrieval.
+     *
+     * @param ifaceName Name of the interface
+     * @return 1.0 IWifiVendorStaIface object if the device is running the 1.0 wifi vendor hal
+     * service, null otherwise.
+     */
+    protected vendor.qti.hardware.wifi.V1_0.IWifiVendorStaIface
+            getWifiVendorStaIfaceForV1_0Mockable(@NonNull String ifaceName) {
+        IWifiStaIface iface = getStaIface(ifaceName);
+        if (iface == null) return null;
+        return vendor.qti.hardware.wifi.V1_0.IWifiVendorStaIface.castFrom(iface);
     }
 
     /**
