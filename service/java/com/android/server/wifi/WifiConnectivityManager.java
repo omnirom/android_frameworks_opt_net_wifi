@@ -150,6 +150,7 @@ public class WifiConnectivityManager {
     private final LinkedList<Long> mConnectionAttemptTimeStamps;
 
     private boolean mDbg = false;
+    private boolean DBG = false;
     private boolean mWifiEnabled = false;
     private boolean mWifiConnectivityManagerEnabled = true;
     private boolean mScreenOn = false;
@@ -202,6 +203,8 @@ public class WifiConnectivityManager {
     // be retrieved in bugreport.
     private void localLog(String log) {
         mLocalLog.log(log);
+        if (DBG)
+            Log.d(TAG, log);
     }
 
     // A periodic/PNO scan will be rescheduled up to MAX_SCAN_RESTART_ALLOWED times
@@ -656,6 +659,17 @@ public class WifiConnectivityManager {
 
         localLog("ConnectivityScanManager initialized and "
                 + (enable ? "enabled" : "disabled"));
+    }
+
+    /**
+     * Enable verbose logging for WifiCountryCode.
+     */
+    public void enableVerboseLogging(int verbose) {
+        if (verbose > 0) {
+            DBG = true;
+        } else {
+            DBG = false;
+        }
     }
 
     /**

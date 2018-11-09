@@ -1155,6 +1155,8 @@ public class WifiStateMachine extends StateMachine {
         mWifiConfigManager.enableVerboseLogging(verbose);
         mSupplicantStateTracker.enableVerboseLogging(verbose);
         mPasspointManager.enableVerboseLogging(verbose);
+        if (mWifiConnectivityManager != null)
+            mWifiConnectivityManager.enableVerboseLogging(verbose);
     }
 
     private static final String SYSTEM_PROPERTY_LOG_CONTROL_WIFIHAL = "log.tag.WifiHAL";
@@ -3842,6 +3844,7 @@ public class WifiStateMachine extends StateMachine {
                                                                   hasConnectionRequests());
                 mWifiConnectivityManager.setUntrustedConnectionAllowed(mUntrustedReqCount > 0);
                 mWifiConnectivityManager.handleScreenStateChanged(mScreenOn);
+                mWifiConnectivityManager.enableVerboseLogging(mVerboseLoggingEnabled ? 1 : 0);
             }
         }
 
