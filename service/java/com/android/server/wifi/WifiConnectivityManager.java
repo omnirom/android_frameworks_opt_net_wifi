@@ -124,11 +124,6 @@ public class WifiConnectivityManager {
     public static final int WIFI_STATE_DISCONNECTED = 2;
     public static final int WIFI_STATE_TRANSITIONING = 3;
 
-    // Saved network evaluator priority
-    private static final int SAVED_NETWORK_EVALUATOR_PRIORITY = 1;
-    private static final int PASSPOINT_NETWORK_EVALUATOR_PRIORITY = 2;
-    private static final int SCORED_NETWORK_EVALUATOR_PRIORITY = 3;
-
     // Log tag for this class
     private static final String TAG = "WifiConnectivityManager";
 
@@ -160,6 +155,7 @@ public class WifiConnectivityManager {
     private int mWifiState = WIFI_STATE_UNKNOWN;
     private boolean mUntrustedConnectionAllowed = false;
     private boolean mTrustedConnectionAllowed = false;
+    private boolean mSpecificNetworkRequestInProgress = false;
     private int mScanRestartCount = 0;
     private int mSingleScanRestartCount = 0;
     private int mTotalConnectivityAttemptsRateLimited = 0;
@@ -441,7 +437,7 @@ public class WifiConnectivityManager {
         }
     }
 
-    // PNO scan results listener for both disconected and connected PNO scanning.
+    // PNO scan results listener for both disconnected and connected PNO scanning.
     // A PNO scan is initiated when screen is off.
     private class PnoScanListener implements WifiScanner.PnoScanListener {
         private List<ScanDetail> mScanDetails = new ArrayList<ScanDetail>();
@@ -639,15 +635,12 @@ public class WifiConnectivityManager {
                 PackageManager.FEATURE_WIFI_PASSPOINT);
         localLog("Passpoint is: " + (hs2Enabled ? "enabled" : "disabled"));
 
-        // Register the network evaluators
-        mNetworkSelector.registerNetworkEvaluator(savedNetworkEvaluator,
-                SAVED_NETWORK_EVALUATOR_PRIORITY);
+        // Register the network evaluators, in order
+        mNetworkSelector.registerNetworkEvaluator(savedNetworkEvaluator);
         if (hs2Enabled) {
-            mNetworkSelector.registerNetworkEvaluator(passpointNetworkEvaluator,
-                    PASSPOINT_NETWORK_EVALUATOR_PRIORITY);
+            mNetworkSelector.registerNetworkEvaluator(passpointNetworkEvaluator);
         }
-        mNetworkSelector.registerNetworkEvaluator(scoredNetworkEvaluator,
-                SCORED_NETWORK_EVALUATOR_PRIORITY);
+        mNetworkSelector.registerNetworkEvaluator(scoredNetworkEvaluator);
 
         // Listen to WifiConfigManager network update events
         mConfigManager.setOnSavedNetworkUpdateListener(new OnSavedNetworkUpdateListener());
@@ -1139,13 +1132,6 @@ public class WifiConnectivityManager {
 
         mWifiState = state;
 
-        if (mWifiState == WIFI_STATE_CONNECTED) {
-            mOpenNetworkNotifier.handleWifiConnected(
-                    (mWifiInfo.getWifiSsid() == null) ? null : mWifiInfo.getWifiSsid().toString());
-            mCarrierNetworkNotifier.handleWifiConnected(
-                    (mWifiInfo.getWifiSsid() == null) ? null : mWifiInfo.getWifiSsid().toString());
-        }
-
         // Reset BSSID of last connection attempt and kick off
         // the watchdog timer if entering disconnected state.
         if (mWifiState == WIFI_STATE_DISCONNECTED) {
@@ -1163,38 +1149,60 @@ public class WifiConnectivityManager {
      * @param failureCode {@link WifiMetrics.ConnectionEvent} failure code.
      */
     public void handleConnectionAttemptEnded(int failureCode) {
-        if (failureCode != WifiMetrics.ConnectionEvent.FAILURE_NONE) {
+        if (failureCode == WifiMetrics.ConnectionEvent.FAILURE_NONE) {
+            String ssid = (mWifiInfo.getWifiSsid() == null)
+                    ? null
+                    : mWifiInfo.getWifiSsid().toString();
+            mOpenNetworkNotifier.handleWifiConnected(ssid);
+            mCarrierNetworkNotifier.handleWifiConnected(ssid);
+        } else {
             mOpenNetworkNotifier.handleConnectionFailure();
             mCarrierNetworkNotifier.handleConnectionFailure();
         }
     }
 
+    // Enable auto-join if we have any pending network request (trusted or untrusted) and no
+    // specific network request in progress.
+    private void checkStateAndEnable() {
+        enable(!mSpecificNetworkRequestInProgress
+                && (mUntrustedConnectionAllowed || mTrustedConnectionAllowed));
+        startConnectivityScan(SCAN_IMMEDIATELY);
+    }
+
     /**
-     * Handler when connectivity allows/disallows trusted connections (all of autojoin).
+     * Triggered when {@link WifiNetworkFactory} has a pending general network request.
      */
     public void setTrustedConnectionAllowed(boolean allowed) {
         localLog("setTrustedConnectionAllowed: allowed=" + allowed);
 
         if (mTrustedConnectionAllowed != allowed) {
             mTrustedConnectionAllowed = allowed;
-            // Enable auto-join if we have any pending network request (trusted or untrusted).
-            enable(mUntrustedConnectionAllowed || mTrustedConnectionAllowed);
-            startConnectivityScan(SCAN_IMMEDIATELY);
+            checkStateAndEnable();
         }
     }
 
 
     /**
-     * Handler when connectivity allows/disallows untrusted connections (ephemeral networks).
+     * Triggered when {@link UntrustedWifiNetworkFactory} has a pending ephemeral network request.
      */
     public void setUntrustedConnectionAllowed(boolean allowed) {
         localLog("setUntrustedConnectionAllowed: allowed=" + allowed);
 
         if (mUntrustedConnectionAllowed != allowed) {
             mUntrustedConnectionAllowed = allowed;
-            // Enable auto-join if we have any pending network request (trusted or untrusted).
-            enable(mUntrustedConnectionAllowed || mTrustedConnectionAllowed);
-            startConnectivityScan(SCAN_IMMEDIATELY);
+            checkStateAndEnable();
+        }
+    }
+
+    /**
+     * Triggered when {@link WifiNetworkFactory} is processing a specific network request.
+     */
+    public void setSpecificNetworkRequestInProgress(boolean inProgress) {
+        localLog("setsetSpecificNetworkRequestInProgress : inProgress=" + inProgress);
+
+        if (mSpecificNetworkRequestInProgress != inProgress) {
+            mSpecificNetworkRequestInProgress = inProgress;
+            checkStateAndEnable();
         }
     }
 
@@ -1413,7 +1421,6 @@ public class WifiConnectivityManager {
         retrieveWifiScanner();
         mConnectivityHelper.getFirmwareRoamingInfo();
         clearBssidBlacklist();
-        startConnectivityScan(SCAN_IMMEDIATELY);
         mRunning = true;
     }
 
@@ -1488,5 +1495,6 @@ public class WifiConnectivityManager {
         pw.println("WifiConnectivityManager - Log End ----");
         mOpenNetworkNotifier.dump(fd, pw, args);
         mCarrierNetworkNotifier.dump(fd, pw, args);
+        mCarrierNetworkConfig.dump(fd, pw, args);
     }
 }

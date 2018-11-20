@@ -658,6 +658,7 @@ public class WificondControl implements IBinder.DeathRecipient {
                     Log.e(TAG, "Illegal argument " + network.ssid, e);
                     continue;
                 }
+                condNetwork.frequencies = network.frequencies;
                 if (condNetwork.ssid.length <= WifiGbk.MAX_SSID_LENGTH) { //wifigbk++
                     settings.pnoNetworks.add(condNetwork);
                 }

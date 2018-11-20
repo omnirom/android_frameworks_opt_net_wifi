@@ -24,6 +24,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
 import android.net.IpConfiguration;
 import android.net.MacAddress;
 import android.net.ProxyInfo;
@@ -35,6 +36,8 @@ import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import android.os.UserHandle;
 import android.os.UserManager;
@@ -48,7 +51,6 @@ import android.util.Pair;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.server.LocalServices;
 import com.android.server.wifi.WifiConfigStoreLegacy.WifiConfigStoreDataLegacy;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.util.TelephonyUtil;
@@ -61,10 +63,12 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -212,6 +216,16 @@ public class WifiConfigManager {
      * Maximum age of scan results that can be used for averaging out RSSI value.
      */
     private static final int SCAN_RESULT_MAXIMUM_AGE_MS = 40000;
+
+    /**
+     * Maximum age of frequencies last seen to be included in pno scans. (30 days)
+     */
+    @VisibleForTesting
+    public static final long MAX_PNO_SCAN_FREQUENCY_AGE_MS = (long) 1000 * 3600 * 24 * 30;
+
+    private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 0; // 0 = disabled
+    private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 0; // 0 = disabled:
+
     /**
      * General sorting algorithm of all networks for scanning purposes:
      * Place the configurations in descending order of their |numAssociation| values. If networks
@@ -278,6 +292,9 @@ public class WifiConfigManager {
      * Number of channels to scan for during partial scans initiated while connected.
      */
     private final int mMaxNumActiveChannelsForPartialScans;
+
+    private final FrameworkFacade mFrameworkFacade;
+
     /**
      * Verbose logging flag. Toggled by developer options.
      */
@@ -328,11 +345,17 @@ public class WifiConfigManager {
 
     // Store data for network list and deleted ephemeral SSID list.  Used for serializing
     // parsing data to/from the config store.
-    private final NetworkListStoreData mNetworkListStoreData;
+    private final NetworkListSharedStoreData mNetworkListSharedStoreData;
+    private final NetworkListUserStoreData mNetworkListUserStoreData;
     private final DeletedEphemeralSsidsStoreData mDeletedEphemeralSsidsStoreData;
 
     // Store the saved network update listener.
     private OnSavedNetworkUpdateListener mListener = null;
+
+    private boolean mPnoFrequencyCullingEnabled = false;
+    private boolean mPnoRecencySortingEnabled = false;
+
+
 
     /**
      * Create new instance of WifiConfigManager.
@@ -343,8 +366,10 @@ public class WifiConfigManager {
             WifiConfigStore wifiConfigStore, WifiConfigStoreLegacy wifiConfigStoreLegacy,
             WifiPermissionsUtil wifiPermissionsUtil,
             WifiPermissionsWrapper wifiPermissionsWrapper,
-            NetworkListStoreData networkListStoreData,
-            DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData) {
+            NetworkListSharedStoreData networkListSharedStoreData,
+            NetworkListUserStoreData networkListUserStoreData,
+            DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData,
+            FrameworkFacade frameworkFacade, Looper looper) {
         mContext = context;
         mClock = clock;
         mUserManager = userManager;
@@ -361,16 +386,36 @@ public class WifiConfigManager {
         mDeletedEphemeralSSIDs = new HashSet<>();
 
         // Register store data for network list and deleted ephemeral SSIDs.
-        mNetworkListStoreData = networkListStoreData;
+        mNetworkListSharedStoreData = networkListSharedStoreData;
+        mNetworkListUserStoreData = networkListUserStoreData;
         mDeletedEphemeralSsidsStoreData = deletedEphemeralSsidsStoreData;
-        mWifiConfigStore.registerStoreData(mNetworkListStoreData);
+        mWifiConfigStore.registerStoreData(mNetworkListSharedStoreData);
+        mWifiConfigStore.registerStoreData(mNetworkListUserStoreData);
         mWifiConfigStore.registerStoreData(mDeletedEphemeralSsidsStoreData);
 
         mOnlyLinkSameCredentialConfigurations = mContext.getResources().getBoolean(
                 R.bool.config_wifi_only_link_same_credential_configurations);
         mMaxNumActiveChannelsForPartialScans = mContext.getResources().getInteger(
                 R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels);
-
+        mFrameworkFacade = frameworkFacade;
+        mFrameworkFacade.registerContentObserver(mContext, Settings.Global.getUriFor(
+                Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED), false,
+                new ContentObserver(new Handler(looper)) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        updatePnoFrequencyCullingSetting();
+                    }
+                });
+        updatePnoFrequencyCullingSetting();
+        mFrameworkFacade.registerContentObserver(mContext, Settings.Global.getUriFor(
+                Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED), false,
+                new ContentObserver(new Handler(looper)) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        updatePnoRecencySortingSetting();
+                    }
+                });
+        updatePnoRecencySortingSetting();
         try {
             mSystemUiUid = mContext.getPackageManager().getPackageUidAsUser(SYSUI_PACKAGE_NAME,
                     PackageManager.MATCH_SYSTEM_ONLY, UserHandle.USER_SYSTEM);
@@ -406,6 +451,20 @@ public class WifiConfigManager {
         }
         mWifiConfigStore.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiKeyStore.enableVerboseLogging(mVerboseLoggingEnabled);
+    }
+
+    private void updatePnoFrequencyCullingSetting() {
+        int flag = mFrameworkFacade.getIntegerSetting(
+                mContext, Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED,
+                WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT);
+        mPnoFrequencyCullingEnabled = (flag == 1);
+    }
+
+    private void updatePnoRecencySortingSetting() {
+        int flag = mFrameworkFacade.getIntegerSetting(
+                mContext, Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED,
+                WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT);
+        mPnoRecencySortingEnabled = (flag == 1);
     }
 
     /**
@@ -701,8 +760,8 @@ public class WifiConfigManager {
             return true;
         }
 
-        final DevicePolicyManagerInternal dpmi = LocalServices.getService(
-                DevicePolicyManagerInternal.class);
+        final DevicePolicyManagerInternal dpmi =
+                mWifiPermissionsWrapper.getDevicePolicyManagerInternal();
 
         final boolean isUidDeviceOwner = dpmi != null && dpmi.isActiveAdminWithPolicy(uid,
                 DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
@@ -782,6 +841,8 @@ public class WifiConfigManager {
             internalConfig.BSSID = externalConfig.BSSID.toLowerCase();
         }
         internalConfig.hiddenSSID = externalConfig.hiddenSSID;
+        internalConfig.requirePMF = externalConfig.requirePMF;
+
         if (externalConfig.preSharedKey != null
                 && !externalConfig.preSharedKey.equals(PASSWORD_MASK)) {
             internalConfig.preSharedKey = externalConfig.preSharedKey;
@@ -879,6 +940,10 @@ public class WifiConfigManager {
         // Copy over any metered information.
         internalConfig.meteredHint = externalConfig.meteredHint;
         internalConfig.meteredOverride = externalConfig.meteredOverride;
+
+        // Copy over macRandomizationSetting
+        internalConfig.macRandomizationSetting = externalConfig.macRandomizationSetting;
+
         // Copy over the DPP configuration parameters if set.
         if (externalConfig.dppConnector != null) {
             internalConfig.dppConnector = externalConfig.dppConnector;
@@ -962,6 +1027,7 @@ public class WifiConfigManager {
         newInternalConfig.requirePMF = externalConfig.requirePMF;
         newInternalConfig.noInternetAccessExpected = externalConfig.noInternetAccessExpected;
         newInternalConfig.ephemeral = externalConfig.ephemeral;
+        newInternalConfig.trusted = externalConfig.trusted;
         newInternalConfig.useExternalScores = externalConfig.useExternalScores;
         newInternalConfig.shared = externalConfig.shared;
 
@@ -1052,6 +1118,13 @@ public class WifiConfigManager {
             Log.e(TAG, "UID " + uid + " does not have permission to modify proxy Settings "
                     + config.configKey() + ". Must have NETWORK_SETTINGS,"
                     + " or be device or profile owner.");
+            return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
+        }
+
+        if (WifiConfigurationUtil.hasMacRandomizationSettingsChanged(existingInternalConfig,
+                newInternalConfig) && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
+            Log.e(TAG, "UID " + uid + " does not have permission to modify MAC randomization "
+                    + "Settings " + config.configKey() + ". Must have NETWORK_SETTINGS");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
 
@@ -2385,6 +2458,42 @@ public class WifiConfigManager {
     }
 
     /**
+     * Retrieve a set of channels on which AP's for the provided network was seen using the
+     * internal ScanResult's cache {@link #mScanDetailCaches}. This is used to reduced the list
+     * of frequencies for pno scans.
+     *
+     * @param networkId       network ID corresponding to the network.
+     * @param ageInMillis     only consider scan details whose timestamps are earlier than this.
+     * @return Set containing the frequencies on which this network was found, null if the network
+     * was not found or there are no associated scan details in the cache.
+     */
+    private Set<Integer> fetchChannelSetForNetworkForPnoScan(int networkId, long ageInMillis) {
+        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
+        if (config == null) {
+            return null;
+        }
+        ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(networkId);
+        if (scanDetailCache == null) {
+            return null;
+        }
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, new StringBuilder("fetchChannelSetForNetworkForPnoScan ageInMillis ")
+                    .append(ageInMillis)
+                    .append(" for ")
+                    .append(config.configKey())
+                    .append(" bssids " + scanDetailCache.size())
+                    .toString());
+        }
+        Set<Integer> channelSet = new HashSet<>();
+        long nowInMillis = mClock.getWallClockMillis();
+
+        // Add channels for the network to the output.
+        addToChannelSetForNetworkFromScanDetailCache(channelSet, scanDetailCache, nowInMillis,
+                ageInMillis, Integer.MAX_VALUE);
+        return channelSet;
+    }
+
+    /**
      * Retrieves a list of all the saved networks before enabling disconnected/connected PNO.
      *
      * PNO network list sent to the firmware has limited size. If there are a lot of saved
@@ -2408,10 +2517,43 @@ public class WifiConfigManager {
                 iter.remove();
             }
         }
+        if (networks.isEmpty()) {
+            return pnoList;
+        }
+
+        // Sort the networks with the most frequent ones at the front of the network list.
         Collections.sort(networks, sScanListComparator);
-        // The most frequently connected network has the highest priority now.
+        if (mPnoRecencySortingEnabled) {
+            // Find the most recently connected network and add it to the front of the network list.
+            WifiConfiguration lastConnectedNetwork =
+                    networks.stream()
+                            .max(Comparator.comparing(
+                                    (WifiConfiguration config) -> config.lastConnected))
+                            .get();
+            if (lastConnectedNetwork.lastConnected != 0) {
+                int lastConnectedNetworkIdx = networks.indexOf(lastConnectedNetwork);
+                networks.remove(lastConnectedNetworkIdx);
+                networks.add(0, lastConnectedNetwork);
+            }
+        }
         for (WifiConfiguration config : networks) {
-            pnoList.add(WifiConfigurationUtil.createPnoNetwork(config));
+            WifiScanner.PnoSettings.PnoNetwork pnoNetwork =
+                    WifiConfigurationUtil.createPnoNetwork(config);
+            pnoList.add(pnoNetwork);
+            if (!mPnoFrequencyCullingEnabled) {
+                continue;
+            }
+            Set<Integer> channelSet = fetchChannelSetForNetworkForPnoScan(config.networkId,
+                    MAX_PNO_SCAN_FREQUENCY_AGE_MS);
+            if (channelSet != null) {
+                pnoNetwork.frequencies = channelSet.stream()
+                        .mapToInt(Integer::intValue)
+                        .toArray();
+            }
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "retrievePnoNetworkList " + pnoNetwork.ssid + ":"
+                        + Arrays.toString(pnoNetwork.frequencies));
+            }
         }
         return pnoList;
     }
@@ -2785,7 +2927,7 @@ public class WifiConfigManager {
         // Setup user store for the current user in case it have not setup yet, so that data
         // owned by the current user will be backed to the user store.
         if (mDeferredUserUnlockRead) {
-            mWifiConfigStore.setUserStore(WifiConfigStore.createUserFile(mCurrentUserId));
+            mWifiConfigStore.setUserStores(WifiConfigStore.createUserFiles(mCurrentUserId));
             mDeferredUserUnlockRead = false;
         }
 
@@ -2814,7 +2956,7 @@ public class WifiConfigManager {
         // configurations for the current user will also being loaded.
         if (mDeferredUserUnlockRead) {
             Log.i(TAG, "Handling user unlock before loading from store.");
-            mWifiConfigStore.setUserStore(WifiConfigStore.createUserFile(mCurrentUserId));
+            mWifiConfigStore.setUserStores(WifiConfigStore.createUserFiles(mCurrentUserId));
             mDeferredUserUnlockRead = false;
         }
         if (!mWifiConfigStore.areStoresPresent()) {
@@ -2834,8 +2976,8 @@ public class WifiConfigManager {
             Log.wtf(TAG, "XML deserialization of store failed. All saved networks are lost!", e);
             return false;
         }
-        loadInternalData(mNetworkListStoreData.getSharedConfigurations(),
-                mNetworkListStoreData.getUserConfigurations(),
+        loadInternalData(mNetworkListSharedStoreData.getConfigurations(),
+                mNetworkListUserStoreData.getConfigurations(),
                 mDeletedEphemeralSsidsStoreData.getSsidList());
         return true;
     }
@@ -2854,7 +2996,7 @@ public class WifiConfigManager {
      */
     public boolean loadFromUserStoreAfterUnlockOrSwitch(int userId) {
         try {
-            mWifiConfigStore.switchUserStoreAndRead(WifiConfigStore.createUserFile(userId));
+            mWifiConfigStore.switchUserStoresAndRead(WifiConfigStore.createUserFiles(userId));
         } catch (IOException e) {
             Log.wtf(TAG, "Reading from new store failed. All saved private networks are lost!", e);
             return false;
@@ -2863,7 +3005,7 @@ public class WifiConfigManager {
                     "lost!", e);
             return false;
         }
-        loadInternalDataFromUserStore(mNetworkListStoreData.getUserConfigurations(),
+        loadInternalDataFromUserStore(mNetworkListUserStoreData.getConfigurations(),
                 mDeletedEphemeralSsidsStoreData.getSsidList());
         return true;
     }
@@ -2923,8 +3065,8 @@ public class WifiConfigManager {
         }
 
         // Setup store data for write.
-        mNetworkListStoreData.setSharedConfigurations(sharedConfigurations);
-        mNetworkListStoreData.setUserConfigurations(userConfigurations);
+        mNetworkListSharedStoreData.setConfigurations(sharedConfigurations);
+        mNetworkListUserStoreData.setConfigurations(userConfigurations);
         mDeletedEphemeralSsidsStoreData.setSsidList(mDeletedEphemeralSSIDs);
 
         try {
@@ -2963,6 +3105,11 @@ public class WifiConfigManager {
         pw.println("WifiConfigManager - Configured networks End ----");
         pw.println("WifiConfigManager - Next network ID to be allocated " + mNextNetworkId);
         pw.println("WifiConfigManager - Last selected network ID " + mLastSelectedNetworkId);
+        pw.println("WifiConfigManager - PNO scan frequency culling enabled = "
+                + mPnoFrequencyCullingEnabled);
+        pw.println("WifiConfigManager - PNO scan recency sorting enabled = "
+                + mPnoRecencySortingEnabled);
+        mWifiConfigStore.dump(fd, pw, args);
     }
 
     /**

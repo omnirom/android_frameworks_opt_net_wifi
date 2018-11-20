@@ -567,6 +567,16 @@ public class WifiMetrics {
         mWifiLinkLayerUsageStats.radioRxTimeMs += (newStats.rx_time - mLastLinkLayerStats.rx_time);
         mWifiLinkLayerUsageStats.radioScanTimeMs +=
                 (newStats.on_time_scan - mLastLinkLayerStats.on_time_scan);
+        mWifiLinkLayerUsageStats.radioNanScanTimeMs +=
+                (newStats.on_time_nan_scan - mLastLinkLayerStats.on_time_nan_scan);
+        mWifiLinkLayerUsageStats.radioBackgroundScanTimeMs +=
+                (newStats.on_time_background_scan - mLastLinkLayerStats.on_time_background_scan);
+        mWifiLinkLayerUsageStats.radioRoamScanTimeMs +=
+                (newStats.on_time_roam_scan - mLastLinkLayerStats.on_time_roam_scan);
+        mWifiLinkLayerUsageStats.radioPnoScanTimeMs +=
+                (newStats.on_time_pno_scan - mLastLinkLayerStats.on_time_pno_scan);
+        mWifiLinkLayerUsageStats.radioHs20ScanTimeMs +=
+                (newStats.on_time_hs20_scan - mLastLinkLayerStats.on_time_hs20_scan);
         mLastLinkLayerStats = newStats;
     }
 
@@ -872,10 +882,12 @@ public class WifiMetrics {
             if (ScanResultUtil.isScanResultForWepNetwork(scanResult)) {
                 mCurrentConnectionEvent.mRouterFingerPrint.mRouterFingerPrintProto.authentication =
                         WifiMetricsProto.RouterFingerPrint.AUTH_PERSONAL;
-            } else if (ScanResultUtil.isScanResultForPskNetwork(scanResult)) {
+            } else if (ScanResultUtil.isScanResultForPskNetwork(scanResult)
+                    || ScanResultUtil.isScanResultForSaeNetwork(scanResult)) {
                 mCurrentConnectionEvent.mRouterFingerPrint.mRouterFingerPrintProto.authentication =
                         WifiMetricsProto.RouterFingerPrint.AUTH_PERSONAL;
-            } else if (ScanResultUtil.isScanResultForEapNetwork(scanResult)) {
+            } else if (ScanResultUtil.isScanResultForEapNetwork(scanResult)
+                    || ScanResultUtil.isScanResultForEapSuiteBNetwork(scanResult)) {
                 mCurrentConnectionEvent.mRouterFingerPrint.mRouterFingerPrintProto.authentication =
                         WifiMetricsProto.RouterFingerPrint.AUTH_ENTERPRISE;
             }
@@ -1367,10 +1379,12 @@ public class WifiMetrics {
                 }
             }
             if (scanResult != null && scanResult.capabilities != null) {
-                if (ScanResultUtil.isScanResultForEapNetwork(scanResult)) {
+                if (ScanResultUtil.isScanResultForEapNetwork(scanResult)
+                        || ScanResultUtil.isScanResultForEapSuiteBNetwork(scanResult)) {
                     enterpriseNetworks++;
                 } else if (ScanResultUtil.isScanResultForPskNetwork(scanResult)
-                        || ScanResultUtil.isScanResultForWepNetwork(scanResult)) {
+                        || ScanResultUtil.isScanResultForWepNetwork(scanResult)
+                        || ScanResultUtil.isScanResultForSaeNetwork(scanResult)) {
                     personalNetworks++;
                 } else {
                     openNetworks++;
@@ -2273,6 +2287,16 @@ public class WifiMetrics {
                         + mWifiLinkLayerUsageStats.radioRxTimeMs);
                 pw.println("mWifiLinkLayerUsageStats.radioScanTimeMs="
                         + mWifiLinkLayerUsageStats.radioScanTimeMs);
+                pw.println("mWifiLinkLayerUsageStats.radioNanScanTimeMs="
+                        + mWifiLinkLayerUsageStats.radioNanScanTimeMs);
+                pw.println("mWifiLinkLayerUsageStats.radioBackgroundScanTimeMs="
+                        + mWifiLinkLayerUsageStats.radioBackgroundScanTimeMs);
+                pw.println("mWifiLinkLayerUsageStats.radioRoamScanTimeMs="
+                        + mWifiLinkLayerUsageStats.radioRoamScanTimeMs);
+                pw.println("mWifiLinkLayerUsageStats.radioPnoScanTimeMs="
+                        + mWifiLinkLayerUsageStats.radioPnoScanTimeMs);
+                pw.println("mWifiLinkLayerUsageStats.radioHs20ScanTimeMs="
+                        + mWifiLinkLayerUsageStats.radioHs20ScanTimeMs);
 
                 pw.println("mWifiLogProto.connectToNetworkNotificationCount="
                         + mConnectToNetworkNotificationCount.toString());

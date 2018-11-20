@@ -55,6 +55,7 @@ import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.atLeastOnce;
 
+import android.Manifest;
 import android.app.ActivityManager;
 import android.app.AppOpsManager;
 import android.content.BroadcastReceiver;
@@ -66,6 +67,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.net.Uri;
+import android.net.wifi.INetworkRequestMatchCallback;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ScanResult;
@@ -80,6 +82,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
+import android.net.wifi.hotspot2.pps.HomeSp;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -139,6 +142,7 @@ public class WifiServiceImplTest {
     private static final int OTHER_TEST_UID = 1300000;
     private static final int TEST_USER_HANDLE = 13;
     private static final int TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER = 17;
+    private static final int TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER = 234;
     private static final String WIFI_IFACE_NAME = "wlan0";
     private static final String TEST_COUNTRY_CODE = "US";
 
@@ -202,6 +206,8 @@ public class WifiServiceImplTest {
     @Mock WifiTrafficPoller mWifiTrafficPolller;
     @Mock ScanRequestProxy mScanRequestProxy;
     @Mock ITrafficStateCallback mTrafficStateCallback;
+    @Mock INetworkRequestMatchCallback mNetworkRequestMatchCallback;
+    @Mock WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
 
     @Spy FakeWifiLog mLog;
 
@@ -313,6 +319,8 @@ public class WifiServiceImplTest {
         when(mWifiInjector.getWifiSettingsStore()).thenReturn(mSettingsStore);
         when(mWifiInjector.getClock()).thenReturn(mClock);
         when(mWifiInjector.getScanRequestProxy()).thenReturn(mScanRequestProxy);
+        when(mWifiInjector.getWifiNetworkSuggestionsManager())
+                .thenReturn(mWifiNetworkSuggestionsManager);
         when(mClientModeImpl.syncStartSubscriptionProvisioning(anyInt(),
                 any(OsuProvider.class), any(IProvisioningCallback.class), any())).thenReturn(true);
         when(mPackageManager.hasSystemFeature(
@@ -3008,5 +3016,177 @@ public class WifiServiceImplTest {
         mWifiServiceImpl.unregisterTrafficStateCallback(0);
         mLooper.dispatchAll();
         verify(mWifiTrafficPoller).removeCallback(0);
+    }
+
+    /**
+     * Verify that a call to registerNetworkRequestMatchCallback throws a SecurityException if the
+     * caller does not have NETWORK_SETTINGS permission.
+     */
+    @Test
+    public void registerNetworkRequestMatchCallbackThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.registerNetworkRequestMatchCallback(mAppBinder,
+                    mNetworkRequestMatchCallback,
+                    TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verify that a call to registerNetworkRequestMatchCallback throws an IllegalArgumentException
+     * if the parameters are not provided.
+     */
+    @Test
+    public void
+            registerNetworkRequestMatchCallbackThrowsIllegalArgumentExceptionOnInvalidArguments() {
+        try {
+            mWifiServiceImpl.registerNetworkRequestMatchCallback(
+                    mAppBinder, null, TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    /**
+     * Verify that a call to unregisterNetworkRequestMatchCallback throws a SecurityException if the
+     * caller does not have NETWORK_SETTINGS permission.
+     */
+    @Test
+    public void unregisterNetworkRequestMatchCallbackThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.unregisterNetworkRequestMatchCallback(
+                    TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verify that registerNetworkRequestMatchCallback adds callback to
+     * {@link ClientModeImpl}.
+     */
+    @Test
+    public void registerNetworkRequestMatchCallbackAndVerify() throws Exception {
+        mWifiServiceImpl.registerNetworkRequestMatchCallback(
+                mAppBinder, mNetworkRequestMatchCallback,
+                TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+        mLooper.dispatchAll();
+        verify(mClientModeImpl).addNetworkRequestMatchCallback(
+                mAppBinder, mNetworkRequestMatchCallback,
+                TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+    }
+
+    /**
+     * Verify that unregisterNetworkRequestMatchCallback removes callback from
+     * {@link ClientModeImpl}.
+     */
+    @Test
+    public void unregisterNetworkRequestMatchCallbackAndVerify() throws Exception {
+        mWifiServiceImpl.unregisterNetworkRequestMatchCallback(
+                TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+        mLooper.dispatchAll();
+        verify(mClientModeImpl).removeNetworkRequestMatchCallback(
+                TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
+    }
+
+    /**
+     * Verify that Wifi configuration and Passpoint configuration are removed in factoryReset.
+     */
+    @Test
+    public void testFactoryReset() throws Exception {
+        final String fqdn = "example.com";
+        WifiConfiguration network = WifiConfigurationTestUtil.createOpenNetwork();
+        PasspointConfiguration config = new PasspointConfiguration();
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn(fqdn);
+        config.setHomeSp(homeSp);
+
+        mWifiServiceImpl.mClientModeImplChannel = mAsyncChannel;
+        when(mClientModeImpl.syncGetConfiguredNetworks(anyInt(), any()))
+                .thenReturn(Arrays.asList(network));
+        when(mClientModeImpl.syncGetPasspointConfigs(any())).thenReturn(Arrays.asList(config));
+
+        mWifiServiceImpl.factoryReset(TEST_PACKAGE_NAME);
+
+        verify(mClientModeImpl).syncRemoveNetwork(mAsyncChannel, network.networkId);
+        verify(mClientModeImpl).syncRemovePasspointConfig(mAsyncChannel, fqdn);
+    }
+
+    /**
+     * Verify that Passpoint configuration is not removed in factoryReset if Passpoint feature
+     * is not supported.
+     */
+    @Test
+    public void testFactoryResetWithoutPasspointSupport() throws Exception {
+        mWifiServiceImpl.mClientModeImplChannel = mAsyncChannel;
+        when(mPackageManager.hasSystemFeature(
+                PackageManager.FEATURE_WIFI_PASSPOINT)).thenReturn(false);
+
+        mWifiServiceImpl.factoryReset(TEST_PACKAGE_NAME);
+
+        verify(mClientModeImpl).syncGetConfiguredNetworks(anyInt(), any());
+        verify(mClientModeImpl, never()).syncGetPasspointConfigs(any());
+        verify(mClientModeImpl, never()).syncRemovePasspointConfig(any(), anyString());
+    }
+
+    /**
+     * Verify that a call to factoryReset throws a SecurityException if the caller does not have
+     * the CONNECTIVITY_INTERNAL permission.
+     */
+    @Test
+    public void testFactoryResetWithoutConnectivityInternalPermission() throws Exception {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(Manifest.permission.CONNECTIVITY_INTERNAL),
+                        eq("ConnectivityService"));
+        mWifiServiceImpl.mClientModeImplChannel = mAsyncChannel;
+
+        try {
+            mWifiServiceImpl.factoryReset(TEST_PACKAGE_NAME);
+            fail();
+        } catch (SecurityException e) {
+        }
+        verify(mClientModeImpl, never()).syncGetConfiguredNetworks(anyInt(), any());
+        verify(mClientModeImpl, never()).syncGetPasspointConfigs(any());
+    }
+
+    /**
+     * Ensure that we invoke {@link WifiNetworkSuggestionsManager} to add network
+     * suggestions.
+     */
+    @Test
+    public void testAddNetworkSuggestions() {
+        setupClientModeImplHandlerForRunWithScissors();
+
+        when(mWifiNetworkSuggestionsManager.add(any(), anyString())).thenReturn(true);
+        assertTrue(mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+
+        when(mWifiNetworkSuggestionsManager.add(any(), anyString())).thenReturn(false);
+        assertFalse(mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+
+        verify(mWifiNetworkSuggestionsManager, times(2)).add(any(), eq(TEST_PACKAGE_NAME));
+    }
+
+    /**
+     * Ensure that we invoke {@link WifiNetworkSuggestionsManager} to remove network
+     * suggestions.
+     */
+    @Test
+    public void testRemoveNetworkSuggestions() {
+        setupClientModeImplHandlerForRunWithScissors();
+
+        when(mWifiNetworkSuggestionsManager.remove(any(), anyString())).thenReturn(true);
+        assertTrue(mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+
+        when(mWifiNetworkSuggestionsManager.remove(any(), anyString())).thenReturn(false);
+        assertFalse(mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+
+        verify(mWifiNetworkSuggestionsManager, times(2)).remove(any(), eq(TEST_PACKAGE_NAME));
     }
 }

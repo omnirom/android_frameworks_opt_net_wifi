@@ -427,7 +427,7 @@ public class InformationElementUtil {
         private static final int RSN_CIPHER_TKIP = 0x02ac0f00;
         private static final int RSN_CIPHER_CCMP = 0x04ac0f00;
         private static final int RSN_CIPHER_NO_GROUP_ADDRESSED = 0x07ac0f00;
-        private static final int RSN_CIPHER_GCMP = 0x09ac0f00;
+        private static final int RSN_CIPHER_GCMP_256 = 0x09ac0f00;
 
         public ArrayList<Integer> protocol;
         public ArrayList<ArrayList<Integer>> keyManagement;
@@ -464,7 +464,7 @@ public class InformationElementUtil {
                 }
 
                 // found the RSNE IE, hence start building the capability string
-                protocol.add(ScanResult.PROTOCOL_WPA2);
+                protocol.add(ScanResult.PROTOCOL_RSN);
 
                 // group data cipher suite
                 groupCipher.add(parseRsnCipher(buf.getInt()));
@@ -520,7 +520,7 @@ public class InformationElementUtil {
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_OWE);
                             break;
                         case WPA2_AKM_EAP_SUITE_B_192:
-			    Log.e("informationelement", "captured suite b" );
+                            Log.e("informationelement", "captured suite b" );
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_EAP_SUITE_B_192);
                             break;
                         default:
@@ -561,8 +561,8 @@ public class InformationElementUtil {
                     return ScanResult.CIPHER_TKIP;
                 case RSN_CIPHER_CCMP:
                     return ScanResult.CIPHER_CCMP;
-                case RSN_CIPHER_GCMP:
-                    return ScanResult.CIPHER_GCMP;
+                case RSN_CIPHER_GCMP_256:
+                    return ScanResult.CIPHER_GCMP_256;
                 case RSN_CIPHER_NO_GROUP_ADDRESSED:
                     return ScanResult.CIPHER_NO_GROUP_ADDRESSED;
                 default:
@@ -701,7 +701,17 @@ public class InformationElementUtil {
                         isWPS = true;
                     }
                     if (isOweElement(ie)) {
-                        protocol.add(ScanResult.PROTOCOL_WPA2);
+                        /* From RFC 8110: Once the client and AP have finished 802.11 association,
+                           they then complete the Diffie-Hellman key exchange and create a Pairwise
+                           Master Key (PMK) and its associated identifier, PMKID [IEEE802.11].
+                           Upon completion of 802.11 association, the AP initiates the 4-way
+                           handshake to the client using the PMK generated above.  The 4-way
+                           handshake generates a Key-Encrypting Key (KEK), a Key-Confirmation
+                           Key (KCK), and a Message Integrity Code (MIC) to use for protection
+                           of the frames that define the 4-way handshake.
+                        */
+
+                        protocol.add(ScanResult.PROTOCOL_RSN);
                         groupCipher.add(ScanResult.CIPHER_CCMP);
                         ArrayList<Integer> owePairwiseCipher = new ArrayList<>();
                         owePairwiseCipher.add(ScanResult.CIPHER_CCMP);
@@ -732,8 +742,8 @@ public class InformationElementUtil {
                     return "None";
                 case ScanResult.PROTOCOL_WPA:
                     return "WPA";
-                case ScanResult.PROTOCOL_WPA2:
-                    return "WPA2";
+                case ScanResult.PROTOCOL_RSN:
+                    return "RSN";
                 default:
                     return "?";
             }
@@ -778,8 +788,8 @@ public class InformationElementUtil {
                     return "None";
                 case ScanResult.CIPHER_CCMP:
                     return "CCMP";
-                case ScanResult.CIPHER_GCMP:
-                    return "GCMP";
+                case ScanResult.CIPHER_GCMP_256:
+                    return "GCMP-256";
                 case ScanResult.CIPHER_TKIP:
                     return "TKIP";
                 default:

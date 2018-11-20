@@ -16,15 +16,21 @@
 
 package com.android.server.wifi;
 
+import static com.android.server.wifi.util.NativeUtil.addEnclosingQuotes;
+
 import android.content.pm.UserInfo;
 import android.net.IpConfiguration;
+import android.net.MacAddress;
 import android.net.StaticIpConfiguration;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
+import android.net.wifi.WifiNetworkSpecifier;
 import android.net.wifi.WifiScanner;
+import android.os.PatternMatcher;
 import android.os.UserHandle;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.NativeUtil;
@@ -56,11 +62,16 @@ public class WifiConfigurationUtil {
                         WifiGbk.MAX_SSID_UTF_LENGTH + ENCLOSING_QUTOES_LEN;
     private static final int SSID_HEX_MIN_LEN = 2;
     private static final int SSID_HEX_MAX_LEN = 64;
-    private static final int PSK_ASCII_MIN_LEN = 8 + ENCLOSING_QUTOES_LEN;
-    private static final int PSK_ASCII_MAX_LEN = 63 + ENCLOSING_QUTOES_LEN;
+    private static final int PSK_ASCII_MIN_LEN = 8 + ENCLOSING_QUOTES_LEN;
+    private static final int PSK_ASCII_MAX_LEN = 63 + ENCLOSING_QUOTES_LEN;
     private static final int PSK_HEX_LEN = 64;
     @VisibleForTesting
     public static final String PASSWORD_MASK = "*";
+    private static final String MATCH_EMPTY_SSID_PATTERN_PATH = "";
+    private static final Pair<MacAddress, MacAddress> MATCH_NONE_BSSID_PATTERN =
+            new Pair(MacAddress.BROADCAST_ADDRESS, MacAddress.BROADCAST_ADDRESS);
+    private static final Pair<MacAddress, MacAddress> MATCH_ALL_BSSID_PATTERN =
+            new Pair(MacAddress.ALL_ZEROS_ADDRESS, MacAddress.ALL_ZEROS_ADDRESS);
 
     /**
      * Check whether a network configuration is visible to a user or any of its managed profiles.
@@ -113,11 +124,32 @@ public class WifiConfigurationUtil {
     }
 
     /**
+     * Helper method to check if the provided |config| corresponds to an SAE network or not.
+     */
+    public static boolean isConfigForSaeNetwork(WifiConfiguration config) {
+        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE);
+    }
+
+    /**
+     * Helper method to check if the provided |config| corresponds to an OWE network or not.
+     */
+    public static boolean isConfigForOweNetwork(WifiConfiguration config) {
+        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.OWE);
+    }
+
+    /**
      * Helper method to check if the provided |config| corresponds to a EAP network or not.
      */
     public static boolean isConfigForEapNetwork(WifiConfiguration config) {
         return (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP)
                 || config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X));
+    }
+
+    /**
+     * Helper method to check if the provided |config| corresponds to a EAP Suite-B network or not.
+     */
+    public static boolean isConfigForEapSuiteBNetwork(WifiConfiguration config) {
+        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SUITE_B_192);
     }
 
     /**
@@ -129,11 +161,13 @@ public class WifiConfigurationUtil {
     }
 
     /**
-     * Helper method to check if the provided |config| corresponds to an open network or not.
+     * Helper method to check if the provided |config| corresponds to an open or enhanced
+     * open network, or not.
      */
     public static boolean isConfigForOpenNetwork(WifiConfiguration config) {
-        return !(isConfigForWepNetwork(config) || isConfigForPskNetwork(config)
-                || isConfigForEapNetwork(config));
+        return (!(isConfigForWepNetwork(config) || isConfigForPskNetwork(config)
+                || isConfigForEapNetwork(config) || isConfigForSaeNetwork(config)
+                || isConfigForEapSuiteBNetwork(config)));
     }
 
     public static boolean isConfigForSha256Network(WifiConfiguration config) {
@@ -182,6 +216,22 @@ public class WifiConfigurationUtil {
             return true;
         }
         return !Objects.equals(existingConfig.getHttpProxy(), newConfig.getHttpProxy());
+    }
+
+    /**
+     * Compare existing and new WifiConfiguration objects after a network update and return if
+     * MAC randomization setting has changed or not.
+     * @param existingConfig Existing WifiConfiguration object corresponding to the network.
+     * @param newConfig      New WifiConfiguration object corresponding to the network.
+     * @return true if MAC randomization setting setting changed or the existing confiuration is
+     * null and the newConfig is setting macRandomizationSetting to the default value.
+     */
+    public static boolean hasMacRandomizationSettingsChanged(WifiConfiguration existingConfig,
+            WifiConfiguration newConfig) {
+        if (existingConfig == null) {
+            return newConfig.macRandomizationSetting != WifiConfiguration.RANDOMIZATION_PERSISTENT;
+        }
+        return newConfig.macRandomizationSetting != existingConfig.macRandomizationSetting;
     }
 
     /**
@@ -272,6 +322,14 @@ public class WifiConfigurationUtil {
                 newConfig.allowedGroupCiphers)) {
             return true;
         }
+        if (!Objects.equals(existingConfig.allowedGroupMgmtCiphers,
+                newConfig.allowedGroupMgmtCiphers)) {
+            return true;
+        }
+        if (!Objects.equals(existingConfig.allowedSuiteBCiphers,
+                newConfig.allowedSuiteBCiphers)) {
+            return true;
+        }
         if (!Objects.equals(existingConfig.preSharedKey, newConfig.preSharedKey)) {
             return true;
         }
@@ -282,6 +340,9 @@ public class WifiConfigurationUtil {
             return true;
         }
         if (existingConfig.hiddenSSID != newConfig.hiddenSSID) {
+            return true;
+        }
+        if (existingConfig.requirePMF != newConfig.requirePMF) {
             return true;
         }
         if (hasEnterpriseConfigChanged(existingConfig.enterpriseConfig,
@@ -335,6 +396,34 @@ public class WifiConfigurationUtil {
             NativeUtil.decodeSsid(ssid);
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "validateSsid failed: malformed string: " + ssid);
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean validateBssid(MacAddress bssid) {
+        if (bssid == null) return true;
+        if (bssid.getAddressType() != MacAddress.TYPE_UNICAST) {
+            Log.e(TAG, "validateBssid failed: invalid bssid");
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean validateBssid(String bssid) {
+        if (bssid == null) return true;
+        if (bssid.isEmpty()) {
+            Log.e(TAG, "validateBssid failed: empty string");
+            return false;
+        }
+        MacAddress bssidMacAddress;
+        try {
+            bssidMacAddress = MacAddress.fromString(bssid);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "validateBssid failed: malformed string: " + bssid);
+            return false;
+        }
+        if (!validateBssid(bssidMacAddress)) {
             return false;
         }
         return true;
@@ -482,13 +571,14 @@ public class WifiConfigurationUtil {
      *
      * This method checks for the following parameters:
      * 1. {@link WifiConfiguration#SSID}
-     * 2. {@link WifiConfiguration#preSharedKey}
-     * 3. {@link WifiConfiguration#allowedKeyManagement}
-     * 4. {@link WifiConfiguration#allowedProtocols}
-     * 5. {@link WifiConfiguration#allowedAuthAlgorithms}
-     * 6. {@link WifiConfiguration#allowedGroupCiphers}
-     * 7. {@link WifiConfiguration#allowedPairwiseCiphers}
-     * 8. {@link WifiConfiguration#getIpConfiguration()}
+     * 2. {@link WifiConfiguration#BSSID}
+     * 3. {@link WifiConfiguration#preSharedKey}
+     * 4. {@link WifiConfiguration#allowedKeyManagement}
+     * 5. {@link WifiConfiguration#allowedProtocols}
+     * 6. {@link WifiConfiguration#allowedAuthAlgorithms}
+     * 7. {@link WifiConfiguration#allowedGroupCiphers}
+     * 8. {@link WifiConfiguration#allowedPairwiseCiphers}
+     * 9. {@link WifiConfiguration#getIpConfiguration()}
      *
      * @param config {@link WifiConfiguration} received from an external application.
      * @param isAdd {@link #VALIDATE_FOR_ADD} to indicate a network config received for an add,
@@ -499,6 +589,9 @@ public class WifiConfigurationUtil {
      */
     public static boolean validate(WifiConfiguration config, boolean isAdd) {
         if (!validateSsid(config.SSID, isAdd)) {
+            return false;
+        }
+        if (!validateBssid(config.BSSID)) {
             return false;
         }
         if (!validateBitSets(config)) {
@@ -512,6 +605,134 @@ public class WifiConfigurationUtil {
             return false;
         }
         if (!validateIpConfiguration(config.getIpConfiguration())) {
+            return false;
+        }
+        // TBD: Validate some enterprise params as well in the future here.
+        return true;
+    }
+
+    private static boolean validateBssidPattern(
+            Pair<MacAddress, MacAddress> bssidPatternMatcher) {
+        if (bssidPatternMatcher == null) return true;
+        MacAddress baseAddress = bssidPatternMatcher.first;
+        MacAddress mask = bssidPatternMatcher.second;
+        if (baseAddress.getAddressType() != MacAddress.TYPE_UNICAST) {
+            Log.e(TAG, "validateBssidPatternMatcher failed : invalid base address: " + baseAddress);
+            return false;
+        }
+        if (mask.equals(MacAddress.ALL_ZEROS_ADDRESS)
+                && !baseAddress.equals(MacAddress.ALL_ZEROS_ADDRESS)) {
+            Log.e(TAG, "validateBssidPatternMatcher failed : invalid mask/base: " + mask + "/"
+                    + baseAddress);
+            return false;
+        }
+        // TBD: Can we do any more sanity checks?
+        return true;
+    }
+
+    // TODO(b/113878056): Some of this is duplicated in {@link WifiNetworkConfigBuilder}.
+    // Merge them somehow?.
+    private static boolean isValidNetworkSpecifier(WifiNetworkSpecifier specifier) {
+        PatternMatcher ssidPatternMatcher = specifier.ssidPatternMatcher;
+        Pair<MacAddress, MacAddress> bssidPatternMatcher = specifier.bssidPatternMatcher;
+        if (ssidPatternMatcher == null || bssidPatternMatcher == null) {
+            return false;
+        }
+        if (ssidPatternMatcher.getPath() == null || bssidPatternMatcher.first == null
+                || bssidPatternMatcher.second == null) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isMatchNoneNetworkSpecifier(WifiNetworkSpecifier specifier) {
+        PatternMatcher ssidPatternMatcher = specifier.ssidPatternMatcher;
+        Pair<MacAddress, MacAddress> bssidPatternMatcher = specifier.bssidPatternMatcher;
+        if (ssidPatternMatcher.getType() != PatternMatcher.PATTERN_PREFIX
+                && ssidPatternMatcher.getPath().equals(MATCH_EMPTY_SSID_PATTERN_PATH)) {
+            return true;
+        }
+        if (bssidPatternMatcher.equals(MATCH_NONE_BSSID_PATTERN)) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isMatchAllNetworkSpecifier(WifiNetworkSpecifier specifier) {
+        PatternMatcher ssidPatternMatcher = specifier.ssidPatternMatcher;
+        Pair<MacAddress, MacAddress> bssidPatternMatcher = specifier.bssidPatternMatcher;
+        if (ssidPatternMatcher.match(MATCH_EMPTY_SSID_PATTERN_PATH)
+                && bssidPatternMatcher.equals(MATCH_ALL_BSSID_PATTERN)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Validate the configuration received from an external application inside
+     * {@link WifiNetworkSpecifier}.
+     *
+     * This method checks for the following parameters:
+     * 1. {@link WifiNetworkSpecifier#ssidPatternMatcher}
+     * 2. {@link WifiNetworkSpecifier#bssidPatternMatcher}
+     * 3. {@link WifiConfiguration#SSID}
+     * 4. {@link WifiConfiguration#BSSID}
+     * 5. {@link WifiConfiguration#preSharedKey}
+     * 6. {@link WifiConfiguration#allowedKeyManagement}
+     * 7. {@link WifiConfiguration#allowedProtocols}
+     * 8. {@link WifiConfiguration#allowedAuthAlgorithms}
+     * 9. {@link WifiConfiguration#allowedGroupCiphers}
+     * 10. {@link WifiConfiguration#allowedPairwiseCiphers}
+     * 11. {@link WifiConfiguration#getIpConfiguration()}
+     *
+     * @param specifier Instance of {@link WifiNetworkSpecifier}.
+     * @return true if the parameters are valid, false otherwise.
+     */
+    public static boolean validateNetworkSpecifier(WifiNetworkSpecifier specifier) {
+        if (!isValidNetworkSpecifier(specifier)) {
+            Log.e(TAG, "validateNetworkSpecifier failed : invalid network specifier");
+            return false;
+        }
+        if (isMatchNoneNetworkSpecifier(specifier)) {
+            Log.e(TAG, "validateNetworkSpecifier failed : match-none specifier");
+            return false;
+        }
+        if (isMatchAllNetworkSpecifier(specifier)) {
+            Log.e(TAG, "validateNetworkSpecifier failed : match-all specifier");
+            return false;
+        }
+        WifiConfiguration config = specifier.wifiConfiguration;
+        if (specifier.ssidPatternMatcher.getType() == PatternMatcher.PATTERN_LITERAL) {
+            // For literal SSID matches, the value should satisfy SSID requirements.
+            // WifiConfiguration.SSID needs quotes around ASCII SSID.
+            if (!validateSsid(addEnclosingQuotes(specifier.ssidPatternMatcher.getPath()), true)) {
+                return false;
+            }
+        } else {
+            if (config.hiddenSSID) {
+                Log.e(TAG, "validateNetworkSpecifier failed : ssid pattern not supported "
+                        + "for hidden networks");
+                return false;
+            }
+        }
+        if (Objects.equals(specifier.bssidPatternMatcher.second, MacAddress.BROADCAST_ADDRESS)) {
+            // For literal BSSID matches, the value should satisfy MAC address requirements.
+            if (!validateBssid(specifier.bssidPatternMatcher.first)) {
+                return false;
+            }
+        } else {
+            if (!validateBssidPattern(specifier.bssidPatternMatcher)) {
+                return false;
+            }
+        }
+        if (!validateBitSets(config)) {
+            return false;
+        }
+        if (!validateKeyMgmt(config.allowedKeyManagement)) {
+            return false;
+        }
+        if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK)
+                && !validatePsk(config.preSharedKey, true)) {
             return false;
         }
         // TBD: Validate some enterprise params as well in the future here.

@@ -47,7 +47,11 @@ import com.android.server.wifi.hotspot2.soap.command.SppCommand;
 
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.security.cert.X509Certificate;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Provides methods to carry out provisioning flow
@@ -75,6 +79,7 @@ public class PasspointProvisioner {
     private int mCurrentSessionId = 0;
     private int mCallingUid;
     private boolean mVerboseLoggingEnabled = false;
+    private WifiManager mWifiManager;
 
     PasspointProvisioner(Context context, WifiNative wifiNative,
             PasspointObjectFactory objectFactory) {
@@ -90,9 +95,11 @@ public class PasspointProvisioner {
 
     /**
      * Sets up for provisioning
+     *
      * @param looper Looper on which the Provisioning state machine will run
      */
     public void init(Looper looper) {
+        mWifiManager = (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
         mProvisioningStateMachine.start(new Handler(looper));
         mOsuNetworkConnection.init(mProvisioningStateMachine.getHandler());
         // Offload the heavy load job to another thread
@@ -106,6 +113,7 @@ public class PasspointProvisioner {
 
     /**
      * Enable verbose logging to help debug failures
+     *
      * @param level integer indicating verbose logging enabled if > 0
      */
     public void enableVerboseLogging(int level) {
@@ -116,9 +124,10 @@ public class PasspointProvisioner {
 
     /**
      * Start provisioning flow with a given provider.
+     *
      * @param callingUid calling uid.
-     * @param provider {@link OsuProvider} to provision with.
-     * @param callback {@link IProvisioningCallback} to provide provisioning status.
+     * @param provider   {@link OsuProvider} to provision with.
+     * @param callback   {@link IProvisioningCallback} to provide provisioning status.
      * @return boolean value, true if provisioning was started, false otherwise.
      *
      * Implements HS2.0 provisioning flow with a given HS2.0 provider.
@@ -144,16 +153,16 @@ public class PasspointProvisioner {
      * Handles the provisioning flow state transitions
      */
     class ProvisioningStateMachine {
-        private static final String TAG = "ProvisioningStateMachine";
+        private static final String TAG = "PasspointProvisioningStateMachine";
 
         static final int STATE_INIT = 1;
-        static final int STATE_WAITING_TO_CONNECT = 2;
-        static final int STATE_OSU_AP_CONNECTED = 3;
-        static final int STATE_OSU_SERVER_CONNECTED = 4;
-        static final int STATE_WAITING_FOR_FIRST_SOAP_RESPONSE = 5;
-        static final int STATE_WAITING_FOR_REDIRECT_RESPONSE = 6;
-        static final int STATE_WAITING_FOR_SECOND_SOAP_RESPONSE = 7;
-        static final int STATE_WAITING_FOR_THIRD_SOAP_RESPONSE = 8;
+        static final int STATE_AP_CONNECTING = 2;
+        static final int STATE_OSU_SERVER_CONNECTING = 3;
+        static final int STATE_WAITING_FOR_FIRST_SOAP_RESPONSE = 4;
+        static final int STATE_WAITING_FOR_REDIRECT_RESPONSE = 5;
+        static final int STATE_WAITING_FOR_SECOND_SOAP_RESPONSE = 6;
+        static final int STATE_WAITING_FOR_THIRD_SOAP_RESPONSE = 7;
+        static final int STATE_WAITING_FOR_TRUST_ROOT_CERTS = 8;
 
         private OsuProvider mOsuProvider;
         private IProvisioningCallback mProvisioningCallback;
@@ -163,6 +172,7 @@ public class PasspointProvisioner {
         private Network mNetwork;
         private String mSessionId;
         private String mWebUrl;
+        private PasspointConfiguration mPasspointConfiguration;
 
         /**
          * Initializes and starts the state machine with a handler to handle incoming events
@@ -195,12 +205,13 @@ public class PasspointProvisioner {
                 if (mVerboseLoggingEnabled) {
                     Log.v(TAG, "State Machine needs to be reset before starting provisioning");
                 }
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
             }
             if (!mOsuServerConnection.canValidateServer()) {
                 Log.w(TAG, "Provisioning is not possible");
                 mProvisioningCallback = callback;
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_NOT_AVAILABLE);
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_PROVISIONING_NOT_AVAILABLE);
                 return;
             }
             URL serverUrl;
@@ -209,7 +220,7 @@ public class PasspointProvisioner {
             } catch (MalformedURLException e) {
                 Log.e(TAG, "Invalid Server URL");
                 mProvisioningCallback = callback;
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SERVER_URL_INVALID);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SERVER_URL_INVALID);
                 return;
             }
             mServerUrl = serverUrl;
@@ -224,16 +235,16 @@ public class PasspointProvisioner {
 
             if (!mOsuNetworkConnection.connect(mOsuProvider.getOsuSsid(),
                     mOsuProvider.getNetworkAccessIdentifier())) {
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
                 return;
             }
             invokeProvisioningCallback(PROVISIONING_STATUS,
                     ProvisioningCallback.OSU_STATUS_AP_CONNECTING);
-            changeState(STATE_WAITING_TO_CONNECT);
+            changeState(STATE_AP_CONNECTING);
         }
 
         /**
-         * Handle Wifi Disable event
+         * Handles Wifi Disable event
          *
          * Note: Called on main thread (WifiService thread).
          */
@@ -245,12 +256,42 @@ public class PasspointProvisioner {
                 Log.w(TAG, "Wifi Disable unhandled in state=" + mState);
                 return;
             }
-            resetStateMachine(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
+            resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
         }
 
         /**
-         * Handle server validation failure
+         * Handles server connection status
          *
+         * @param sessionId indicating current session ID
+         * @param succeeded boolean indicating success/failure of server connection
+         * Note: Called on main thread (WifiService thread).
+         */
+        public void handleServerConnectionStatus(int sessionId, boolean succeeded) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "Server Connection status received in " + mState);
+            }
+            if (sessionId != mCurrentSessionId) {
+                Log.w(TAG, "Expected server connection failure callback for currentSessionId="
+                        + mCurrentSessionId);
+                return;
+            }
+            if (mState != STATE_OSU_SERVER_CONNECTING) {
+                Log.wtf(TAG, "Server Validation Failure unhandled in mState=" + mState);
+                return;
+            }
+            if (!succeeded) {
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION);
+                return;
+            }
+            invokeProvisioningCallback(PROVISIONING_STATUS,
+                    ProvisioningCallback.OSU_STATUS_SERVER_CONNECTED);
+            mProvisioningStateMachine.getHandler().post(() -> initSoapExchange());
+        }
+
+        /**
+         * Handles server validation failure
+         *
+         * @param sessionId indicating current session ID
          * Note: Called on main thread (WifiService thread).
          */
         public void handleServerValidationFailure(int sessionId) {
@@ -262,16 +303,17 @@ public class PasspointProvisioner {
                         + mCurrentSessionId);
                 return;
             }
-            if (mState != STATE_OSU_SERVER_CONNECTED) {
+            if (mState != STATE_OSU_SERVER_CONNECTING) {
                 Log.wtf(TAG, "Server Validation Failure unhandled in mState=" + mState);
                 return;
             }
-            resetStateMachine(ProvisioningCallback.OSU_FAILURE_SERVER_VALIDATION);
+            resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SERVER_VALIDATION);
         }
 
         /**
-         * Handle status of server validation success
+         * Handles status of server validation success
          *
+         * @param sessionId indicating current session ID
          * Note: Called on main thread (WifiService thread).
          */
         public void handleServerValidationSuccess(int sessionId) {
@@ -283,13 +325,18 @@ public class PasspointProvisioner {
                         + mCurrentSessionId);
                 return;
             }
-            if (mState != STATE_OSU_SERVER_CONNECTED) {
+            if (mState != STATE_OSU_SERVER_CONNECTING) {
                 Log.wtf(TAG, "Server validation success event unhandled in state=" + mState);
+                return;
+            }
+            if (!mOsuServerConnection.validateProvider(
+                    Locale.getDefault(), mOsuProvider.getFriendlyName())) {
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_SERVICE_PROVIDER_VERIFICATION);
                 return;
             }
             invokeProvisioningCallback(PROVISIONING_STATUS,
                     ProvisioningCallback.OSU_STATUS_SERVER_VALIDATED);
-            validateServiceProvider();
         }
 
         /**
@@ -300,7 +347,7 @@ public class PasspointProvisioner {
         public void handleRedirectResponse() {
             if (mState != STATE_WAITING_FOR_REDIRECT_RESPONSE) {
                 Log.e(TAG, "Received redirect request in wrong state=" + mState);
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                 return;
             }
 
@@ -322,11 +369,12 @@ public class PasspointProvisioner {
             if (mState != STATE_WAITING_FOR_REDIRECT_RESPONSE) {
                 Log.e(TAG, "Received timeout error for HTTP redirect response  in wrong state="
                         + mState);
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                 return;
             }
             mRedirectListener.stopServer();
-            resetStateMachine(ProvisioningCallback.OSU_FAILURE_TIMED_OUT_REDIRECT_LISTENER);
+            resetStateMachineForFailure(
+                    ProvisioningCallback.OSU_FAILURE_TIMED_OUT_REDIRECT_LISTENER);
         }
 
         /**
@@ -339,21 +387,20 @@ public class PasspointProvisioner {
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Connected event received in state=" + mState);
             }
-            if (mState != STATE_WAITING_TO_CONNECT) {
+            if (mState != STATE_AP_CONNECTING) {
                 // Not waiting for a connection
                 Log.wtf(TAG, "Connection event unhandled in state=" + mState);
                 return;
             }
             invokeProvisioningCallback(PROVISIONING_STATUS,
                     ProvisioningCallback.OSU_STATUS_AP_CONNECTED);
-            changeState(STATE_OSU_AP_CONNECTED);
             initiateServerConnection(network);
         }
 
         /**
          * Handles SOAP message response sent by server
          *
-         * @param sessionId indicating current session ID
+         * @param sessionId       indicating current session ID
          * @param responseMessage SOAP SPP response, or {@code null} in any failure.
          * Note: Called on main thread (WifiService thread).
          */
@@ -367,7 +414,7 @@ public class PasspointProvisioner {
 
             if (responseMessage == null) {
                 Log.e(TAG, "failed to send the sppPostDevData message");
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
                 return;
             }
 
@@ -376,7 +423,7 @@ public class PasspointProvisioner {
                         != SppResponseMessage.MessageType.POST_DEV_DATA_RESPONSE) {
                     Log.e(TAG, "Expected a PostDevDataResponse, but got "
                             + responseMessage.getMessageType());
-                    resetStateMachine(
+                    resetStateMachineForFailure(
                             ProvisioningCallback.OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_TYPE);
                     return;
                 }
@@ -387,7 +434,8 @@ public class PasspointProvisioner {
                         != SppCommand.ExecCommandId.BROWSER) {
                     Log.e(TAG, "Expected a launchBrowser command, but got "
                             + devDataResponse.getSppCommand().getExecCommandId());
-                    resetStateMachine(ProvisioningCallback.OSU_FAILURE_UNEXPECTED_COMMAND_TYPE);
+                    resetStateMachineForFailure(
+                            ProvisioningCallback.OSU_FAILURE_UNEXPECTED_COMMAND_TYPE);
                     return;
                 }
 
@@ -397,13 +445,15 @@ public class PasspointProvisioner {
                 mWebUrl = ((BrowserUri) devDataResponse.getSppCommand().getCommandData()).getUri();
                 if (mWebUrl == null) {
                     Log.e(TAG, "No Web-Url");
-                    resetStateMachine(ProvisioningCallback.OSU_FAILURE_INVALID_SERVER_URL);
+                    resetStateMachineForFailure(
+                            ProvisioningCallback.OSU_FAILURE_INVALID_SERVER_URL);
                     return;
                 }
 
                 if (!mWebUrl.toLowerCase(Locale.US).contains(mSessionId.toLowerCase(Locale.US))) {
                     Log.e(TAG, "Bad or Missing session ID in webUrl");
-                    resetStateMachine(ProvisioningCallback.OSU_FAILURE_INVALID_SERVER_URL);
+                    resetStateMachineForFailure(
+                            ProvisioningCallback.OSU_FAILURE_INVALID_SERVER_URL);
                     return;
                 }
                 launchOsuWebView();
@@ -412,7 +462,7 @@ public class PasspointProvisioner {
                         != SppResponseMessage.MessageType.POST_DEV_DATA_RESPONSE) {
                     Log.e(TAG, "Expected a PostDevDataResponse, but got "
                             + responseMessage.getMessageType());
-                    resetStateMachine(
+                    resetStateMachineForFailure(
                             ProvisioningCallback.OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_TYPE);
                     return;
                 }
@@ -424,21 +474,20 @@ public class PasspointProvisioner {
                     Log.e(TAG, "Expected a ADD_MO command, but got " + (
                             (devDataResponse.getSppCommand() == null) ? "null"
                                     : devDataResponse.getSppCommand().getSppCommandId()));
-                    resetStateMachine(
+                    resetStateMachineForFailure(
                             ProvisioningCallback.OSU_FAILURE_UNEXPECTED_COMMAND_TYPE);
                     return;
                 }
 
-                PasspointConfiguration passpointConfig = buildPasspointConfiguration(
-                            (PpsMoData) devDataResponse.getSppCommand().getCommandData());
-
-                thirdSoapExchange(passpointConfig == null);
+                mPasspointConfiguration = buildPasspointConfiguration(
+                        (PpsMoData) devDataResponse.getSppCommand().getCommandData());
+                thirdSoapExchange(mPasspointConfiguration == null);
             } else if (mState == STATE_WAITING_FOR_THIRD_SOAP_RESPONSE) {
                 if (responseMessage.getMessageType()
                         != SppResponseMessage.MessageType.EXCHANGE_COMPLETE) {
                     Log.e(TAG, "Expected a ExchangeCompleteMessage, but got "
                             + responseMessage.getMessageType());
-                    resetStateMachine(
+                    resetStateMachineForFailure(
                             ProvisioningCallback.OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_TYPE);
                     return;
                 }
@@ -449,7 +498,7 @@ public class PasspointProvisioner {
                         != SppConstants.SppStatus.EXCHANGE_COMPLETE) {
                     Log.e(TAG, "Expected a ExchangeCompleteMessage Status, but got "
                             + exchangeCompleteMessage.getStatus());
-                    resetStateMachine(
+                    resetStateMachineForFailure(
                             ProvisioningCallback.OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_STATUS);
                     return;
                 }
@@ -458,16 +507,82 @@ public class PasspointProvisioner {
                     Log.e(TAG,
                             "In the SppExchangeComplete, got error "
                                     + exchangeCompleteMessage.getError());
-                    resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                    resetStateMachineForFailure(
+                            ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                     return;
                 }
-
-                // TODO(b/74244324): Implement a routine to get CAs for AAA, Remediation, Policy.
+                if (mPasspointConfiguration == null) {
+                    Log.e(TAG, "No PPS MO to use for retrieving TrustCerts");
+                    resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_NO_PPS_MO);
+                    return;
+                }
+                retrieveTrustRootCerts(mPasspointConfiguration);
             } else {
                 if (mVerboseLoggingEnabled) {
                     Log.v(TAG, "Received an unexpected SOAP message in state=" + mState);
                 }
             }
+        }
+
+        /**
+         * Installs the trust root CA certificates for AAA, Remediation and Policy Server
+         *
+         * @param sessionId             indicating current session ID
+         * @param trustRootCertificates trust root CA certificates to be installed.
+         */
+        public void installTrustRootCertificates(int sessionId,
+                @NonNull Map<Integer, List<X509Certificate>> trustRootCertificates) {
+            if (sessionId != mCurrentSessionId) {
+                Log.w(TAG, "Expected TrustRootCertificates callback for currentSessionId="
+                        + mCurrentSessionId);
+                return;
+            }
+            if (mState != STATE_WAITING_FOR_TRUST_ROOT_CERTS) {
+                if (mVerboseLoggingEnabled) {
+                    Log.v(TAG, "Received an unexpected TrustRootCertificates in state=" + mState);
+                }
+                return;
+            }
+
+            if (trustRootCertificates.isEmpty()) {
+                Log.e(TAG, "fails to retrieve trust root certificates");
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_RETRIEVE_TRUST_ROOT_CERTIFICATES);
+                return;
+            }
+
+            List<X509Certificate> certificates = trustRootCertificates.get(
+                    OsuServerConnection.TRUST_CERT_TYPE_AAA);
+            if (certificates == null || certificates.isEmpty()) {
+                Log.e(TAG, "fails to retrieve trust root certificate for AAA server");
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_NO_AAA_TRUST_ROOT_CERTIFICATE);
+                return;
+            }
+
+            // TODO(117717842) : Currently PasspointConfiguration is only allowed to save a single
+            // trust CA certificate for AAA server. So, add a routine in PasspointConfiguration
+            // to store multiple trust CA certificates for AAA server.
+            mPasspointConfiguration.getCredential().setCaCertificate(
+                    certificates.get(0));
+
+            // TODO(b/116346527): Implement a routine to store trust CA certificates for
+            // remediation and policy server.
+            try {
+                mWifiManager.addOrUpdatePasspointConfiguration(mPasspointConfiguration);
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "fails to add a new PasspointConfiguration: " + e);
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_ADD_PASSPOINT_CONFIGURATION);
+                return;
+            }
+
+            invokeProvisioningCompleteCallback();
+            if (mVerboseLoggingEnabled) {
+                Log.i(TAG, "Provisioning is complete for "
+                        + mPasspointConfiguration.getHomeSp().getFqdn());
+            }
+            resetStateMachine();
         }
 
         /**
@@ -484,25 +599,27 @@ public class PasspointProvisioner {
                 return;
             }
             mNetwork = null;
-            resetStateMachine(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
+            resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
         }
 
+        /**
+         * Establishes TLS session to the server(OSU Server, Remediation or Policy Server).
+         *
+         * @param network current {@link Network} associated with the target AP.
+         */
         private void initiateServerConnection(Network network) {
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Initiating server connection in state=" + mState);
             }
-            if (mState != STATE_OSU_AP_CONNECTED) {
-                Log.wtf(TAG , "Initiating server connection aborted in invalid state=" + mState);
-                return;
-            }
+
             if (!mOsuServerConnection.connect(mServerUrl, network)) {
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION);
                 return;
             }
             mNetwork = network;
-            changeState(STATE_OSU_SERVER_CONNECTED);
+            changeState(STATE_OSU_SERVER_CONNECTING);
             invokeProvisioningCallback(PROVISIONING_STATUS,
-                    ProvisioningCallback.OSU_STATUS_SERVER_CONNECTED);
+                    ProvisioningCallback.OSU_STATUS_SERVER_CONNECTING);
         }
 
         private void invokeProvisioningCallback(int callbackType, int status) {
@@ -523,23 +640,16 @@ public class PasspointProvisioner {
             }
         }
 
-        /**
-         * Validate the OSU Server certificate based on the procedure in 7.3.2.2 of Hotspot2.0
-         * rel2 spec.
-         */
-        private void validateServiceProvider() {
-            if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "Validating the service provider of OSU Server certificate in state="
-                        + mState);
-            }
-            if (!mOsuServerConnection.validateProvider(
-                    Locale.getDefault(), mOsuProvider.getFriendlyName())) {
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SERVICE_PROVIDER_VERIFICATION);
+        private void invokeProvisioningCompleteCallback() {
+            if (mProvisioningCallback == null) {
+                Log.e(TAG, "No provisioning complete callback registered");
                 return;
             }
-            invokeProvisioningCallback(PROVISIONING_STATUS,
-                    ProvisioningCallback.OSU_STATUS_SERVICE_PROVIDER_VERIFIED);
-            mProvisioningStateMachine.getHandler().post(() -> initSoapExchange());
+            try {
+                mProvisioningCallback.onProvisioningComplete();
+            } catch (RemoteException e) {
+                Log.e(TAG, "Remote Exception while posting provisioning complete");
+            }
         }
 
         /**
@@ -550,9 +660,9 @@ public class PasspointProvisioner {
                 Log.v(TAG, "Initiates soap message exchange in state =" + mState);
             }
 
-            if (mState != STATE_OSU_SERVER_CONNECTED) {
+            if (mState != STATE_OSU_SERVER_CONNECTING) {
                 Log.e(TAG, "Initiates soap message exchange in wrong state=" + mState);
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                 return;
             }
 
@@ -570,11 +680,14 @@ public class PasspointProvisioner {
                 changeState(STATE_WAITING_FOR_FIRST_SOAP_RESPONSE);
             } else {
                 Log.e(TAG, "HttpsConnection is not established for soap message exchange");
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
                 return;
             }
         }
 
+        /**
+         * Launches OsuLogin Application for users to register a new subscription.
+         */
         private void launchOsuWebView() {
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "launch Osu webview in state =" + mState);
@@ -582,7 +695,7 @@ public class PasspointProvisioner {
 
             if (mState != STATE_WAITING_FOR_FIRST_SOAP_RESPONSE) {
                 Log.e(TAG, "launch Osu webview in wrong state =" + mState);
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                 return;
             }
 
@@ -608,7 +721,8 @@ public class PasspointProvisioner {
                 }
             })) {
                 Log.e(TAG, "fails to start redirect listener");
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_START_REDIRECT_LISTENER);
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_START_REDIRECT_LISTENER);
                 return;
             }
 
@@ -628,7 +742,7 @@ public class PasspointProvisioner {
                 changeState(STATE_WAITING_FOR_REDIRECT_RESPONSE);
             } else {
                 Log.e(TAG, "can't resolve the activity for the intent");
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_NO_OSU_ACTIVITY_FOUND);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_NO_OSU_ACTIVITY_FOUND);
                 return;
             }
         }
@@ -643,7 +757,7 @@ public class PasspointProvisioner {
 
             if (mState != STATE_WAITING_FOR_REDIRECT_RESPONSE) {
                 Log.e(TAG, "Initiates the second soap message exchange in wrong state=" + mState);
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                 return;
             }
 
@@ -657,7 +771,7 @@ public class PasspointProvisioner {
                 changeState(STATE_WAITING_FOR_SECOND_SOAP_RESPONSE);
             } else {
                 Log.e(TAG, "HttpsConnection is not established for soap message exchange");
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
                 return;
             }
         }
@@ -672,7 +786,7 @@ public class PasspointProvisioner {
 
             if (mState != STATE_WAITING_FOR_SECOND_SOAP_RESPONSE) {
                 Log.e(TAG, "Initiates the third soap message exchange in wrong state=" + mState);
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED);
                 return;
             }
 
@@ -684,23 +798,100 @@ public class PasspointProvisioner {
                 changeState(STATE_WAITING_FOR_THIRD_SOAP_RESPONSE);
             } else {
                 Log.e(TAG, "HttpsConnection is not established for soap message exchange");
-                resetStateMachine(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
                 return;
             }
         }
 
+        /**
+         * Builds {@link PasspointConfiguration} object from PPS(PerProviderSubscription)
+         * MO(Management Object).
+         */
         private PasspointConfiguration buildPasspointConfiguration(@NonNull PpsMoData moData) {
             String moTree = moData.getPpsMoTree();
 
             PasspointConfiguration passpointConfiguration = PpsMoParser.parseMoText(moTree);
             if (passpointConfiguration == null) {
                 Log.e(TAG, "fails to parse the MoTree");
+                return null;
+            }
+
+            if (!passpointConfiguration.validateForR2()) {
+                Log.e(TAG, "PPS MO received is invalid: " + passpointConfiguration);
+                return null;
+            }
+
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "The parsed PasspointConfiguration: " + passpointConfiguration);
+            }
+
+            return passpointConfiguration;
+        }
+
+        /**
+         * Retrieves Trust Root CA Certificates from server url defined in PPS
+         * (PerProviderSubscription) MO(Management Object).
+         */
+        private void retrieveTrustRootCerts(@NonNull PasspointConfiguration passpointConfig) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "Initiates retrieving trust root certs in state =" + mState);
+            }
+
+            Map<String, byte[]> trustCertInfo = passpointConfig.getTrustRootCertList();
+            if (trustCertInfo == null || trustCertInfo.isEmpty()) {
+                Log.e(TAG, "no AAATrustRoot Node found");
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_NO_AAA_SERVER_TRUST_ROOT_NODE);
+                return;
+            }
+            Map<Integer, Map<String, byte[]>> allTrustCerts = new HashMap<>();
+            allTrustCerts.put(OsuServerConnection.TRUST_CERT_TYPE_AAA, trustCertInfo);
+
+            // SubscriptionUpdate is a required node.
+            if (passpointConfig.getSubscriptionUpdate() != null
+                    && passpointConfig.getSubscriptionUpdate().getTrustRootCertUrl() != null) {
+                trustCertInfo = new HashMap<>();
+                trustCertInfo.put(
+                        passpointConfig.getSubscriptionUpdate().getTrustRootCertUrl(),
+                        passpointConfig.getSubscriptionUpdate()
+                                .getTrustRootCertSha256Fingerprint());
+                allTrustCerts.put(OsuServerConnection.TRUST_CERT_TYPE_REMEDIATION, trustCertInfo);
             } else {
-                if (mVerboseLoggingEnabled) {
-                    Log.d(TAG, "The parsed PasspointConfiguration: " + passpointConfiguration);
+                Log.e(TAG, "no TrustRoot Node for remediation server found");
+                resetStateMachineForFailure(
+                        ProvisioningCallback.OSU_FAILURE_NO_REMEDIATION_SERVER_TRUST_ROOT_NODE);
+                return;
+            }
+
+            // Policy is an optional node
+            if (passpointConfig.getPolicy() != null) {
+                if (passpointConfig.getPolicy().getPolicyUpdate() != null
+                        && passpointConfig.getPolicy().getPolicyUpdate().getTrustRootCertUrl()
+                        != null) {
+                    trustCertInfo = new HashMap<>();
+                    trustCertInfo.put(
+                            passpointConfig.getPolicy().getPolicyUpdate()
+                                    .getTrustRootCertUrl(),
+                            passpointConfig.getPolicy().getPolicyUpdate()
+                                    .getTrustRootCertSha256Fingerprint());
+                    allTrustCerts.put(OsuServerConnection.TRUST_CERT_TYPE_POLICY, trustCertInfo);
+                } else {
+                    Log.e(TAG, "no TrustRoot Node for policy server found");
+                    resetStateMachineForFailure(
+                            ProvisioningCallback.OSU_FAILURE_NO_POLICY_SERVER_TRUST_ROOT_NODE);
+                    return;
                 }
             }
-            return passpointConfiguration;
+
+            if (mOsuServerConnection.retrieveTrustRootCerts(allTrustCerts)) {
+                invokeProvisioningCallback(PROVISIONING_STATUS,
+                        ProvisioningCallback.OSU_STATUS_RETRIEVING_TRUST_ROOT_CERTS);
+                changeState(STATE_WAITING_FOR_TRUST_ROOT_CERTS);
+            } else {
+                Log.e(TAG, "HttpsConnection is not established for retrieving trust root certs");
+                resetStateMachineForFailure(ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION);
+                return;
+            }
         }
 
         private void changeState(int nextState) {
@@ -712,13 +903,18 @@ public class PasspointProvisioner {
             }
         }
 
-        private void resetStateMachine(int failureCode) {
+        private void resetStateMachineForFailure(int failureCode) {
             invokeProvisioningCallback(PROVISIONING_FAILURE, failureCode);
+            resetStateMachine();
+        }
+
+        private void resetStateMachine() {
             mRedirectListener.stopServer();
             mOsuNetworkConnection.setEventCallback(null);
             mOsuNetworkConnection.disconnectIfNeeded();
             mOsuServerConnection.setEventCallback(null);
             mOsuServerConnection.cleanup();
+            mPasspointConfiguration = null;
             changeState(STATE_INIT);
         }
     }
@@ -729,8 +925,6 @@ public class PasspointProvisioner {
      * Note: Called on main thread (WifiService thread).
      */
     class OsuNetworkCallbacks implements OsuNetworkConnection.Callbacks {
-
-        OsuNetworkCallbacks() {}
 
         @Override
         public void onConnected(Network network) {
@@ -798,6 +992,20 @@ public class PasspointProvisioner {
         }
 
         /**
+         * Callback when a TLS connection to the server is failed.
+         *
+         * @param sessionId indicating current session ID
+         * @param succeeded boolean indicating success/failure of server connection
+         */
+        public void onServerConnectionStatus(int sessionId, boolean succeeded) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "OSU Server connection status=" + succeeded + " sessionId=" + sessionId);
+            }
+            mProvisioningStateMachine.getHandler().post(() ->
+                    mProvisioningStateMachine.handleServerConnectionStatus(sessionId, succeeded));
+        }
+
+        /**
          * Provides a server validation status for the session ID
          *
          * @param sessionId integer indicating current session ID
@@ -821,7 +1029,7 @@ public class PasspointProvisioner {
         /**
          * Callback when soap message is received from server.
          *
-         * @param sessionId indicating current session ID
+         * @param sessionId       indicating current session ID
          * @param responseMessage SOAP SPP response parsed or {@code null} in any failure
          * Note: Called on different thread (OsuServer Thread)!
          */
@@ -834,6 +1042,22 @@ public class PasspointProvisioner {
                     mProvisioningStateMachine.handleSoapMessageResponse(sessionId,
                             responseMessage));
         }
+
+        /**
+         * Callback when trust root certificates are retrieved from server.
+         *
+         * @param sessionId             indicating current session ID
+         * @param trustRootCertificates trust root CA certificates retrieved from server
+         * Note: Called on different thread (OsuServer Thread)!
+         */
+        public void onReceivedTrustRootCertificates(int sessionId,
+                @NonNull Map<Integer, List<X509Certificate>> trustRootCertificates) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "onReceivedTrustRootCertificates with sessionId=" + sessionId);
+            }
+            mProvisioningStateMachine.getHandler().post(() ->
+                    mProvisioningStateMachine.installTrustRootCertificates(sessionId,
+                            trustRootCertificates));
+        }
     }
 }
-

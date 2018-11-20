@@ -21,6 +21,7 @@ import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
+import android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.os.HidlSupport.Mutable;
@@ -109,7 +110,10 @@ public class SupplicantStaNetworkHal {
     private int mAuthAlgMask;
     private int mGroupCipherMask;
     private int mPairwiseCipherMask;
+    private int mGroupMgmtCipherMask;
     private String mPskPassphrase;
+    private String mSaePassword;
+    private String mSaePasswordId;
     private byte[] mPsk;
     private ArrayList<Byte> mWepKey;
     private int mWepTxKeyIdx;
@@ -131,7 +135,7 @@ public class SupplicantStaNetworkHal {
     private String mEapDomainSuffixMatch;
 
     SupplicantStaNetworkHal(ISupplicantStaNetwork iSupplicantStaNetwork, String ifaceName,
-                            Context context, WifiMonitor monitor) {
+            Context context, WifiMonitor monitor) {
         mISupplicantStaNetwork = iSupplicantStaNetwork;
         mIfaceName = ifaceName;
         mWifiMonitor = monitor;
@@ -159,7 +163,7 @@ public class SupplicantStaNetworkHal {
      * @throws IllegalArgumentException on malformed configuration params.
      */
     public boolean loadWifiConfiguration(WifiConfiguration config,
-                                         Map<String, String> networkExtras) {
+            Map<String, String> networkExtras) {
         synchronized (mLock) {
             if (config == null) return false;
             /** SSID */
@@ -211,7 +215,8 @@ public class SupplicantStaNetworkHal {
                 config.preSharedKey = NativeUtil.addEnclosingQuotes(mPskPassphrase);
             } else if (getPsk() && !ArrayUtils.isEmpty(mPsk)) {
                 config.preSharedKey = NativeUtil.hexStringFromByteArray(mPsk);
-            }
+            } /* Do not read SAE password */
+
             /** allowedKeyManagement */
             if (getKeyMgmt()) {
                 BitSet keyMgmtMask = supplicantToWifiConfigurationKeyMgmtMask(mKeyMgmtMask);
@@ -237,6 +242,12 @@ public class SupplicantStaNetworkHal {
                 config.allowedPairwiseCiphers =
                         supplicantToWifiConfigurationPairwiseCipherMask(mPairwiseCipherMask);
             }
+            /** allowedPairwiseCiphers */
+            if (getGroupMgmtCipher()) {
+                config.allowedGroupMgmtCiphers =
+                        supplicantToWifiConfigurationGroupMgmtCipherMask(mGroupMgmtCipherMask);
+            }
+
             /** metadata: idstr */
             if (getIdStr() && !TextUtils.isEmpty(mIdStr)) {
                 Map<String, String> metadata = parseNetworkExtra(mIdStr);
@@ -276,14 +287,28 @@ public class SupplicantStaNetworkHal {
                 }
             }
             /** Pre Shared Key */
-            // This can either be quoted ASCII passphrase or hex string for raw psk.
+            // For PSK, this can either be quoted ASCII passphrase or hex string for raw psk.
+            // For SAE, password must be a quoted ASCII string
             if (config.preSharedKey != null) {
                 if (config.preSharedKey.startsWith("\"")) {
-                    if (!setPskPassphrase(NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
-                        Log.e(TAG, "failed to set psk passphrase");
-                        return false;
+                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+                        /* WPA3 case, field is SAE Password */
+                        if (!setSaePassword(
+                                NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
+                            Log.e(TAG, "failed to set sae password");
+                            return false;
+                        }
+                    } else {
+                        if (!setPskPassphrase(
+                                NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
+                            Log.e(TAG, "failed to set psk passphrase");
+                            return false;
+                        }
                     }
                 } else {
+                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+                        return false;
+                    }
                     if (!setPsk(NativeUtil.hexStringToByteArray(config.preSharedKey))) {
                         Log.e(TAG, "failed to set psk");
                         return false;
@@ -317,6 +342,7 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, config.SSID + ": failed to set hiddenSSID: " + config.hiddenSSID);
                 return false;
             }
+
             /** RequirePMF */
             if (!setRequirePmf(config.requirePMF)) {
                 Log.e(TAG, config.SSID + ": failed to set requirePMF: " + config.requirePMF);
@@ -343,12 +369,13 @@ public class SupplicantStaNetworkHal {
                     Log.e(TAG, "Failed to set DPP configurations.");
                         return false;
                 }
+
                 // Check and set SuiteB configurations.
-                if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.SUITE_B_192) && !saveSuiteBConfig(config)) {
-                    Log.e(TAG, "Failed to set Suite_B_192 configurations.");
+                if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.SUITE_B_192)
+                        && !saveSuiteBConfig(config)) {
+                    Log.e(TAG, "Failed to set Suite-B-192 configuration");
                     return false;
                 }
-
             }
             /** Security Protocol */
             if (config.allowedProtocols.cardinality() != 0
@@ -437,19 +464,21 @@ public class SupplicantStaNetworkHal {
      * Supplicant internally sets auth_alg and is not needed by framework
      * to set the same
      */
-     private boolean isAuthAlgNeeded(WifiConfiguration config) {
+    private boolean isAuthAlgNeeded(WifiConfiguration config) {
         BitSet keyMgmtMask = config.allowedKeyManagement;
         if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.SAE)) {
-            Log.d(TAG, "no need to set Auth Algo for SAE");
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "No need to set Auth Algorithm for SAE");
+            }
             return false;
         }
         return true;
-     }
+    }
 
     /**
      * Read network variables from wpa_supplicant into the provided WifiEnterpriseConfig object.
      *
-     * @param ssid SSID of the network. (Used for logging purposes only)
+     * @param ssid      SSID of the network. (Used for logging purposes only)
      * @param eapConfig WifiEnterpriseConfig object to be populated.
      * @return true if succeeds, false otherwise.
      */
@@ -575,43 +604,43 @@ public class SupplicantStaNetworkHal {
     /**
      * Save network variables from the provided SuiteB configuration to wpa_supplicant.
      *
-     * @param config WifiConfiguration object to be saved (only DPP configs).
+     * @param config WifiConfiguration object to be saved
      * @return true if succeeds, false otherwise.
      */
     private boolean saveSuiteBConfig(WifiConfiguration config) {
         /** Group Cipher **/
         if (config.allowedGroupCiphers.cardinality() != 0
-            && !setGroupCipher(wifiConfigurationToSupplicantGroupCipherMask(
+                && !setGroupCipher(wifiConfigurationToSupplicantGroupCipherMask(
                 config.allowedGroupCiphers))) {
             Log.e(TAG, "failed to set Group Cipher");
             return false;
         }
         /** Pairwise Cipher*/
         if (config.allowedPairwiseCiphers.cardinality() != 0
-            && !setPairwiseCipher(wifiConfigurationToSupplicantPairwiseCipherMask(
+                && !setPairwiseCipher(wifiConfigurationToSupplicantPairwiseCipherMask(
                 config.allowedPairwiseCiphers))) {
             Log.e(TAG, "failed to set PairwiseCipher");
             return false;
         }
-        /** GroupMgmt Cipher*/
+        /** GroupMgmt Cipher */
         if (config.allowedGroupMgmtCiphers.cardinality() != 0
-            && !setGroupMgmtCipher(wifiConfigurationToSupplicantVendorGroupMgmtCipherMask(
+                && !setGroupMgmtCipher(wifiConfigurationToSupplicantGroupMgmtCipherMask(
                 config.allowedGroupMgmtCiphers))) {
             Log.e(TAG, "failed to set GroupMgmtCipher");
             return false;
         }
 
-        if(config.allowedSuiteBCiphers.get(WifiConfiguration.SuiteBCipher.ECDHE_RSA)) {
-            if(!setEapPhase1Params("tls_suiteb=1")) {
+        if (config.allowedSuiteBCiphers.get(WifiConfiguration.SuiteBCipher.ECDHE_RSA)) {
+            if (!enableTlsSuiteBEapPhase1Param(true)) {
                 Log.e(TAG, "failed to set TLSSuiteB");
                 return false;
             }
-        }
-        else if (config.allowedSuiteBCiphers.get(WifiConfiguration.SuiteBCipher.ECDHE_ECDSA))
-            if(!setEapOpensslCiphers("SUITE_B_192")) {
+        } else if (config.allowedSuiteBCiphers.get(WifiConfiguration.SuiteBCipher.ECDHE_ECDSA)) {
+            if (!enableSuiteBEapOpenSslCiphers()) {
                 Log.e(TAG, "failed to set OpensslCipher");
                 return false;
             }
+        }
 
         return true;
     }
@@ -619,7 +648,7 @@ public class SupplicantStaNetworkHal {
     /**
      * Save network variables from the provided WifiEnterpriseConfig object to wpa_supplicant.
      *
-     * @param ssid SSID of the network. (Used for logging purposes only)
+     * @param ssid      SSID of the network. (Used for logging purposes only)
      * @param eapConfig WifiEnterpriseConfig object to be saved.
      * @return true if succeeds, false otherwise.
      */
@@ -746,15 +775,23 @@ public class SupplicantStaNetworkHal {
         }
     }
 
+    private android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork getV1_2StaNetwork() {
+        synchronized (mLock) {
+            return getSupplicantStaNetworkForV1_2Mockable();
+        }
+    }
+
     /**
      * Maps WifiConfiguration Key Management BitSet to Supplicant HIDL bitmask int
      * TODO(b/32571829): Update mapping when fast transition keys are added
+     *
      * @return bitmask int describing the allowed Key Management schemes, readable by the Supplicant
-     *         HIDL hal
+     * HIDL hal
      */
     private static int wifiConfigurationToSupplicantKeyMgmtMask(BitSet keyMgmt) {
         int mask = 0;
-        for (int bit = keyMgmt.nextSetBit(0); bit != -1; bit = keyMgmt.nextSetBit(bit + 1)) {
+        for (int bit = keyMgmt.nextSetBit(0); bit != -1;
+                bit = keyMgmt.nextSetBit(bit + 1)) {
             switch (bit) {
                 case WifiConfiguration.KeyMgmt.NONE:
                     mask |= ISupplicantStaNetwork.KeyMgmtMask.NONE;
@@ -776,6 +813,15 @@ public class SupplicantStaNetworkHal {
                     break;
                 case WifiConfiguration.KeyMgmt.FT_EAP:
                     mask |= ISupplicantStaNetwork.KeyMgmtMask.FT_EAP;
+                    break;
+                case WifiConfiguration.KeyMgmt.OWE:
+                    mask |= ISupplicantStaNetwork.KeyMgmtMask.OWE;
+                    break;
+                case WifiConfiguration.KeyMgmt.SAE:
+                    mask |= ISupplicantStaNetwork.KeyMgmtMask.SAE;
+                    break;
+                case WifiConfiguration.KeyMgmt.SUITE_B_192:
+                    mask |= ISupplicantStaNetwork.KeyMgmtMask.SUITE_B_192;
                     break;
                 case WifiConfiguration.KeyMgmt.WPA2_PSK: // This should never happen
                 case WifiConfiguration.KeyMgmt.FILS_SHA256:
@@ -833,7 +879,8 @@ public class SupplicantStaNetworkHal {
 
     private static int wifiConfigurationToSupplicantProtoMask(BitSet protoMask) {
         int mask = 0;
-        for (int bit = protoMask.nextSetBit(0); bit != -1; bit = protoMask.nextSetBit(bit + 1)) {
+        for (int bit = protoMask.nextSetBit(0); bit != -1;
+                bit = protoMask.nextSetBit(bit + 1)) {
             switch (bit) {
                 case WifiConfiguration.Protocol.WPA:
                     mask |= ISupplicantStaNetwork.ProtoMask.WPA;
@@ -850,7 +897,7 @@ public class SupplicantStaNetworkHal {
             }
         }
         return mask;
-    };
+    }
 
     private static int wifiConfigurationToSupplicantVendorProtoMask(BitSet protoMask) {
         int mask = 0;
@@ -884,7 +931,7 @@ public class SupplicantStaNetworkHal {
             }
         }
         return mask;
-    };
+    }
 
     private static int wifiConfigurationToSupplicantGroupCipherMask(BitSet groupCipherMask) {
         int mask = 0;
@@ -906,7 +953,9 @@ public class SupplicantStaNetworkHal {
                 case WifiConfiguration.GroupCipher.GTK_NOT_USED:
                     mask |= ISupplicantStaNetwork.GroupCipherMask.GTK_NOT_USED;
                     break;
-                case WifiConfiguration.GroupCipher.GCMP:
+                case WifiConfiguration.GroupCipher.GCMP_256:
+                    mask |= android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                                .GroupCipherMask.GCMP_256;
                     break;
                 default:
                     throw new IllegalArgumentException(
@@ -914,7 +963,31 @@ public class SupplicantStaNetworkHal {
             }
         }
         return mask;
-    };
+    }
+
+    private static int wifiConfigurationToSupplicantGroupMgmtCipherMask(BitSet
+            groupMgmtCipherMask) {
+        int mask = 0;
+
+        for (int bit = groupMgmtCipherMask.nextSetBit(0); bit != -1; bit =
+                groupMgmtCipherMask.nextSetBit(bit + 1)) {
+            switch (bit) {
+                case WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256:
+                    mask |= ISupplicantStaNetwork.GroupMgmtCipherMask.BIP_CMAC_256;
+                    break;
+                case WifiConfiguration.GroupMgmtCipher.BIP_GMAC_128:
+                    mask |= ISupplicantStaNetwork.GroupMgmtCipherMask.BIP_GMAC_128;
+                    break;
+                case WifiConfiguration.GroupMgmtCipher.BIP_GMAC_256:
+                    mask |= ISupplicantStaNetwork.GroupMgmtCipherMask.BIP_GMAC_256;
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "Invalid GroupMgmtCipherMask bit in wificonfig: " + bit);
+            }
+        }
+        return mask;
+    }
 
     private static int wifiConfigurationToSupplicantVendorGroupCipherMask(BitSet groupCipherMask) {
         int mask = 0;
@@ -964,7 +1037,8 @@ public class SupplicantStaNetworkHal {
                 case WifiConfiguration.PairwiseCipher.CCMP:
                     mask |= ISupplicantStaNetwork.PairwiseCipherMask.CCMP;
                     break;
-                case WifiConfiguration.PairwiseCipher.GCMP:
+                case WifiConfiguration.PairwiseCipher.GCMP_256:
+                    mask |= ISupplicantStaNetwork.PairwiseCipherMask.GCMP_256;
                     break;
                 default:
                     throw new IllegalArgumentException(
@@ -972,7 +1046,7 @@ public class SupplicantStaNetworkHal {
             }
         }
         return mask;
-    };
+    }
 
     private static int wifiConfigurationToSupplicantVendorPairwiseCipherMask(BitSet pairwiseCipherMask) {
         int mask = 0;
@@ -1012,7 +1086,7 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, "invalid eap method value from supplicant: " + value);
                 return -1;
         }
-    };
+    }
 
     private static int supplicantToWifiConfigurationEapPhase2Method(int value) {
         switch (value) {
@@ -1036,11 +1110,11 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, "invalid eap phase2 method value from supplicant: " + value);
                 return -1;
         }
-    };
+    }
 
     private static int supplicantMaskValueToWifiConfigurationBitSet(int supplicantMask,
-                                                             int supplicantValue, BitSet bitset,
-                                                             int bitSetPosition) {
+            int supplicantValue, BitSet bitset,
+            int bitSetPosition) {
         bitset.set(bitSetPosition, (supplicantMask & supplicantValue) == supplicantValue);
         int modifiedSupplicantMask = supplicantMask & ~supplicantValue;
         return modifiedSupplicantMask;
@@ -1069,6 +1143,16 @@ public class SupplicantStaNetworkHal {
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantStaNetwork.KeyMgmtMask.FT_EAP, bitset,
                 WifiConfiguration.KeyMgmt.FT_EAP);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantStaNetwork.KeyMgmtMask.SAE, bitset,
+                WifiConfiguration.KeyMgmt.SAE);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantStaNetwork.KeyMgmtMask.OWE, bitset,
+                WifiConfiguration.KeyMgmt.OWE);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantStaNetwork.KeyMgmtMask.SUITE_B_192, bitset,
+                WifiConfiguration.KeyMgmt.SUITE_B_192);
+
         if (mask != 0) {
             throw new IllegalArgumentException(
                     "invalid key mgmt mask from supplicant: " + mask);
@@ -1092,7 +1176,7 @@ public class SupplicantStaNetworkHal {
                     "invalid proto mask from supplicant: " + mask);
         }
         return bitset;
-    };
+    }
 
     private static BitSet supplicantToWifiConfigurationAuthAlgMask(int mask) {
         BitSet bitset = new BitSet();
@@ -1110,7 +1194,7 @@ public class SupplicantStaNetworkHal {
                     "invalid auth alg mask from supplicant: " + mask);
         }
         return bitset;
-    };
+    }
 
     private static BitSet supplicantToWifiConfigurationGroupCipherMask(int mask) {
         BitSet bitset = new BitSet();
@@ -1126,6 +1210,9 @@ public class SupplicantStaNetworkHal {
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantStaNetwork.GroupCipherMask.CCMP, bitset,
                 WifiConfiguration.GroupCipher.CCMP);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(mask,
+                ISupplicantStaNetwork.GroupCipherMask.GCMP_256, bitset,
+                WifiConfiguration.GroupCipher.GCMP_256);
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantVendorStaNetwork.VendorGroupCipherMask.GCMP_256, bitset,
                 WifiConfiguration.GroupCipher.GCMP);
@@ -1137,7 +1224,25 @@ public class SupplicantStaNetworkHal {
                     "invalid group cipher mask from supplicant: " + mask);
         }
         return bitset;
-    };
+    }
+
+    private static BitSet supplicantToWifiConfigurationGroupMgmtCipherMask(int mask) {
+        BitSet bitset = new BitSet();
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantStaNetwork.GroupMgmtCipherMask.BIP_GMAC_128, bitset,
+                WifiConfiguration.GroupMgmtCipher.BIP_GMAC_128);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantStaNetwork.GroupMgmtCipherMask.BIP_GMAC_256, bitset,
+                WifiConfiguration.GroupMgmtCipher.BIP_GMAC_256);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantStaNetwork.GroupMgmtCipherMask.BIP_CMAC_256, bitset,
+                WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256);
+        if (mask != 0) {
+            throw new IllegalArgumentException(
+                    "invalid group mgmt cipher mask from supplicant: " + mask);
+        }
+        return bitset;
+    }
 
     private static BitSet supplicantToWifiConfigurationGroupMgmtCipherMask(int mask) {
         BitSet bitset = new BitSet();
@@ -1165,15 +1270,15 @@ public class SupplicantStaNetworkHal {
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantStaNetwork.PairwiseCipherMask.CCMP, bitset,
                 WifiConfiguration.PairwiseCipher.CCMP);
-        mask = supplicantMaskValueToWifiConfigurationBitSet(
-                mask, ISupplicantVendorStaNetwork.VendorPairwiseCipherMask.GCMP_256, bitset,
-                WifiConfiguration.PairwiseCipher.GCMP);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(mask,
+                ISupplicantStaNetwork.PairwiseCipherMask.GCMP_256, bitset,
+                WifiConfiguration.PairwiseCipher.GCMP_256);
         if (mask != 0) {
             throw new IllegalArgumentException(
                     "invalid pairwise cipher mask from supplicant: " + mask);
         }
         return bitset;
-    };
+    }
 
     private static int wifiConfigurationToSupplicantEapMethod(int value) {
         switch (value) {
@@ -1198,7 +1303,7 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, "invalid eap method value from WifiConfiguration: " + value);
                 return -1;
         }
-    };
+    }
 
     private static int wifiConfigurationToSupplicantEapPhase2Method(int value) {
         switch (value) {
@@ -1222,7 +1327,7 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, "invalid eap phase2 method value from WifiConfiguration: " + value);
                 return -1;
         }
-    };
+    }
 
     /** See ISupplicantNetwork.hal for documentation */
     public boolean getId() {
@@ -1269,7 +1374,7 @@ public class SupplicantStaNetworkHal {
             final String methodStr = "registerCallback";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.registerCallback(callback);
+                SupplicantStatus status = mISupplicantStaNetwork.registerCallback(callback);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1284,7 +1389,7 @@ public class SupplicantStaNetworkHal {
             final String methodStr = "setSsid";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setSsid(ssid);
+                SupplicantStatus status = mISupplicantStaNetwork.setSsid(ssid);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1316,7 +1421,7 @@ public class SupplicantStaNetworkHal {
             final String methodStr = "setBssid";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setBssid(bssid);
+                SupplicantStatus status = mISupplicantStaNetwork.setBssid(bssid);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1324,13 +1429,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setScanSsid(boolean enable) {
         synchronized (mLock) {
             final String methodStr = "setScanSsid";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setScanSsid(enable);
+                SupplicantStatus status = mISupplicantStaNetwork.setScanSsid(enable);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1338,13 +1444,25 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setKeyMgmt(int keyMgmtMask) {
         synchronized (mLock) {
             final String methodStr = "setKeyMgmt";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setKeyMgmt(keyMgmtMask);
+                SupplicantStatus status;
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for new key management types; SAE, OWE
+                     * Requires HAL v1.2 or higher */
+                    status = iSupplicantStaNetworkV12.setKeyMgmt_1_2(keyMgmtMask);
+                } else {
+                    status = mISupplicantStaNetwork.setKeyMgmt(keyMgmtMask);
+                }
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1352,6 +1470,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setVendorKeyMgmt(int keyMgmtMask) {
         synchronized (mLock) {
@@ -1373,7 +1492,7 @@ public class SupplicantStaNetworkHal {
             final String methodStr = "setProto";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setProto(protoMask);
+                SupplicantStatus status = mISupplicantStaNetwork.setProto(protoMask);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1395,13 +1514,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setAuthAlg(int authAlgMask) {
         synchronized (mLock) {
             final String methodStr = "setAuthAlg";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setAuthAlg(authAlgMask);
+                SupplicantStatus status = mISupplicantStaNetwork.setAuthAlg(authAlgMask);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1409,13 +1529,26 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setGroupCipher(int groupCipherMask) {
         synchronized (mLock) {
             final String methodStr = "setGroupCipher";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setGroupCipher(groupCipherMask);
+                SupplicantStatus status;
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for new key group cipher types for SuiteB
+                     * Requires HAL v1.2 or higher */
+                    status = iSupplicantStaNetworkV12.setGroupCipher_1_2(groupCipherMask);
+                } else {
+                    status = mISupplicantStaNetwork.setGroupCipher(
+                            groupCipherMask);
+                }
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1467,28 +1600,54 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
-    /** See ISupplicantVendorStaNetwork.hal for documentation */
-    private boolean setEapPhase1Params(String phase1) {
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean enableTlsSuiteBEapPhase1Param(boolean enable) {
         synchronized (mLock) {
             final String methodStr = "setEapPhase1Params";
-            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantVendorStaNetwork.setEapPhase1Params(phase1);
-                return checkVendorStatusAndLogFailure(status, methodStr);
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for for SuiteB
+                     * Requires HAL v1.2 or higher */
+                    SupplicantStatus status = iSupplicantStaNetworkV12
+                            .enableTlsSuiteBEapPhase1Param(enable);
+                    return checkStatusAndLogFailure(status, methodStr);
+                } else {
+                    Log.e(TAG, "Supplicant HAL version does not support " + methodStr);
+                    return false;
+                }
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
             }
         }
     }
-    /** See ISupplicantVendorStaNetwork.hal for documentation */
-    private boolean setEapOpensslCiphers(String cipher) {
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean enableSuiteBEapOpenSslCiphers() {
         synchronized (mLock) {
-            final String methodStr = "setEapOpensslCiphers";
-            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
+            final String methodStr = "setEapOpenSslCiphers";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantVendorStaNetwork.setEapOpensslCiphers(cipher);
-                return checkVendorStatusAndLogFailure(status, methodStr);
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for for SuiteB
+                     * Requires HAL v1.2 or higher */
+                    SupplicantStatus status = iSupplicantStaNetworkV12
+                            .enableSuiteBEapOpenSslCiphers();
+                    return checkStatusAndLogFailure(status, methodStr);
+                } else {
+                    Log.e(TAG, "Supplicant HAL version does not support " + methodStr);
+                    return false;
+                }
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -1502,8 +1661,19 @@ public class SupplicantStaNetworkHal {
             final String methodStr = "setPairwiseCipher";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =
-                        mISupplicantStaNetwork.setPairwiseCipher(pairwiseCipherMask);
+                SupplicantStatus status;
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for new key pairwise cipher types for SuiteB
+                     * Requires HAL v1.2 or higher */
+                    status = iSupplicantStaNetworkV12.setPairwiseCipher_1_2(pairwiseCipherMask);
+                } else {
+                    status =
+                            mISupplicantStaNetwork.setPairwiseCipher(pairwiseCipherMask);
+                }
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1511,13 +1681,41 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean setGroupMgmtCipher(int groupMgmtCipherMask) {
+        synchronized (mLock) {
+            final String methodStr = "setGroupMgmtCipher";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for new key pairwise cipher types for SuiteB
+                     * Requires HAL v1.2 or higher */
+                    SupplicantStatus status = iSupplicantStaNetworkV12
+                            .setGroupMgmtCipher(groupMgmtCipherMask);
+                    return checkStatusAndLogFailure(status, methodStr);
+                } else {
+                    return false;
+                }
+
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setPskPassphrase(String psk) {
         synchronized (mLock) {
             final String methodStr = "setPskPassphrase";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setPskPassphrase(psk);
+                SupplicantStatus status = mISupplicantStaNetwork.setPskPassphrase(psk);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1525,13 +1723,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setPsk(byte[] psk) {
         synchronized (mLock) {
             final String methodStr = "setPsk";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setPsk(psk);
+                SupplicantStatus status = mISupplicantStaNetwork.setPsk(psk);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1539,13 +1738,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setWepKey(int keyIdx, java.util.ArrayList<Byte> wepKey) {
         synchronized (mLock) {
             final String methodStr = "setWepKey";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setWepKey(keyIdx, wepKey);
+                SupplicantStatus status = mISupplicantStaNetwork.setWepKey(keyIdx, wepKey);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1553,13 +1753,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setWepTxKeyIdx(int keyIdx) {
         synchronized (mLock) {
             final String methodStr = "setWepTxKeyIdx";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setWepTxKeyIdx(keyIdx);
+                SupplicantStatus status = mISupplicantStaNetwork.setWepTxKeyIdx(keyIdx);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1567,13 +1768,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setRequirePmf(boolean enable) {
         synchronized (mLock) {
             final String methodStr = "setRequirePmf";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setRequirePmf(enable);
+                SupplicantStatus status = mISupplicantStaNetwork.setRequirePmf(enable);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1581,13 +1783,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setUpdateIdentifier(int identifier) {
         synchronized (mLock) {
             final String methodStr = "setUpdateIdentifier";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setUpdateIdentifier(identifier);
+                SupplicantStatus status = mISupplicantStaNetwork.setUpdateIdentifier(identifier);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1595,13 +1798,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapMethod(int method) {
         synchronized (mLock) {
             final String methodStr = "setEapMethod";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapMethod(method);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapMethod(method);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1609,13 +1813,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapPhase2Method(int method) {
         synchronized (mLock) {
             final String methodStr = "setEapPhase2Method";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapPhase2Method(method);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapPhase2Method(method);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1623,13 +1828,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapIdentity(java.util.ArrayList<Byte> identity) {
         synchronized (mLock) {
             final String methodStr = "setEapIdentity";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapIdentity(identity);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapIdentity(identity);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1637,13 +1843,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapAnonymousIdentity(java.util.ArrayList<Byte> identity) {
         synchronized (mLock) {
             final String methodStr = "setEapAnonymousIdentity";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapAnonymousIdentity(identity);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapAnonymousIdentity(identity);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1651,13 +1858,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapPassword(java.util.ArrayList<Byte> password) {
         synchronized (mLock) {
             final String methodStr = "setEapPassword";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapPassword(password);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapPassword(password);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1665,13 +1873,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapCACert(String path) {
         synchronized (mLock) {
             final String methodStr = "setEapCACert";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapCACert(path);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapCACert(path);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1679,13 +1888,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapCAPath(String path) {
         synchronized (mLock) {
             final String methodStr = "setEapCAPath";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapCAPath(path);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapCAPath(path);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1693,13 +1903,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapClientCert(String path) {
         synchronized (mLock) {
             final String methodStr = "setEapClientCert";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapClientCert(path);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapClientCert(path);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1707,13 +1918,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapPrivateKeyId(String id) {
         synchronized (mLock) {
             final String methodStr = "setEapPrivateKeyId";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapPrivateKeyId(id);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapPrivateKeyId(id);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1721,13 +1933,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapSubjectMatch(String match) {
         synchronized (mLock) {
             final String methodStr = "setEapSubjectMatch";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapSubjectMatch(match);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapSubjectMatch(match);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1735,13 +1948,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapAltSubjectMatch(String match) {
         synchronized (mLock) {
             final String methodStr = "setEapAltSubjectMatch";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapAltSubjectMatch(match);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapAltSubjectMatch(match);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1749,13 +1963,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapEngine(boolean enable) {
         synchronized (mLock) {
             final String methodStr = "setEapEngine";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapEngine(enable);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapEngine(enable);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1763,13 +1978,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapEngineID(String id) {
         synchronized (mLock) {
             final String methodStr = "setEapEngineID";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapEngineID(id);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapEngineID(id);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1777,13 +1993,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapDomainSuffixMatch(String match) {
         synchronized (mLock) {
             final String methodStr = "setEapDomainSuffixMatch";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setEapDomainSuffixMatch(match);
+                SupplicantStatus status = mISupplicantStaNetwork.setEapDomainSuffixMatch(match);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1791,13 +2008,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setEapProactiveKeyCaching(boolean enable) {
         synchronized (mLock) {
             final String methodStr = "setEapProactiveKeyCaching";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setProactiveKeyCaching(enable);
+                SupplicantStatus status = mISupplicantStaNetwork.setProactiveKeyCaching(enable);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1888,13 +2106,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setIdStr(String idString) {
         synchronized (mLock) {
             final String methodStr = "setIdStr";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.setIdStr(idString);
+                SupplicantStatus status = mISupplicantStaNetwork.setIdStr(idString);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -1902,6 +2121,56 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean setSaePassword(String saePassword) {
+        synchronized (mLock) {
+            final String methodStr = "setSaePassword";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for SAE Requires HAL v1.2 or higher */
+                    SupplicantStatus status = iSupplicantStaNetworkV12.setSaePassword(saePassword);
+                    return checkStatusAndLogFailure(status, methodStr);
+                } else {
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean setSaePasswordId(String saePasswordId) {
+        synchronized (mLock) {
+            final String methodStr = "setSaePasswordId";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for SAE Requires HAL v1.2 or higher */
+                    SupplicantStatus status = iSupplicantStaNetworkV12
+                            .setSaePasswordId(saePasswordId);
+                    return checkStatusAndLogFailure(status, methodStr);
+                } else {
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getSsid() {
         synchronized (mLock) {
@@ -1925,6 +2194,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getBssid() {
         synchronized (mLock) {
@@ -1948,6 +2218,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getScanSsid() {
         synchronized (mLock) {
@@ -1971,6 +2242,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getKeyMgmt() {
         synchronized (mLock) {
@@ -1994,6 +2266,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getProto() {
         synchronized (mLock) {
@@ -2016,6 +2289,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getAuthAlg() {
         synchronized (mLock) {
@@ -2039,6 +2313,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getGroupCipher() {
         synchronized (mLock) {
@@ -2062,6 +2337,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getPairwiseCipher() {
         synchronized (mLock) {
@@ -2085,6 +2361,38 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean getGroupMgmtCipher() {
+        synchronized (mLock) {
+            final String methodStr = "getGroupMgmtCipher";
+            android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                    iSupplicantStaNetworkV12;
+
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    MutableBoolean statusOk = new MutableBoolean(false);
+                    mISupplicantStaNetwork.getGroupMgmtCipher((SupplicantStatus status,
+                            int groupMgmtCipherMaskValue) -> {
+                        statusOk.value = status.code == SupplicantStatusCode.SUCCESS;
+                        if (statusOk.value) {
+                            this.mGroupMgmtCipherMask = groupMgmtCipherMaskValue;
+                        }
+                        checkStatusAndLogFailure(status, methodStr);
+                    });
+                    return statusOk.value;
+                } else {
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getPskPassphrase() {
         synchronized (mLock) {
@@ -2108,6 +2416,38 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean getSaePassword() {
+        synchronized (mLock) {
+            final String methodStr = "getSaePassword";
+            android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                    iSupplicantStaNetworkV12;
+
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    MutableBoolean statusOk = new MutableBoolean(false);
+                    iSupplicantStaNetworkV12.getSaePassword((SupplicantStatus status,
+                            String saePassword) -> {
+                        statusOk.value = status.code == SupplicantStatusCode.SUCCESS;
+                        if (statusOk.value) {
+                            this.mSaePassword = saePassword;
+                        }
+                        checkStatusAndLogFailure(status, methodStr);
+                    });
+                    return statusOk.value;
+                } else {
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getPsk() {
         synchronized (mLock) {
@@ -2130,6 +2470,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getWepKey(int keyIdx) {
         synchronized (mLock) {
@@ -2153,6 +2494,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getWepTxKeyIdx() {
         synchronized (mLock) {
@@ -2176,6 +2518,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getRequirePmf() {
         synchronized (mLock) {
@@ -2199,6 +2542,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapMethod() {
         synchronized (mLock) {
@@ -2222,6 +2566,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapPhase2Method() {
         synchronized (mLock) {
@@ -2245,6 +2590,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapIdentity() {
         synchronized (mLock) {
@@ -2268,6 +2614,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapAnonymousIdentity() {
         synchronized (mLock) {
@@ -2330,6 +2677,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapCACert() {
         synchronized (mLock) {
@@ -2352,6 +2700,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapCAPath() {
         synchronized (mLock) {
@@ -2374,6 +2723,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapClientCert() {
         synchronized (mLock) {
@@ -2397,6 +2747,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapPrivateKeyId() {
         synchronized (mLock) {
@@ -2420,6 +2771,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapSubjectMatch() {
         synchronized (mLock) {
@@ -2443,6 +2795,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapAltSubjectMatch() {
         synchronized (mLock) {
@@ -2466,6 +2819,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapEngine() {
         synchronized (mLock) {
@@ -2489,6 +2843,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapEngineID() {
         synchronized (mLock) {
@@ -2511,6 +2866,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getEapDomainSuffixMatch() {
         synchronized (mLock) {
@@ -2534,6 +2890,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean getIdStr() {
         synchronized (mLock) {
@@ -2556,13 +2913,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean enable(boolean noConnect) {
         synchronized (mLock) {
             final String methodStr = "enable";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.enable(noConnect);
+                SupplicantStatus status = mISupplicantStaNetwork.enable(noConnect);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -2570,13 +2928,14 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean disable() {
         synchronized (mLock) {
             final String methodStr = "disable";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.disable();
+                SupplicantStatus status = mISupplicantStaNetwork.disable();
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -2595,7 +2954,7 @@ public class SupplicantStaNetworkHal {
             final String methodStr = "select";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                SupplicantStatus status =  mISupplicantStaNetwork.select();
+                SupplicantStatus status = mISupplicantStaNetwork.select();
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -2666,6 +3025,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     public boolean sendNetworkEapSimGsmAuthFailure() {
         synchronized (mLock) {
@@ -2680,6 +3040,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /**
      * Send UMTS auth response.
      *
@@ -2740,6 +3101,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /**
      * Send UMTS auts response.
      *
@@ -2766,6 +3128,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean sendNetworkEapSimUmtsAutsResponse(byte[/* 14 */] auts) {
         synchronized (mLock) {
@@ -2781,6 +3144,7 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     public boolean sendNetworkEapSimUmtsAuthFailure() {
         synchronized (mLock) {
@@ -2810,14 +3174,27 @@ public class SupplicantStaNetworkHal {
     }
 
     /**
+     * Method to mock out the V1_2 ISupplicantStaNetwork retrieval in unit tests.
+     *
+     * @return 1.2 ISupplicantStaNetwork object if the device is running the 1.2 supplicant hal
+     * service, null otherwise.
+     */
+    protected android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+            getSupplicantStaNetworkForV1_2Mockable() {
+        if (mISupplicantStaNetwork == null) return null;
+        return android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork.castFrom(
+                mISupplicantStaNetwork);
+    }
+
+    /**
      * Send eap identity response.
      *
-     * @param identityStr identity used for EAP-Identity
+     * @param identityStr          identity used for EAP-Identity
      * @param encryptedIdentityStr encrypted identity used for EAP-AKA/EAP-SIM
      * @return true if succeeds, false otherwise.
      */
     public boolean sendNetworkEapIdentityResponse(String identityStr,
-                                                  String encryptedIdentityStr) {
+            String encryptedIdentityStr) {
         synchronized (mLock) {
             try {
                 ArrayList<Byte> unencryptedIdentity =
@@ -2833,9 +3210,10 @@ public class SupplicantStaNetworkHal {
             }
         }
     }
+
     /** See ISupplicantStaNetwork.hal for documentation */
     private boolean sendNetworkEapIdentityResponse(ArrayList<Byte> unencryptedIdentity,
-                                                   ArrayList<Byte> encryptedIdentity) {
+            ArrayList<Byte> encryptedIdentity) {
         synchronized (mLock) {
             final String methodStr = "sendNetworkEapIdentityResponse";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;

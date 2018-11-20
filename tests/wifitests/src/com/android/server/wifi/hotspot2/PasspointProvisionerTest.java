@@ -18,10 +18,14 @@ package com.android.server.wifi.hotspot2;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -39,7 +43,12 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
+import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
+import android.net.wifi.hotspot2.omadm.PpsMoParser;
+import android.net.wifi.hotspot2.pps.Credential;
+import android.net.wifi.hotspot2.pps.HomeSp;
+import android.net.wifi.hotspot2.pps.UpdateParameter;
 import android.os.Build;
 import android.os.Handler;
 import android.os.RemoteException;
@@ -55,6 +64,7 @@ import com.android.server.wifi.hotspot2.soap.PostDevDataResponse;
 import com.android.server.wifi.hotspot2.soap.RedirectListener;
 import com.android.server.wifi.hotspot2.soap.SppConstants;
 import com.android.server.wifi.hotspot2.soap.SppResponseMessage;
+import com.android.server.wifi.hotspot2.soap.UpdateResponseMessage;
 import com.android.server.wifi.hotspot2.soap.command.BrowserUri;
 import com.android.server.wifi.hotspot2.soap.command.PpsMoData;
 import com.android.server.wifi.hotspot2.soap.command.SppCommand;
@@ -70,12 +80,17 @@ import org.mockito.MockitoSession;
 
 import java.net.URL;
 import java.security.KeyStore;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import javax.net.ssl.SSLContext;
 
 /**
- * Unit tests for {@link com.android.server.wifi.hotspot2.PasspointProvisioner}.
+ * Unit tests for {@link PasspointProvisioner}.
  */
 @SmallTest
 public class PasspointProvisionerTest {
@@ -86,6 +101,7 @@ public class PasspointProvisionerTest {
     private static final int STEP_WAIT_FOR_REDIRECT_RESPONSE = 3;
     private static final int STEP_WAIT_FOR_SECOND_SOAP_RESPONSE = 4;
     private static final int STEP_WAIT_FOR_THIRD_SOAP_RESPONSE = 5;
+    private static final int STEP_WAIT_FOR_TRUST_ROOT_CERTS = 6;
 
     private static final String TEST_DEV_ID = "12312341";
     private static final String TEST_MANUFACTURER = Build.MANUFACTURER;
@@ -141,13 +157,17 @@ public class PasspointProvisionerTest {
     @Mock PpsMoData mPpsMoData;
     @Mock RedirectListener mRedirectListener;
     @Mock PackageManager mPackageManager;
+    @Mock PasspointConfiguration mPasspointConfiguration;
+    @Mock X509Certificate mX509Certificate;
+    @Mock SoapSerializationEnvelope mSoapSerializationEnvelope;
 
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
         mTestUrl = new URL(TEST_REDIRECT_URL);
         mSession = ExtendedMockito.mockitoSession().mockStatic(
-                RedirectListener.class).startMocking();
+                RedirectListener.class).mockStatic(PpsMoParser.class).mockStatic(
+                UpdateResponseMessage.class).startMocking();
 
         when(RedirectListener.createInstance(mLooper.getLooper())).thenReturn(
                 mRedirectListener);
@@ -212,6 +232,25 @@ public class PasspointProvisionerTest {
         resolveInfo.activityInfo.applicationInfo.packageName = OSU_APP_PACKAGE;
         when(mPackageManager.resolveActivity(any(Intent.class),
                 eq(PackageManager.MATCH_DEFAULT_ONLY))).thenReturn(resolveInfo);
+
+        Map<String, byte[]> trustCertInfo = new HashMap<>();
+        trustCertInfo.put("https://testurl.com", "testData".getBytes());
+        when(mPasspointConfiguration.getTrustRootCertList()).thenReturn(trustCertInfo);
+        when(mPasspointConfiguration.getCredential()).thenReturn(new Credential());
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn("test.com");
+        when(mPasspointConfiguration.getHomeSp()).thenReturn(homeSp);
+
+        UpdateParameter updateParameter = new UpdateParameter();
+        updateParameter.setTrustRootCertUrl("https://testurl.com");
+        updateParameter.setTrustRootCertSha256Fingerprint("testData".getBytes());
+        when(mPasspointConfiguration.getSubscriptionUpdate()).thenReturn(updateParameter);
+        when(mOsuServerConnection.retrieveTrustRootCerts(anyMap())).thenReturn(true);
+        lenient().when(PpsMoParser.parseMoText(isNull())).thenReturn(mPasspointConfiguration);
+
+        when(mPasspointConfiguration.validateForR2()).thenReturn(true);
+        lenient().when(UpdateResponseMessage.serializeToSoapEnvelope(any(String.class),
+                any(Boolean.class))).thenReturn(mSoapSerializationEnvelope);
     }
 
     @After
@@ -257,7 +296,7 @@ public class PasspointProvisionerTest {
                         ProvisioningCallback.OSU_STATUS_AP_CONNECTED);
             } else if (step == STEP_SERVER_CONNECT) {
                 verify(mCallback).onProvisioningStatus(
-                        ProvisioningCallback.OSU_STATUS_SERVER_CONNECTED);
+                        ProvisioningCallback.OSU_STATUS_SERVER_CONNECTING);
             } else if (step == STEP_WAIT_FOR_REDIRECT_RESPONSE) {
                 // Server validation passed
                 mOsuServerCallbacks.onServerValidationStatus(mOsuServerCallbacks.getSessionId(),
@@ -266,8 +305,14 @@ public class PasspointProvisionerTest {
 
                 verify(mCallback).onProvisioningStatus(
                         ProvisioningCallback.OSU_STATUS_SERVER_VALIDATED);
+
+                // Server connection succeeded
+                mOsuServerCallbacks.onServerConnectionStatus(mOsuServerCallbacks.getSessionId(),
+                        true);
+                mLooper.dispatchAll();
+
                 verify(mCallback).onProvisioningStatus(
-                        ProvisioningCallback.OSU_STATUS_SERVICE_PROVIDER_VERIFIED);
+                        ProvisioningCallback.OSU_STATUS_SERVER_CONNECTED);
                 verify(mCallback).onProvisioningStatus(
                         ProvisioningCallback.OSU_STATUS_INIT_SOAP_EXCHANGE);
 
@@ -302,6 +347,9 @@ public class PasspointProvisionerTest {
                         mSppResponseMessage);
                 mLooper.dispatchAll();
             } else if (step == STEP_WAIT_FOR_THIRD_SOAP_RESPONSE) {
+                ExtendedMockito.verify(
+                        () -> UpdateResponseMessage.serializeToSoapEnvelope(eq(TEST_SESSION_ID),
+                                eq(false)));
                 verify(mCallback).onProvisioningStatus(
                         ProvisioningCallback.OSU_STATUS_THIRD_SOAP_EXCHANGE);
 
@@ -309,6 +357,20 @@ public class PasspointProvisionerTest {
                 mOsuServerCallbacks.onReceivedSoapMessage(mOsuServerCallbacks.getSessionId(),
                         mExchangeCompleteMessage);
                 mLooper.dispatchAll();
+            } else if (step == STEP_WAIT_FOR_TRUST_ROOT_CERTS) {
+                verify(mCallback).onProvisioningStatus(
+                        ProvisioningCallback.OSU_STATUS_RETRIEVING_TRUST_ROOT_CERTS);
+
+                Map<Integer, List<X509Certificate>> trustRootCertificates = new HashMap<>();
+                List<X509Certificate> certificates = new ArrayList<>();
+                certificates.add(mX509Certificate);
+                trustRootCertificates.put(OsuServerConnection.TRUST_CERT_TYPE_AAA, certificates);
+
+                // Received trust root CA certificates
+                mOsuServerCallbacks.onReceivedTrustRootCertificates(
+                        mOsuServerCallbacks.getSessionId(), trustRootCertificates);
+                mLooper.dispatchAll();
+                verify(mCallback).onProvisioningComplete();
             }
         }
     }
@@ -373,9 +435,10 @@ public class PasspointProvisionerTest {
         verify(mCallback).onProvisioningStatus(ProvisioningCallback.OSU_STATUS_AP_CONNECTING);
         // Connection to OSU AP fails
         mOsuNetworkCallbacks.onDisconnected();
+
         // Move to failed state
         verify(mCallback).onProvisioningFailure(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
-        // Failure case, no more runnables posted
+        // Failure case, no more runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -388,6 +451,7 @@ public class PasspointProvisionerTest {
 
         // Disconnect received
         mOsuNetworkCallbacks.onDisconnected();
+
         // Move to failed state
         verify(mCallback).onProvisioningFailure(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
         // No more callbacks, Osu server validation not initiated
@@ -403,6 +467,7 @@ public class PasspointProvisionerTest {
 
         // Wifi disabled notification
         mOsuNetworkCallbacks.onWifiDisabled();
+
         // Wifi Disable is processed first and move to failed state
         verify(mCallback).onProvisioningFailure(ProvisioningCallback.OSU_FAILURE_AP_CONNECTION);
         // OSU server connection event is not handled
@@ -421,7 +486,7 @@ public class PasspointProvisionerTest {
         // Attempting to connect to OSU server fails due to invalid server URL, move to failed state
         verify(mCallback).onProvisioningFailure(
                 ProvisioningCallback.OSU_FAILURE_SERVER_URL_INVALID);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -436,7 +501,7 @@ public class PasspointProvisionerTest {
 
         // Connection to OSU Server fails, move to failed state
         verify(mCallback).onProvisioningFailure(ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -454,7 +519,7 @@ public class PasspointProvisionerTest {
 
         // Server validation failure, move to failed state
         verify(mCallback).onProvisioningFailure(ProvisioningCallback.OSU_FAILURE_SERVER_VALIDATION);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -471,10 +536,11 @@ public class PasspointProvisionerTest {
         // Runnable posted by server callback
         assertTrue(mHandler.hasMessagesOrCallbacks());
         mLooper.dispatchAll();
+
         // Server validation failure, move to failed state
         verify(mCallback, never()).onProvisioningFailure(
                 ProvisioningCallback.OSU_FAILURE_SERVER_VALIDATION);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -491,10 +557,11 @@ public class PasspointProvisionerTest {
         // Runnable posted by server callback
         assertTrue(mHandler.hasMessagesOrCallbacks());
         mLooper.dispatchAll();
+
         // Ignore the validation complete event because of different session id.
         verify(mCallback, never()).onProvisioningStatus(
                 ProvisioningCallback.OSU_STATUS_SERVER_VALIDATED);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -515,11 +582,10 @@ public class PasspointProvisionerTest {
         // OSU server validation success posts another runnable to validate the provider
         mLooper.dispatchAll();
 
-        verify(mCallback).onProvisioningStatus(ProvisioningCallback.OSU_STATUS_SERVER_VALIDATED);
         // Provider validation failure is processed next, move to failed state
         verify(mCallback).onProvisioningFailure(
                 ProvisioningCallback.OSU_FAILURE_SERVICE_PROVIDER_VERIFICATION);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -538,11 +604,16 @@ public class PasspointProvisionerTest {
         mLooper.dispatchAll();
 
         verify(mCallback).onProvisioningStatus(ProvisioningCallback.OSU_STATUS_SERVER_VALIDATED);
+
+        // Server connection passed
+        mOsuServerCallbacks.onServerConnectionStatus(mOsuServerCallbacks.getSessionId(), true);
+        mLooper.dispatchAll();
+
         verify(mCallback).onProvisioningStatus(
-                ProvisioningCallback.OSU_STATUS_SERVICE_PROVIDER_VERIFIED);
+                ProvisioningCallback.OSU_STATUS_SERVER_CONNECTED);
         verify(mCallback).onProvisioningFailure(
                 ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -562,8 +633,13 @@ public class PasspointProvisionerTest {
         mLooper.dispatchAll();
 
         verify(mCallback).onProvisioningStatus(ProvisioningCallback.OSU_STATUS_SERVER_VALIDATED);
+
+        // Server connection passed
+        mOsuServerCallbacks.onServerConnectionStatus(mOsuServerCallbacks.getSessionId(), true);
+        mLooper.dispatchAll();
+
         verify(mCallback).onProvisioningStatus(
-                ProvisioningCallback.OSU_STATUS_SERVICE_PROVIDER_VERIFIED);
+                ProvisioningCallback.OSU_STATUS_SERVER_CONNECTED);
         verify(mCallback).onProvisioningStatus(ProvisioningCallback.OSU_STATUS_INIT_SOAP_EXCHANGE);
 
         // Received soapMessageResponse
@@ -573,7 +649,7 @@ public class PasspointProvisionerTest {
 
         verify(mCallback).onProvisioningFailure(
                 ProvisioningCallback.OSU_FAILURE_NO_OSU_ACTIVITY_FOUND);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -592,7 +668,7 @@ public class PasspointProvisionerTest {
         verify(mRedirectListener, atLeastOnce()).stopServer();
         verify(mCallback).onProvisioningFailure(
                 ProvisioningCallback.OSU_FAILURE_TIMED_OUT_REDIRECT_LISTENER);
-        // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 
@@ -646,14 +722,92 @@ public class PasspointProvisionerTest {
     }
 
     /**
+     * Verifies that the {@link UpdateResponseMessage#serializeToSoapEnvelope(String, boolean)} is
+     * invoked with right arguments when a PPS-MO xml received from server is not valid in terms of
+     * schema of PPS MO.
+     */
+    @Test
+    public void verifyHandlingInvalidPpsMoForSoapResponse() throws RemoteException {
+        when(mPasspointConfiguration.validateForR2()).thenReturn(false);
+        stopAfterStep(STEP_WAIT_FOR_SECOND_SOAP_RESPONSE);
+
+        ExtendedMockito.verify(
+                () -> UpdateResponseMessage.serializeToSoapEnvelope(eq(TEST_SESSION_ID), eq(true)));
+    }
+
+    /**
+     * Verifies that the right provisioning callbacks are invoked when failing to call {@link
+     * OsuServerConnection#retrieveTrustRootCerts(Map)}.
+     */
+    @Test
+    public void verifyHandlingErrorForCallingRetrieveTrustRootCerts()
+            throws RemoteException {
+        when(mOsuServerConnection.retrieveTrustRootCerts(anyMap())).thenReturn(false);
+        stopAfterStep(STEP_WAIT_FOR_THIRD_SOAP_RESPONSE);
+
+        verify(mCallback).onProvisioningFailure(
+                ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION);
+    }
+
+    /**
+     * Verifies that the right provisioning callbacks are invoked when a new {@link
+     * PasspointConfiguration} is failed to add.
+     */
+    @Test
+    public void verifyHandlingErrorForAddingPasspointConfiguration() throws RemoteException {
+        doThrow(IllegalArgumentException.class).when(
+                mWifiManager).addOrUpdatePasspointConfiguration(any(PasspointConfiguration.class));
+        stopAfterStep(STEP_WAIT_FOR_THIRD_SOAP_RESPONSE);
+        verify(mCallback).onProvisioningStatus(
+                ProvisioningCallback.OSU_STATUS_RETRIEVING_TRUST_ROOT_CERTS);
+
+        Map<Integer, List<X509Certificate>> trustRootCertificates = new HashMap<>();
+        List<X509Certificate> certificates = new ArrayList<>();
+        certificates.add(mX509Certificate);
+        trustRootCertificates.put(OsuServerConnection.TRUST_CERT_TYPE_AAA, certificates);
+
+        // Received trust root CA certificates
+        mOsuServerCallbacks.onReceivedTrustRootCertificates(
+                mOsuServerCallbacks.getSessionId(), trustRootCertificates);
+        mLooper.dispatchAll();
+
+        verify(mCallback).onProvisioningFailure(
+                ProvisioningCallback.OSU_FAILURE_ADD_PASSPOINT_CONFIGURATION);
+    }
+
+    /**
+     * Verifies that the right provisioning callbacks are invoked when it is failed to retrieve
+     * trust root certificates from the URLs provided.
+     */
+    @Test
+    public void verifyHandlingEmptyTrustRootCertificateRetrieved() throws RemoteException {
+        doThrow(IllegalArgumentException.class).when(
+                mWifiManager).addOrUpdatePasspointConfiguration(any(PasspointConfiguration.class));
+        stopAfterStep(STEP_WAIT_FOR_THIRD_SOAP_RESPONSE);
+        verify(mCallback).onProvisioningStatus(
+                ProvisioningCallback.OSU_STATUS_RETRIEVING_TRUST_ROOT_CERTS);
+
+        // Empty trust root certificates.
+        Map<Integer, List<X509Certificate>> trustRootCertificates = new HashMap<>();
+
+        // Received trust root CA certificates
+        mOsuServerCallbacks.onReceivedTrustRootCertificates(
+                mOsuServerCallbacks.getSessionId(), trustRootCertificates);
+        mLooper.dispatchAll();
+
+        verify(mCallback).onProvisioningFailure(
+                ProvisioningCallback.OSU_FAILURE_RETRIEVE_TRUST_ROOT_CERTIFICATES);
+    }
+
+    /**
      * Verifies that the right provisioning callbacks are invoked as the provisioner progresses
      * to the end as successful case.
      */
     @Test
     public void verifyProvisioningFlowForSuccessfulCase() throws RemoteException {
-        stopAfterStep(STEP_WAIT_FOR_THIRD_SOAP_RESPONSE);
+        stopAfterStep(STEP_WAIT_FOR_TRUST_ROOT_CERTS);
 
-         // No further runnables posted
+        // No further runnable posted
         verifyNoMoreInteractions(mCallback);
     }
 }

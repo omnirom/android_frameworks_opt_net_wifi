@@ -51,6 +51,7 @@ import java.nio.charset.CharsetDecoder;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -2308,7 +2309,7 @@ public class WifiNative {
 
         @Override
         public int hashCode() {
-            return (ssid == null ? 0 : ssid.hashCode());
+            return Objects.hash(ssid);
         }
     }
 
@@ -2339,6 +2340,7 @@ public class WifiNative {
         public String ssid;
         public byte flags;
         public byte auth_bit_field;
+        public int[] frequencies;
 
         @Override
         public boolean equals(Object otherObj) {
@@ -2349,14 +2351,13 @@ public class WifiNative {
             }
             PnoNetwork other = (PnoNetwork) otherObj;
             return ((Objects.equals(ssid, other.ssid)) && (flags == other.flags)
-                    && (auth_bit_field == other.auth_bit_field));
+                    && (auth_bit_field == other.auth_bit_field))
+                    && Arrays.equals(frequencies, other.frequencies);
         }
 
         @Override
         public int hashCode() {
-            int result = (ssid == null ? 0 : ssid.hashCode());
-            result ^= ((int) flags * 31) + ((int) auth_bit_field << 8);
-            return result;
+            return Objects.hash(ssid, flags, auth_bit_field, frequencies);
         }
     }
 
@@ -2480,7 +2481,8 @@ public class WifiNative {
      * @return bitmask defined by WifiManager.WIFI_FEATURE_*
      */
     public int getSupportedFeatureSet(@NonNull String ifaceName) {
-        return mWifiVendorHal.getSupportedFeatureSet(ifaceName);
+        return mSupplicantStaIfaceHal.getAdvancedKeyMgmtCapabilities(ifaceName)
+                | mWifiVendorHal.getSupportedFeatureSet(ifaceName);
     }
 
     /**
