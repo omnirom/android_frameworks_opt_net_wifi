@@ -387,6 +387,9 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiEnabledSuccess() throws Exception {
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
@@ -398,6 +401,10 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiEnabledNoToggle() throws Exception {
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        // Set false because setWifiEnabled() avoids being called in checkAndStartWifi().
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(false);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
         verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
@@ -430,6 +437,9 @@ public class WifiServiceImplTest {
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         doThrow(new SecurityException()).when(mAppOpsManager)
                 .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         try {
             mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true);
@@ -449,7 +459,9 @@ public class WifiServiceImplTest {
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         doReturn(AppOpsManager.MODE_IGNORED).when(mAppOpsManager)
                 .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
-
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true);
         verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
@@ -461,6 +473,9 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiEnabledFromNetworkSettingsHolderWhenInAirplaneMode() throws Exception {
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(true);
         when(mContext.checkPermission(
@@ -476,6 +491,9 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiEnabledFromAppFailsWhenInAirplaneMode() throws Exception {
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(true);
         when(mContext.checkPermission(
@@ -546,6 +564,9 @@ public class WifiServiceImplTest {
         // Set PermissionReviewRequired to true explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(true);
         mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mContext.checkCallingPermission(
@@ -566,6 +587,9 @@ public class WifiServiceImplTest {
         // Set PermissionReviewRequired to true explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(true);
         mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mContext.checkCallingPermission(
@@ -597,6 +621,9 @@ public class WifiServiceImplTest {
         // Set PermissionReviewRequired to false explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(false);
         mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
 
@@ -643,6 +670,9 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiDisabledSuccess() throws Exception {
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
@@ -654,6 +684,9 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiDisabledNoToggle() throws Exception {
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(false);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
         verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
@@ -684,6 +717,9 @@ public class WifiServiceImplTest {
         // Set PermissionReviewRequired to true explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(true);
         mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mWifiStateMachine.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
@@ -705,6 +741,9 @@ public class WifiServiceImplTest {
         // Set PermissionReviewRequired to true explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(true);
         mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mWifiStateMachine.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
@@ -736,6 +775,9 @@ public class WifiServiceImplTest {
         // Set PermissionReviewRequired to false explicitly
         when(mResources.getBoolean(anyInt())).thenReturn(false);
         mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
+        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mWifiServiceImpl.checkAndStartWifi();
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         when(mWifiStateMachine.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
