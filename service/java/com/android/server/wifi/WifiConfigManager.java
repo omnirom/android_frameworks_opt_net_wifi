@@ -54,6 +54,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
+import com.android.server.wifi.util.ScanResultUtil;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -2023,6 +2024,13 @@ public class WifiConfigManager {
         WifiConfiguration config = null;
         try {
             config = mConfiguredNetworks.getByScanResultForCurrentUser(scanResult);
+            if (config == null && ScanResultUtil.isScanResultForSaeNetwork(scanResult)
+                && ScanResultUtil.isScanResultForPskNetwork(scanResult)) {
+                ScanResultMatchInfo matchInfo = new ScanResultMatchInfo();
+                matchInfo.networkSsid = ScanResultUtil.createQuotedSSID(scanResult.SSID);
+                matchInfo.networkType = ScanResultMatchInfo.NETWORK_TYPE_PSK;
+                config = mConfiguredNetworks.getByScanResultForCurrentUser(matchInfo);
+            }
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Failed to lookup network from config map", e);
         }

@@ -128,6 +128,27 @@ public class WifiConfigurationUtil {
     }
 
     /**
+     * Helper method to check if the provided |config| corresponds to a SAE network or not.
+     */
+    public static boolean isConfigForSaeNetwork(WifiConfiguration config) {
+        return (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE));
+    }
+
+    /**
+     * Helper method to check if the provided |config| corresponds to a OWE network or not.
+     */
+    public static boolean isConfigForOweNetwork(WifiConfiguration config) {
+        return (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.OWE));
+    }
+
+    /**
+     * Helper method to check if the provided |config| corresponds to a DPP network or not.
+     */
+    public static boolean isConfigForDppNetwork(WifiConfiguration config) {
+        return (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.DPP));
+    }
+
+    /**
      * Helper method to check if the provided |config| corresponds to an open network or not.
      */
     public static boolean isConfigForOpenNetwork(WifiConfiguration config) {

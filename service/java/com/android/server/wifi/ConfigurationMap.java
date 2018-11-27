@@ -101,6 +101,15 @@ public class ConfigurationMap {
     }
 
     /**
+     * Retrieves the |WifiConfiguration| object matching the provided |scanResultMatchInfo| from the internal
+     * map.
+     * Essentially checks if network config and scan result have the same SSID and encryption type.
+     */
+    public WifiConfiguration getByScanResultForCurrentUser(ScanResultMatchInfo matchInfo) {
+        return mScanResultMatchInfoMapForCurrentUser.get(matchInfo);
+    }
+
+    /**
      * Retrieves the |WifiConfiguration| object matching the provided |scanResult| from the internal
      * map.
      * Essentially checks if network config and scan result have the same SSID and encryption type.
