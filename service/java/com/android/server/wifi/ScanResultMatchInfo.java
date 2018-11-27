@@ -32,6 +32,9 @@ public class ScanResultMatchInfo {
     public static final int NETWORK_TYPE_EAP = 3;
     public static final int NETWORK_TYPE_FILS_SHA256 = 10;
     public static final int NETWORK_TYPE_FILS_SHA384 = 11;
+    public static final int NETWORK_TYPE_SAE = 12;
+    public static final int NETWORK_TYPE_OWE = 13;
+    public static final int NETWORK_TYPE_DPP = 14;
 
     /**
      * SSID of the network.
@@ -48,7 +51,13 @@ public class ScanResultMatchInfo {
     public static ScanResultMatchInfo fromWifiConfiguration(WifiConfiguration config) {
         ScanResultMatchInfo info = new ScanResultMatchInfo();
         info.networkSsid = config.SSID;
-        if (WifiConfigurationUtil.isConfigForPskNetwork(config)) {
+        if (WifiConfigurationUtil.isConfigForSaeNetwork(config)) {
+            info.networkType = NETWORK_TYPE_SAE;
+        } else if (WifiConfigurationUtil.isConfigForOweNetwork(config)) {
+            info.networkType = NETWORK_TYPE_OWE;
+        } else if (WifiConfigurationUtil.isConfigForDppNetwork(config)) {
+            info.networkType = NETWORK_TYPE_DPP;
+        } else if (WifiConfigurationUtil.isConfigForPskNetwork(config)) {
             info.networkType = NETWORK_TYPE_PSK;
         } else if (WifiConfigurationUtil.isConfigForEapNetwork(config)) {
             info.networkType = NETWORK_TYPE_EAP;
@@ -76,7 +85,13 @@ public class ScanResultMatchInfo {
         // However, according to our public documentation ths {@link WifiConfiguration#SSID} can
         // either have a hex string or quoted ASCII string SSID.
         info.networkSsid = ScanResultUtil.createQuotedSSID(scanResult.SSID);
-        if (ScanResultUtil.isScanResultForPskNetwork(scanResult)) {
+        if (ScanResultUtil.isScanResultForSaeNetwork(scanResult)) {
+            info.networkType = NETWORK_TYPE_SAE;
+        } else if (ScanResultUtil.isScanResultForOweNetwork(scanResult)) {
+            info.networkType = NETWORK_TYPE_OWE;
+        } else if (ScanResultUtil.isScanResultForDppNetwork(scanResult)) {
+            info.networkType = NETWORK_TYPE_DPP;
+        } else if (ScanResultUtil.isScanResultForPskNetwork(scanResult)) {
             info.networkType = NETWORK_TYPE_PSK;
         } else if (ScanResultUtil.isScanResultForEapNetwork(scanResult)) {
             info.networkType = NETWORK_TYPE_EAP;

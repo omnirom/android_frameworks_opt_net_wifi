@@ -717,6 +717,12 @@ public class WifiNative {
      */
     private boolean removeStaIface(@NonNull Iface iface) {
         synchronized (mLock) {
+            // For dynamically added interface(s), stop processing scan queries/commands
+            // before deleting interface. This internally triggers stopPnoScan() which
+            // otherwise won't be served on deleted interface.
+            if (!mWificondControl.unsubscribeScan(iface.name))
+                Log.i(TAG, "Unsubscribe scan failed.");
+
             if (mWifiVendorHal.isVendorHalSupported()) {
                 return mWifiVendorHal.removeStaIface(iface.name);
             } else {
