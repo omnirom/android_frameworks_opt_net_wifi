@@ -16,7 +16,6 @@
 package com.android.server.wifi;
 
 import android.content.Context;
-import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetwork;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
@@ -827,8 +826,6 @@ public class SupplicantStaNetworkHal {
                 case WifiConfiguration.KeyMgmt.FILS_SHA256:
                 case WifiConfiguration.KeyMgmt.FILS_SHA384:
                 case WifiConfiguration.KeyMgmt.DPP:
-                case WifiConfiguration.KeyMgmt.OWE:
-                case WifiConfiguration.KeyMgmt.SAE:
                     break;
                 default:
                     throw new IllegalArgumentException(
@@ -994,7 +991,7 @@ public class SupplicantStaNetworkHal {
         for (int bit = groupCipherMask.nextSetBit(0); bit != -1; bit =
                 groupCipherMask.nextSetBit(bit + 1)) {
             switch (bit) {
-                case WifiConfiguration.GroupCipher.GCMP:
+                case WifiConfiguration.GroupCipher.GCMP_256:
                     mask |= ISupplicantVendorStaNetwork.VendorGroupCipherMask.GCMP_256;
                     break;
                 default:
@@ -1009,10 +1006,10 @@ public class SupplicantStaNetworkHal {
         for (int bit = groupMgmtCipherMask.nextSetBit(0); bit != -1; bit =
                 groupMgmtCipherMask.nextSetBit(bit + 1)) {
             switch (bit) {
-                case WifiConfiguration.GroupMgmtCipher.CMAC:
+                case WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256:
                     mask |= ISupplicantVendorStaNetwork.VendorGroupMgmtCipherMask.BIP_CMAC_256;
                     break;
-                case WifiConfiguration.GroupMgmtCipher.GMAC:
+                case WifiConfiguration.GroupMgmtCipher.BIP_GMAC_256:
                     mask |= ISupplicantVendorStaNetwork.VendorGroupMgmtCipherMask.BIP_GMAC_256;
                     break;
                 default:
@@ -1053,7 +1050,7 @@ public class SupplicantStaNetworkHal {
         for (int bit = pairwiseCipherMask.nextSetBit(0); bit != -1; bit =
                 pairwiseCipherMask.nextSetBit(bit + 1)) {
             switch (bit) {
-                case WifiConfiguration.PairwiseCipher.GCMP:
+                case WifiConfiguration.PairwiseCipher.GCMP_256:
                     mask |= ISupplicantVendorStaNetwork.VendorPairwiseCipherMask.GCMP_256;
                     break;
                 default:
@@ -1215,7 +1212,7 @@ public class SupplicantStaNetworkHal {
                 WifiConfiguration.GroupCipher.GCMP_256);
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantVendorStaNetwork.VendorGroupCipherMask.GCMP_256, bitset,
-                WifiConfiguration.GroupCipher.GCMP);
+                WifiConfiguration.GroupCipher.GCMP_256);
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantStaNetwork.GroupCipherMask.GTK_NOT_USED, bitset,
                 WifiConfiguration.GroupCipher.GTK_NOT_USED);
@@ -1243,21 +1240,6 @@ public class SupplicantStaNetworkHal {
         }
         return bitset;
     }
-
-    private static BitSet supplicantToWifiConfigurationGroupMgmtCipherMask(int mask) {
-        BitSet bitset = new BitSet();
-        mask = supplicantMaskValueToWifiConfigurationBitSet(
-                mask, ISupplicantVendorStaNetwork.VendorGroupMgmtCipherMask.BIP_GMAC_256, bitset,
-                WifiConfiguration.GroupMgmtCipher.GMAC);
-        mask = supplicantMaskValueToWifiConfigurationBitSet(
-                mask, ISupplicantVendorStaNetwork.VendorGroupMgmtCipherMask.BIP_CMAC_256, bitset,
-                WifiConfiguration.GroupMgmtCipher.CMAC);
-        if (mask != 0) {
-            throw new IllegalArgumentException(
-                    "invalid group mgmt cipher mask from supplicant: " + mask);
-        }
-        return bitset;
-    };
 
     private static BitSet supplicantToWifiConfigurationPairwiseCipherMask(int mask) {
         BitSet bitset = new BitSet();
@@ -1579,20 +1561,6 @@ public class SupplicantStaNetworkHal {
             if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
             try {
                 SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorPairwiseCipher(pairwiseCipherMask);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-    /** See ISupplicantVendorStaNetwork.hal for documentation */
-    private boolean setGroupMgmtCipher(int groupMgmtCipherMask) {
-        synchronized (mLock) {
-            final String methodStr = "setGroupMgmtCipher";
-            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
-            try {
-                SupplicantStatus status =  mISupplicantVendorStaNetwork.setGroupMgmtCipher(groupMgmtCipherMask);
                 return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
