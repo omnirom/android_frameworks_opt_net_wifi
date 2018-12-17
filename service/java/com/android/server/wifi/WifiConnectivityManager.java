@@ -579,7 +579,8 @@ public class WifiConnectivityManager {
             CarrierNetworkConfig carrierNetworkConfig, WifiMetrics wifiMetrics, Looper looper,
             Clock clock, LocalLog localLog, SavedNetworkEvaluator savedNetworkEvaluator,
             ScoredNetworkEvaluator scoredNetworkEvaluator,
-            PasspointNetworkEvaluator passpointNetworkEvaluator) {
+            PasspointNetworkEvaluator passpointNetworkEvaluator,
+            NetworkSuggestionEvaluator networkSuggestionEvaluator) {
         mStateMachine = stateMachine;
         mWifiInjector = injector;
         mConfigManager = configManager;
@@ -637,6 +638,7 @@ public class WifiConnectivityManager {
 
         // Register the network evaluators, in order
         mNetworkSelector.registerNetworkEvaluator(savedNetworkEvaluator);
+        mNetworkSelector.registerNetworkEvaluator(networkSuggestionEvaluator);
         if (hs2Enabled) {
             mNetworkSelector.registerNetworkEvaluator(passpointNetworkEvaluator);
         }

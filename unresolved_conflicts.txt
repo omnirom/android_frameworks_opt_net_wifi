@@ -1,0 +1,15 @@
+# List of unresolved conflicts
+# Generated with `git ls-files --unmerged`
+
+100644 7c29072b7f62d432446b51363e6465c6b2fe8ce7 1	service/java/com/android/server/wifi/ClientModeImpl.java
+100644 868dbec51db0fabea4d2a0af384a320bb0b77aae 2	service/java/com/android/server/wifi/ClientModeImpl.java
+100644 20db7fdfdde0dbfbec5d097883c801782c04a421 3	service/java/com/android/server/wifi/ClientModeImpl.java
+100644 86e790fb3ddf64bd5cf37ac29ba8b5ca964a88ad 1	service/java/com/android/server/wifi/WifiInjector.java
+100644 b3254f499f5aa5b2397a4f85d0a6cc9a31ac978f 2	service/java/com/android/server/wifi/WifiInjector.java
+100644 effe4e8eaa43e8246c0afbffba649d87fb75e333 3	service/java/com/android/server/wifi/WifiInjector.java
+100644 3d28df29836d17b128a0e0ede106490fd6964864 1	service/java/com/android/server/wifi/WifiServiceImpl.java
+100644 95e85159322a086c7af02efc4b469d943c0712e2 2	service/java/com/android/server/wifi/WifiServiceImpl.java
+100644 477b24b4e0189c4f82a2ec24f6829837da5b0455 3	service/java/com/android/server/wifi/WifiServiceImpl.java
+100644 e484bf461da690c1baaff298d83facde847b3530 1	service/java/com/android/server/wifi/WifiTrafficPoller.java
+100644 bd89dd67947e29d8440fceeeae589c238ec0d847 2	service/java/com/android/server/wifi/WifiTrafficPoller.java
+100644 90bdb131131849a3eb368a9b33d16bbcb7132480 3	service/java/com/android/server/wifi/WifiTrafficPoller.java
