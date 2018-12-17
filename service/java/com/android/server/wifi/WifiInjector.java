@@ -202,14 +202,8 @@ public class WifiInjector {
         mWifiP2pNative = new WifiP2pNative(mSupplicantP2pIfaceHal, mHalDeviceManager);
 
         // Now get instances of all the objects that depend on the HandlerThreads
-<<<<<<< HEAD
-        mTrafficPoller = new WifiTrafficPoller(mContext, mWifiServiceHandlerThread.getLooper(),
-                mWifiNative);
-        mCountryCode = new WifiCountryCode(mContext, mWifiNative,
-=======
         mWifiTrafficPoller = new WifiTrafficPoller(mWifiServiceHandlerThread.getLooper());
-        mCountryCode = new WifiCountryCode(mWifiNative,
->>>>>>> f3b7120558841c8d9d509aa42aa2981d1d34688f
+        mCountryCode = new WifiCountryCode(mContext, mWifiNative,
                 SystemProperties.get(BOOT_DEFAULT_WIFI_COUNTRY_CODE),
                 mContext.getResources()
                         .getBoolean(R.bool.config_wifi_revert_country_code_on_cellular_loss));
@@ -299,14 +293,10 @@ public class WifiInjector {
                 WakeupEvaluator.fromContext(mContext), wakeupOnboarding, mWifiConfigManager,
                 mWifiConfigStore, mWifiMetrics.getWakeupMetrics(), this, mFrameworkFacade,
                 mClock);
-<<<<<<< HEAD
         if (mClientModeImpl != null)
             mClientModeImpl.setWifiDiagnostics(mWifiDiagnostics);
-        mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService());
-=======
         mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService(),
                 mClientModeImpl);
->>>>>>> f3b7120558841c8d9d509aa42aa2981d1d34688f
         mWifiController = new WifiController(mContext, mClientModeImpl, clientModeImplLooper,
                 mSettingsStore, mWifiServiceHandlerThread.getLooper(), mFrameworkFacade,
                 mActiveModeWarden);

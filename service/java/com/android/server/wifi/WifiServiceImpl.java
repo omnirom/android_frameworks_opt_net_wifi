@@ -507,7 +507,7 @@ public class WifiServiceImpl extends AbstractWifiService {
         mCountryCode = mWifiInjector.getWifiCountryCode();
         mClientModeImpl = mWifiInjector.getClientModeImpl();
         mActiveModeWarden = mWifiInjector.getActiveModeWarden();
-        mClientModeImpl.setTrafficPoller(mTrafficPoller);
+        mClientModeImpl.setTrafficPoller(mWifiTrafficPoller);
         mClientModeImpl.enableRssiPolling(true);
         mScanRequestProxy = mWifiInjector.getScanRequestProxy();
         mSettingsStore = mWifiInjector.getWifiSettingsStore();
@@ -900,27 +900,6 @@ public class WifiServiceImpl extends AbstractWifiService {
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
-<<<<<<< HEAD
-
-
-        if (mWirelessConsentRequired) {
-            final int wiFiEnabledState = getWifiEnabledState();
-            if (enable) {
-                if (wiFiEnabledState == WifiManager.WIFI_STATE_DISABLING
-                        || wiFiEnabledState == WifiManager.WIFI_STATE_DISABLED) {
-                    if (startConsentUi(packageName, Binder.getCallingUid(),
-                            WifiManager.ACTION_REQUEST_ENABLE)) {
-                        return true;
-                    }
-                }
-            } else if (wiFiEnabledState == WifiManager.WIFI_STATE_ENABLING
-                    || wiFiEnabledState == WifiManager.WIFI_STATE_ENABLED) {
-                if (startConsentUi(packageName, Binder.getCallingUid(),
-                        WifiManager.ACTION_REQUEST_DISABLE)) {
-                    return true;
-                }
-            }
-        }
 
         if (enable && mWifiApConfigStore.getDualSapStatus())
             stopSoftAp();
@@ -930,8 +909,6 @@ public class WifiServiceImpl extends AbstractWifiService {
             return false;
         }
 
-=======
->>>>>>> f3b7120558841c8d9d509aa42aa2981d1d34688f
         mWifiController.sendMessage(CMD_WIFI_TOGGLED);
         return true;
     }

@@ -3105,11 +3105,11 @@ public class ClientModeImpl extends StateMachine {
                 mInterfaceName, WifiNative.BLUETOOTH_COEXISTENCE_MODE_SENSE);
     }
 
-<<<<<<< HEAD
     public String getCapabilities(String capaType) {
 
         return mWifiNative.getCapabilities(mInterfaceName, capaType);
-=======
+    }
+
     /**
      * Set power save mode
      *
@@ -3128,7 +3128,6 @@ public class ClientModeImpl extends StateMachine {
             return false;
         }
         return true;
->>>>>>> f3b7120558841c8d9d509aa42aa2981d1d34688f
     }
 
     @VisibleForTesting
@@ -3758,104 +3757,6 @@ public class ClientModeImpl extends StateMachine {
         }
     }
 
-<<<<<<< HEAD
-    String smToString(Message message) {
-        return smToString(message.what);
-    }
-
-    String smToString(int what) {
-        String s = sSmToString.get(what);
-        if (s != null) {
-            return s;
-        }
-        switch (what) {
-            case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED:
-                s = "AsyncChannel.CMD_CHANNEL_HALF_CONNECTED";
-                break;
-            case AsyncChannel.CMD_CHANNEL_DISCONNECTED:
-                s = "AsyncChannel.CMD_CHANNEL_DISCONNECTED";
-                break;
-            case WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST:
-                s = "WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST";
-                break;
-            case WifiManager.DISABLE_NETWORK:
-                s = "WifiManager.DISABLE_NETWORK";
-                break;
-            case WifiManager.CONNECT_NETWORK:
-                s = "CONNECT_NETWORK";
-                break;
-            case WifiManager.SAVE_NETWORK:
-                s = "SAVE_NETWORK";
-                break;
-            case WifiManager.FORGET_NETWORK:
-                s = "FORGET_NETWORK";
-                break;
-            case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
-                s = "SUPPLICANT_STATE_CHANGE_EVENT";
-                break;
-            case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
-                s = "AUTHENTICATION_FAILURE_EVENT";
-                break;
-            case WifiMonitor.SUP_REQUEST_IDENTITY:
-                s = "SUP_REQUEST_IDENTITY";
-                break;
-            case WifiMonitor.NETWORK_CONNECTION_EVENT:
-                s = "NETWORK_CONNECTION_EVENT";
-                break;
-            case WifiMonitor.FILS_NETWORK_CONNECTION_EVENT:
-                s = "FILS_NETWORK_CONNECTION_EVENT";
-                break;
-            case WifiMonitor.NETWORK_DISCONNECTION_EVENT:
-                s = "NETWORK_DISCONNECTION_EVENT";
-                break;
-            case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
-                s = "ASSOCIATION_REJECTION_EVENT";
-                break;
-            case WifiMonitor.ANQP_DONE_EVENT:
-                s = "WifiMonitor.ANQP_DONE_EVENT";
-                break;
-            case WifiMonitor.RX_HS20_ANQP_ICON_EVENT:
-                s = "WifiMonitor.RX_HS20_ANQP_ICON_EVENT";
-                break;
-            case WifiMonitor.GAS_QUERY_DONE_EVENT:
-                s = "WifiMonitor.GAS_QUERY_DONE_EVENT";
-                break;
-            case WifiMonitor.HS20_REMEDIATION_EVENT:
-                s = "WifiMonitor.HS20_REMEDIATION_EVENT";
-                break;
-            case WifiMonitor.GAS_QUERY_START_EVENT:
-                s = "WifiMonitor.GAS_QUERY_START_EVENT";
-                break;
-            case WifiP2pServiceImpl.GROUP_CREATING_TIMED_OUT:
-                s = "GROUP_CREATING_TIMED_OUT";
-                break;
-            case WifiP2pServiceImpl.P2P_CONNECTION_CHANGED:
-                s = "P2P_CONNECTION_CHANGED";
-                break;
-            case WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE:
-                s = "P2P.DISCONNECT_WIFI_RESPONSE";
-                break;
-            case WifiP2pServiceImpl.SET_MIRACAST_MODE:
-                s = "P2P.SET_MIRACAST_MODE";
-                break;
-            case WifiP2pServiceImpl.BLOCK_DISCOVERY:
-                s = "P2P.BLOCK_DISCOVERY";
-                break;
-            case WifiManager.RSSI_PKTCNT_FETCH:
-                s = "RSSI_PKTCNT_FETCH";
-                break;
-            case WifiMonitor.DPP_EVENT:
-                s = "WifiMonitor.DPP_EVENT";
-                break;
-            default:
-                s = "what:" + Integer.toString(what);
-                break;
-        }
-        return s;
-    }
-
-=======
->>>>>>> f3b7120558841c8d9d509aa42aa2981d1d34688f
     /**
      * Helper method to start other services and get state ready for client mode
      */
