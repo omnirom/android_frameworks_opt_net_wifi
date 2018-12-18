@@ -23,9 +23,9 @@
 namespace android {
 namespace wifi_system {
 const char kHostapdServiceName[] = "hostapd";
-const char kHostapdFSTServiceName[] = "vendor.hostapd_fst";
+const char kHostapdFSTServiceName[] = "hostapd_fst";
 const char kHostapdFullServiceName[] = "init.svc.hostapd";
-const char kHostapdFSTFullServiceName[] = "init.svc.vendor.hostapd_fst";
+const char kHostapdFSTFullServiceName[] = "init.svc.hostapd_fst";
 
 bool HostapdManager::StartHostapd() {
 
