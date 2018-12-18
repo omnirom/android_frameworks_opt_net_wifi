@@ -197,7 +197,7 @@ public class WifiAwareNativeManager {
         }
     }
 
-    private void awareIsDown() {
+    public void awareIsDown() {
         synchronized (mLock) {
             if (mDbg) {
                 Log.d(TAG, "awareIsDown: mWifiNanIface=" + mWifiNanIface + ", mReferenceCount ="
@@ -220,7 +220,7 @@ public class WifiAwareNativeManager {
                         + active);
             }
             if (active && mWifiNanIface != null) {
-                awareIsDown();
+                mWifiAwareStateManager.makeAwareDown();
             } // else: we released it locally so no need to disable usage
         }
     }
