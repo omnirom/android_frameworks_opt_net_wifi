@@ -470,23 +470,6 @@ public class WifiServiceImpl extends BaseWifiService {
         Slog.d(TAG ,"Repeater mode: Stop SoftAP.");
         mRestartWifiApIfRequired = true;
         stopSoftAp();
-
-        IntentFilter filter = new IntentFilter(WifiManager.WIFI_AP_STATE_CHANGED_ACTION);
-        Intent intent = mContext.registerReceiver(new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            if (action.equals(WifiManager.WIFI_AP_STATE_CHANGED_ACTION)) {
-                int state = intent.getIntExtra(WifiManager.EXTRA_WIFI_AP_STATE, 0);
-                if ((state == WifiManager.WIFI_AP_STATE_DISABLED) && mRestartWifiApIfRequired) {
-                    Slog.d(TAG ,"Repeater mode: Restart SoftAP.");
-                    mRestartWifiApIfRequired = false;
-                    mContext.unregisterReceiver(this);
-                    startSoftAp(null);
-                }
-            }
-        }
-        }, filter);
     }
 
     private boolean mRestartWifiApIfRequired = false;
@@ -1159,7 +1142,9 @@ public class WifiServiceImpl extends BaseWifiService {
         // This will internally check for DUAL_BAND and take action.
         startDualSapMode(wifiConfig, true);
 
-        if (startSoftApInRepeaterMode(mode)) {
+        mSoftApExtendingWifi = isCurrentStaShareThisAp();
+        if (mSoftApExtendingWifi) {
+            startSoftApInRepeaterMode(mode, wifiConfig);
             return true;
         }
 
@@ -1437,6 +1422,15 @@ public class WifiServiceImpl extends BaseWifiService {
                 // also clear interface ip state - send null for now since we don't know what
                 // interface (and we only have one anyway)
                 updateInterfaceIpState(null, WifiManager.IFACE_IP_MODE_UNSPECIFIED);
+
+                if ((currentState == WifiManager.WIFI_AP_STATE_DISABLED) && mRestartWifiApIfRequired) {
+                    // hand off the work to our handler thread to be in sync with @updateInterfaceIpState
+                    mWifiInjector.getClientModeImplHandler().post(() -> {
+                        Slog.d(TAG ,"Repeater mode: Restart SoftAP.");
+                        mRestartWifiApIfRequired = false;
+                        startSoftAp(null);
+                    });
+                }
             }
             return;
         }
@@ -3782,42 +3776,39 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     public boolean isCurrentStaShareThisAp() {
+        if(!isWifiCoverageExtendFeatureEnabled())
+            return false;
+
         WifiConfiguration currentStaConfig = mClientModeImpl.getCurrentWifiConfiguration();
 
-        if (isWifiCoverageExtendFeatureEnabled()
-             && currentStaConfig != null
-             && !currentStaConfig.isEnterprise()
-             && currentStaConfig.shareThisAp) {
-            return true;
+        if (currentStaConfig != null && currentStaConfig.shareThisAp) {
+            int authType = currentStaConfig.getAuthType();
+
+            if (authType == WifiConfiguration.KeyMgmt.NONE || authType == WifiConfiguration.KeyMgmt.WPA_PSK)
+                return true;
         }
 
         return false;
     }
 
-    private boolean startSoftApInRepeaterMode(int mode) {
-        WifiConfiguration currentStaConfig = mClientModeImpl.getCurrentWifiConfiguration();
-        Slog.d(TAG,"Repeater mode: CurrentStaConfig - " + currentStaConfig);
-        if (isCurrentStaShareThisAp()) {
-            SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, currentStaConfig);
-            WifiConfigManager wifiConfigManager = mWifiInjector.getWifiConfigManager();
-            currentStaConfig = wifiConfigManager.getConfiguredNetworkWithPassword(currentStaConfig.networkId);
-            softApConfig.mConfig.SSID = WifiInfo.removeDoubleQuotes(currentStaConfig.SSID);
-            softApConfig.mConfig.apBand = currentStaConfig.apBand;
-            softApConfig.mConfig.apChannel = currentStaConfig.apChannel;
-            softApConfig.mConfig.hiddenSSID = currentStaConfig.hiddenSSID;
-            softApConfig.mConfig.preSharedKey = WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey);
-            softApConfig.mConfig.allowedKeyManagement = currentStaConfig.allowedKeyManagement;
-            WifiInfo wifiInfo = mClientModeImpl.getWifiInfo();
-            if (wifiInfo != null && softApConfig.mConfig.apChannel == 0) {
-                softApConfig.mConfig.apChannel = ApConfigUtil.convertFrequencyToChannel(wifiInfo.getFrequency());
-            }
-            Slog.d(TAG,"Repeater mode: startSoftAp with config - " + softApConfig.mConfig);
-            mWifiController.sendMessage(CMD_SET_AP, 1, 0, softApConfig);
-            mSoftApExtendingWifi = true;
-            return true;
-        }
-        mSoftApExtendingWifi = false;
-        return false;
+    private void startSoftApInRepeaterMode(int mode, WifiConfiguration apConfig) {
+        WifiInfo wifiInfo = mClientModeImpl.getWifiInfo();
+        WifiConfigManager wifiConfigManager = mWifiInjector.getWifiConfigManager();
+        WifiConfiguration currentStaConfig = wifiConfigManager.getConfiguredNetworkWithPassword(wifiInfo.getNetworkId());
+        SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, currentStaConfig);
+
+        // Remove double quotes in SSID and psk
+        softApConfig.mConfig.SSID = WifiInfo.removeDoubleQuotes(softApConfig.mConfig.SSID);
+        softApConfig.mConfig.preSharedKey = WifiInfo.removeDoubleQuotes(softApConfig.mConfig.preSharedKey);
+
+        // Get band info from SoftAP configuration
+        if (apConfig == null)
+            softApConfig.mConfig.apBand = mWifiApConfigStore.getApConfiguration().apBand;
+        else
+            softApConfig.mConfig.apBand = apConfig.apBand;
+
+        Slog.d(TAG,"Repeater mode config - " + softApConfig.mConfig);
+        mWifiController.sendMessage(CMD_SET_AP, 1, 0, softApConfig);
     }
 
     public boolean isWifiCoverageExtendFeatureEnabled() {
