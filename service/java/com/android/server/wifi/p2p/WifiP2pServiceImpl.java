@@ -2104,6 +2104,24 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             mIsBTCoexDisabled = true;
                             WifiP2pDevice groupOwner = mGroup.getOwner();
                             WifiP2pDevice peer = mPeers.get(groupOwner.deviceAddress);
+
+                            // if peer is null but group owner address is not all zero.
+                            // Update peer to GroupOwner.
+                            // Possible scenario is peer reinvokes persistent group,
+                            // but peer info is cleared in previous group removal.
+                            if (peer == null && groupOwner.deviceAddress != null
+                                && !EMPTY_DEVICE_ADDRESS.equals(groupOwner.deviceAddress)) {
+                                // Derive device name from ssid="DIRECT-vR-test 1"
+                                // FIXME: Replace it with getDeviceName API when available.
+                                String ssid = mGroup.getNetworkName();
+                                if (ssid != null) {
+                                    groupOwner.deviceName = ssid.replaceFirst("DIRECT-([A-Za-z0-9]{2})-", "");
+                                }
+                                logd("Update peer using groupOwner: " + groupOwner);
+                                mPeers.updateSupplicantDetails(groupOwner);
+                                peer = groupOwner;
+                            }
+
                             if (peer != null) {
                                 // update group owner details with peer details found at discovery
                                 groupOwner.updateSupplicantDetails(peer);
