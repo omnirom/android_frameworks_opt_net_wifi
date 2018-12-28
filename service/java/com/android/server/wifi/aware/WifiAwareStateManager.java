@@ -128,6 +128,7 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
     private static final int COMMAND_TYPE_DELAYED_INITIALIZATION = 121;
     private static final int COMMAND_TYPE_GET_AWARE = 122;
     private static final int COMMAND_TYPE_RELEASE_AWARE = 123;
+    private static final int COMMAND_TYPE_MAKE_AWARE_DOWN = 124;
 
     private static final int RESPONSE_TYPE_ON_CONFIG_SUCCESS = 200;
     private static final int RESPONSE_TYPE_ON_CONFIG_FAIL = 201;
@@ -555,6 +556,16 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
     public void releaseAwareInterface() {
         Message msg = mSm.obtainMessage(MESSAGE_TYPE_COMMAND);
         msg.arg1 = COMMAND_TYPE_RELEASE_AWARE;
+        mSm.sendMessage(msg);
+    }
+
+    /**
+     * Place a request to cleanup Wi-Fi Aware interface as part of onDestroyed notification.
+     */
+    public void makeAwareDown() {
+        if (mDbg) Log.d(TAG, "makeAwareDown request");
+        Message msg = mSm.obtainMessage(MESSAGE_TYPE_COMMAND);
+        msg.arg1 = COMMAND_TYPE_MAKE_AWARE_DOWN;
         mSm.sendMessage(msg);
     }
 
@@ -1761,6 +1772,10 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
                     mWifiAwareNativeManager.releaseAware();
                     waitForResponse = false;
                     break;
+                case COMMAND_TYPE_MAKE_AWARE_DOWN:
+                    mWifiAwareNativeManager.awareIsDown();
+                    waitForResponse = false;
+                    break;
                 default:
                     waitForResponse = false;
                     Log.wtf(TAG, "processCommand: this isn't a COMMAND -- msg=" + msg);
@@ -2018,6 +2033,10 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
                 case COMMAND_TYPE_RELEASE_AWARE:
                     Log.wtf(TAG,
                             "processTimeout: COMMAND_TYPE_RELEASE_AWARE - shouldn't be waiting!");
+                    break;
+                case COMMAND_TYPE_MAKE_AWARE_DOWN:
+                    Log.wtf(TAG,
+                            "processTimeout: COMMAND_TYPE_MAKE_AWARE_DOWN - shouldn't be waiting!");
                     break;
                 default:
                     Log.wtf(TAG, "processTimeout: this isn't a COMMAND -- msg=" + msg);
