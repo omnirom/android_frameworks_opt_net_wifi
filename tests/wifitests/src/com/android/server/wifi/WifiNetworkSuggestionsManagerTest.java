@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.*;
@@ -41,8 +42,10 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -57,11 +60,16 @@ public class WifiNetworkSuggestionsManagerTest {
 
     private @Mock Context mContext;
     private @Mock WifiPermissionsUtil mWifiPermissionsUtil;
+    private @Mock WifiInjector mWifiInjector;
+    private @Mock WifiConfigStore mWifiConfigStore;
+    private @Mock WifiConfigManager mWifiConfigManager;
+    private @Mock NetworkSuggestionStoreData mNetworkSuggestionStoreData;
+    private @Mock ClientModeImpl mClientModeImpl;
+
     private InOrder mInorder;
 
     private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
-    private List<WifiNetworkSuggestion> mWifiNetworkSuggestionsList1;
-    private List<WifiNetworkSuggestion> mWifiNetworkSuggestionsList2;
+    private NetworkSuggestionStoreData.DataSource mDataSource;
 
     /**
      * Setup the mocks.
@@ -71,8 +79,21 @@ public class WifiNetworkSuggestionsManagerTest {
         MockitoAnnotations.initMocks(this);
 
         mInorder = inOrder(mContext, mWifiPermissionsUtil);
+
+        when(mWifiInjector.makeNetworkSuggestionStoreData(any()))
+                .thenReturn(mNetworkSuggestionStoreData);
+        when(mWifiInjector.getClientModeImpl()).thenReturn(mClientModeImpl);
+
         mWifiNetworkSuggestionsManager =
-                new WifiNetworkSuggestionsManager(mContext, mWifiPermissionsUtil);
+                new WifiNetworkSuggestionsManager(mContext, mWifiInjector, mWifiPermissionsUtil,
+                        mWifiConfigManager, mWifiConfigStore);
+
+        ArgumentCaptor<NetworkSuggestionStoreData.DataSource> dataSourceArgumentCaptor =
+                ArgumentCaptor.forClass(NetworkSuggestionStoreData.DataSource.class);
+
+        verify(mWifiInjector).makeNetworkSuggestionStoreData(dataSourceArgumentCaptor.capture());
+        mDataSource = dataSourceArgumentCaptor.getValue();
+        assertNotNull(mDataSource);
     }
 
     /**
@@ -334,7 +355,8 @@ public class WifiNetworkSuggestionsManagerTest {
         assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
 
         // Simulate connecting to the network.
-        mWifiNetworkSuggestionsManager.handleNetworkConnection(networkSuggestion.wifiConfiguration);
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, networkSuggestion.wifiConfiguration);
 
         // Verify that the correct broadcast was sent out.
         mInorder.verify(mWifiPermissionsUtil)
@@ -353,7 +375,7 @@ public class WifiNetworkSuggestionsManagerTest {
      * This should trigger a broadcast to all the apps.
      */
     @Test
-    public void testOnNetworkConnectionSuccessWithMulitpleMatch() {
+    public void testOnNetworkConnectionSuccessWithMultipleMatch() {
         WifiConfiguration wifiConfiguration = WifiConfigurationTestUtil.createOpenNetwork();
         WifiNetworkSuggestion networkSuggestion1 = new WifiNetworkSuggestion(
                 wifiConfiguration, true, false, TEST_UID_1);
@@ -372,7 +394,8 @@ public class WifiNetworkSuggestionsManagerTest {
         assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList2, TEST_PACKAGE_2));
 
         // Simulate connecting to the network.
-        mWifiNetworkSuggestionsManager.handleNetworkConnection(wifiConfiguration);
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, wifiConfiguration);
 
         // Verify that the correct broadcasts were sent out.
         mInorder.verify(mWifiPermissionsUtil)
@@ -404,7 +427,8 @@ public class WifiNetworkSuggestionsManagerTest {
         assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
 
         // Simulate connecting to the network.
-        mWifiNetworkSuggestionsManager.handleNetworkConnection(networkSuggestion.wifiConfiguration);
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, networkSuggestion.wifiConfiguration);
 
         // Verify no broadcast was sent out.
         verifyNoMoreInteractions(mContext, mWifiPermissionsUtil);
@@ -431,13 +455,275 @@ public class WifiNetworkSuggestionsManagerTest {
                 .when(mWifiPermissionsUtil).enforceCanAccessScanResults(TEST_PACKAGE_1, TEST_UID_1);
 
         // Simulate connecting to the network.
-        mWifiNetworkSuggestionsManager.handleNetworkConnection(networkSuggestion.wifiConfiguration);
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, networkSuggestion.wifiConfiguration);
 
         mInorder.verify(mWifiPermissionsUtil)
                 .enforceCanAccessScanResults(TEST_PACKAGE_1, TEST_UID_1);
 
         // Verify no broadcast was sent out.
         verifyNoMoreInteractions(mContext, mWifiPermissionsUtil);
+    }
+
+    /**
+     * Verify triggering of config store write after successful addition of network suggestions.
+     */
+    @Test
+    public void testAddNetworkSuggestionsConfigStoreWrite() {
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+
+        List<WifiNetworkSuggestion> networkSuggestionList =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
+
+        // Verify config store interactions.
+        verify(mWifiConfigManager).saveToStore(true);
+        assertTrue(mDataSource.hasNewDataToSerialize());
+
+        Map<String, Set<WifiNetworkSuggestion>> networkSuggestionsMapToWrite =
+                mDataSource.toSerialize();
+        assertEquals(1, networkSuggestionsMapToWrite.size());
+        assertTrue(networkSuggestionsMapToWrite.keySet().contains(TEST_PACKAGE_1));
+        Set<WifiNetworkSuggestion> networkSuggestionsToWrite =
+                networkSuggestionsMapToWrite.get(TEST_PACKAGE_1);
+        Set<WifiNetworkSuggestion> expectedAllNetworkSuggestions =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertEquals(expectedAllNetworkSuggestions, networkSuggestionsToWrite);
+
+        // Ensure that the new data flag has been reset after read.
+        assertFalse(mDataSource.hasNewDataToSerialize());
+    }
+
+    /**
+     * Verify triggering of config store write after successful removal of network suggestions.
+     */
+    @Test
+    public void testRemoveNetworkSuggestionsConfigStoreWrite() {
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+
+        List<WifiNetworkSuggestion> networkSuggestionList =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
+        assertTrue(mWifiNetworkSuggestionsManager.remove(networkSuggestionList, TEST_PACKAGE_1));
+
+        // Verify config store interactions.
+        verify(mWifiConfigManager, times(2)).saveToStore(true);
+        assertTrue(mDataSource.hasNewDataToSerialize());
+
+        Map<String, Set<WifiNetworkSuggestion>> networkSuggestionsMapToWrite =
+                mDataSource.toSerialize();
+        assertTrue(networkSuggestionsMapToWrite.isEmpty());
+
+        // Ensure that the new data flag has been reset after read.
+        assertFalse(mDataSource.hasNewDataToSerialize());
+    }
+
+    /**
+     * Verify handling of initial config store read.
+     */
+    @Test
+    public void testNetworkSuggestionsConfigStoreLoad() {
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+        Set<WifiNetworkSuggestion> networkSuggestionSet =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+
+        mDataSource.fromDeserialized(new HashMap<String, Set<WifiNetworkSuggestion>>() {{
+                        put(TEST_PACKAGE_1, networkSuggestionSet);
+                }});
+
+        Set<WifiNetworkSuggestion> allNetworkSuggestions =
+                mWifiNetworkSuggestionsManager.getAllNetworkSuggestions();
+        Set<WifiNetworkSuggestion> expectedAllNetworkSuggestions =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertEquals(expectedAllNetworkSuggestions, allNetworkSuggestions);
+
+        // Ensure we can lookup the network.
+        ScanDetail scanDetail = createScanDetailForNetwork(networkSuggestion.wifiConfiguration);
+        Set<WifiNetworkSuggestion> matchingNetworkSuggestions =
+                mWifiNetworkSuggestionsManager.getNetworkSuggestionsForScanDetail(scanDetail);
+        Set<WifiNetworkSuggestion> expectedMatchingNetworkSuggestions =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertEquals(expectedMatchingNetworkSuggestions, matchingNetworkSuggestions);
+    }
+
+    /**
+     * Verify handling of config store read after user switch.
+     */
+    @Test
+    public void testNetworkSuggestionsConfigStoreLoadAfterUserSwitch() {
+        WifiNetworkSuggestion networkSuggestion1 = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+
+        Set<WifiNetworkSuggestion> networkSuggestionSet1 =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion1);
+                }};
+
+        // Read the store initially.
+        mDataSource.fromDeserialized(new HashMap<String, Set<WifiNetworkSuggestion>>() {{
+                    put(TEST_PACKAGE_1, networkSuggestionSet1);
+                }});
+
+        WifiNetworkSuggestion networkSuggestion2 = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_2);
+        Set<WifiNetworkSuggestion> networkSuggestionSet2 =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion2);
+                }};
+
+        // Now simulate user switch.
+        mDataSource.reset();
+        mDataSource.fromDeserialized(new HashMap<String, Set<WifiNetworkSuggestion>>() {{
+                    put(TEST_PACKAGE_2, networkSuggestionSet2);
+                }});
+
+        Set<WifiNetworkSuggestion> allNetworkSuggestions =
+                mWifiNetworkSuggestionsManager.getAllNetworkSuggestions();
+        Set<WifiNetworkSuggestion> expectedAllNetworkSuggestions =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion2);
+                }};
+        assertEquals(expectedAllNetworkSuggestions, allNetworkSuggestions);
+
+        // Ensure we can lookup the new network.
+        ScanDetail scanDetail2 = createScanDetailForNetwork(networkSuggestion2.wifiConfiguration);
+        Set<WifiNetworkSuggestion> matchingNetworkSuggestions =
+                mWifiNetworkSuggestionsManager.getNetworkSuggestionsForScanDetail(scanDetail2);
+        Set<WifiNetworkSuggestion> expectedMatchingNetworkSuggestions =
+                new HashSet<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion2);
+                }};
+        assertEquals(expectedMatchingNetworkSuggestions, matchingNetworkSuggestions);
+
+        // Ensure that the previous network can no longer be looked up.
+        ScanDetail scanDetail1 = createScanDetailForNetwork(networkSuggestion1.wifiConfiguration);
+        assertNull(mWifiNetworkSuggestionsManager.getNetworkSuggestionsForScanDetail(scanDetail1));
+    }
+
+    /**
+     * Verify that we disconnect from the network if the only network suggestion matching the
+     * connected network is removed.
+     */
+    @Test
+    public void testRemoveNetworkSuggestionsMatchingConnectionSuccessWithOneMatch() {
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+        List<WifiNetworkSuggestion> networkSuggestionList =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
+
+        // Simulate connecting to the network.
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, networkSuggestion.wifiConfiguration);
+
+        // Now remove the network suggestion and ensure we trigger a disconnect.
+        assertTrue(mWifiNetworkSuggestionsManager.remove(networkSuggestionList, TEST_PACKAGE_1));
+        verify(mClientModeImpl).disconnectCommand();
+    }
+
+    /**
+     * Verify that we do not disconnect from the network if there are network suggestion matching
+     * the connected network when one of them is removed.
+     */
+    @Test
+    public void testRemoveNetworkSuggestionsMatchingConnectionSuccessWithMultipleMatch() {
+        WifiConfiguration wifiConfiguration = WifiConfigurationTestUtil.createOpenNetwork();
+        WifiNetworkSuggestion networkSuggestion1 = new WifiNetworkSuggestion(
+                wifiConfiguration, true, false, TEST_UID_1);
+        List<WifiNetworkSuggestion> networkSuggestionList1 =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion1);
+                }};
+        WifiNetworkSuggestion networkSuggestion2 = new WifiNetworkSuggestion(
+                wifiConfiguration, true, false, TEST_UID_2);
+        List<WifiNetworkSuggestion> networkSuggestionList2 =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion2);
+                }};
+
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList1, TEST_PACKAGE_1));
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList2, TEST_PACKAGE_2));
+
+        // Simulate connecting to the network.
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, wifiConfiguration);
+
+        // Now remove one of the network suggestion and ensure we did not trigger a disconnect.
+        assertTrue(mWifiNetworkSuggestionsManager.remove(networkSuggestionList1, TEST_PACKAGE_1));
+        verify(mClientModeImpl, never()).disconnectCommand();
+
+        // Now remove the other one and ensure we trigger a disconnect.
+        assertTrue(mWifiNetworkSuggestionsManager.remove(networkSuggestionList2, TEST_PACKAGE_2));
+        verify(mClientModeImpl).disconnectCommand();
+    }
+
+    /**
+     * Verify that we do not disconnect from the network if there are no network suggestion matching
+     * the connected network when one of them is removed.
+     */
+    @Test
+    public void testRemoveNetworkSuggestionsNotMatchingConnectionSuccess() {
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+        List<WifiNetworkSuggestion> networkSuggestionList =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
+
+        // Simulate connecting to some other network.
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                WifiConfigurationTestUtil.createEapNetwork());
+
+        // Now remove the network suggestion and ensure we did not trigger a disconnect.
+        assertTrue(mWifiNetworkSuggestionsManager.remove(networkSuggestionList, TEST_PACKAGE_1));
+        verify(mClientModeImpl, never()).disconnectCommand();
+    }
+
+    /**
+     * Verify that we do not disconnect from the network if there are no network suggestion matching
+     * the connected network when one of them is removed.
+     */
+    @Test
+    public void testRemoveNetworkSuggestionsNotMatchingConnectionSuccessAfterConnectionFailure() {
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), false, false, TEST_UID_1);
+        List<WifiNetworkSuggestion> networkSuggestionList =
+                new ArrayList<WifiNetworkSuggestion>() {{
+                    add(networkSuggestion);
+                }};
+        assertTrue(mWifiNetworkSuggestionsManager.add(networkSuggestionList, TEST_PACKAGE_1));
+
+        // Simulate failing connection to the network.
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_DHCP, networkSuggestion.wifiConfiguration);
+
+        // Simulate connecting to some other network.
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                WifiConfigurationTestUtil.createEapNetwork());
+
+        // Now remove the network suggestion and ensure we did not trigger a disconnect.
+        assertTrue(mWifiNetworkSuggestionsManager.remove(networkSuggestionList, TEST_PACKAGE_1));
+        verify(mClientModeImpl, never()).disconnectCommand();
     }
 
     /**

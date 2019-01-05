@@ -32,6 +32,7 @@ import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,6 +53,8 @@ public class WifiNetworkSuggestionsManager {
 
     private final Context mContext;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
+    private final WifiConfigManager mWifiConfigManager;
+    private final WifiInjector mWifiInjector;
     /**
      * Map of package name of an app to the set of active network suggestions provided by the app.
      */
@@ -67,15 +70,66 @@ public class WifiNetworkSuggestionsManager {
      */
     private final Map<ScanResultMatchInfo, Set<WifiNetworkSuggestion>> mActiveScanResultMatchInfo =
             new HashMap<>();
+    /**
+     * List of {@link WifiNetworkSuggestion} matching the current connected network.
+     */
+    private Set<WifiNetworkSuggestion> mActiveNetworkSuggestionsMatchingConnection;
 
     /**
      * Verbose logging flag.
      */
     private boolean mVerboseLoggingEnabled = false;
+    /**
+     * Indicates that we have new data to serialize.
+     */
+    private boolean mHasNewDataToSerialize = false;
 
-    public WifiNetworkSuggestionsManager(Context context, WifiPermissionsUtil wifiPermissionsUtil) {
+    /**
+     * Module to interact with the wifi config store.
+     */
+    private class NetworkSuggestionDataSource implements NetworkSuggestionStoreData.DataSource {
+        @Override
+        public Map<String, Set<WifiNetworkSuggestion>> toSerialize() {
+            // Clear the flag after writing to disk.
+            // TODO(b/115504887): Don't reset the flag on write failure.
+            mHasNewDataToSerialize = false;
+            return mActiveNetworkSuggestionsPerApp;
+        }
+
+        @Override
+        public void fromDeserialized(
+                Map<String, Set<WifiNetworkSuggestion>> networkSuggestionsMap) {
+            mActiveNetworkSuggestionsPerApp.putAll(networkSuggestionsMap);
+            // Build the scan cache.
+            for (Set<WifiNetworkSuggestion> networkSuggestions : networkSuggestionsMap.values()) {
+                addToScanResultMatchInfoMap(networkSuggestions);
+            }
+        }
+
+        @Override
+        public void reset() {
+            mActiveNetworkSuggestionsPerApp.clear();
+            mActiveScanResultMatchInfo.clear();
+        }
+
+        @Override
+        public boolean hasNewDataToSerialize() {
+            return mHasNewDataToSerialize;
+        }
+    }
+
+    public WifiNetworkSuggestionsManager(Context context, WifiInjector wifiInjector,
+                                         WifiPermissionsUtil wifiPermissionsUtil,
+                                         WifiConfigManager wifiConfigManager,
+                                         WifiConfigStore wifiConfigStore) {
         mContext = context;
+        mWifiInjector = wifiInjector;
         mWifiPermissionsUtil = wifiPermissionsUtil;
+        mWifiConfigManager = wifiConfigManager;
+
+        // register the data store for serializing/deserializing data.
+        wifiConfigStore.registerStoreData(
+                wifiInjector.makeNetworkSuggestionStoreData(new NetworkSuggestionDataSource()));
     }
 
     /**
@@ -85,7 +139,15 @@ public class WifiNetworkSuggestionsManager {
         mVerboseLoggingEnabled = verbose > 0;
     }
 
-    private void addToScanResultMatchInfoMap(List<WifiNetworkSuggestion> networkSuggestions) {
+    private void saveToStore() {
+        // Set the flag to let WifiConfigStore that we have new data to write.
+        mHasNewDataToSerialize = true;
+        if (!mWifiConfigManager.saveToStore(true)) {
+            Log.w(TAG, "Failed to save to store");
+        }
+    }
+
+    private void addToScanResultMatchInfoMap(Collection<WifiNetworkSuggestion> networkSuggestions) {
         for (WifiNetworkSuggestion networkSuggestion : networkSuggestions) {
             ScanResultMatchInfo scanResultMatchInfo =
                     ScanResultMatchInfo.fromWifiConfiguration(networkSuggestion.wifiConfiguration);
@@ -119,6 +181,23 @@ public class WifiNetworkSuggestionsManager {
         }
     }
 
+    // Issues a disconnect if the only serving network suggestion is removed.
+    // TODO (b/115504887): What if there is also a saved network with the same credentials?
+    private void triggerDisconnectIfServingNetworkSuggestionRemoved(
+            List<WifiNetworkSuggestion> networkSuggestionsRemoved) {
+        if (mActiveNetworkSuggestionsMatchingConnection == null
+                || mActiveNetworkSuggestionsMatchingConnection.isEmpty()) {
+            return;
+        }
+        if (mActiveNetworkSuggestionsMatchingConnection.removeAll(networkSuggestionsRemoved)) {
+            if (mActiveNetworkSuggestionsMatchingConnection.isEmpty()) {
+                Log.i(TAG, "Only network suggestion matching the connected network removed. "
+                        + "Disconnecting...");
+                mWifiInjector.getClientModeImpl().disconnectCommand();
+            }
+        }
+    }
+
     /**
      * Add the provided list of network suggestions from the corresponding app's active list.
      */
@@ -140,6 +219,7 @@ public class WifiNetworkSuggestionsManager {
         }
         activeNetworkSuggestionsForApp.addAll(networkSuggestions);
         addToScanResultMatchInfoMap(networkSuggestions);
+        saveToStore();
         return true;
     }
 
@@ -174,6 +254,9 @@ public class WifiNetworkSuggestionsManager {
             mActiveNetworkSuggestionsPerApp.remove(packageName);
         }
         removeFromScanResultMatchInfoMap(networkSuggestions);
+        saveToStore();
+        // Disconnect from the current network, if the suggestion was removed.
+        triggerDisconnectIfServingNetworkSuggestionRemoved(networkSuggestions);
         return true;
     }
 
@@ -255,10 +338,17 @@ public class WifiNetworkSuggestionsManager {
      *
      * @param connectedNetwork {@link WifiConfiguration} representing the network connected to.
      */
-    public void handleNetworkConnection(@NonNull WifiConfiguration connectedNetwork) {
+    private void handleConnectionSuccess(@NonNull WifiConfiguration connectedNetwork) {
         Set<WifiNetworkSuggestion> matchingNetworkSuggestions =
                 getNetworkSuggestionsForWifiConfiguration(connectedNetwork);
-        if (matchingNetworkSuggestions == null || matchingNetworkSuggestions.size() == 0) return;
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Network suggestions matching the connection "
+                    + matchingNetworkSuggestions);
+        }
+        if (matchingNetworkSuggestions == null || matchingNetworkSuggestions.isEmpty()) return;
+
+        // Store the set of matching network suggestions.
+        mActiveNetworkSuggestionsMatchingConnection = new HashSet<>(matchingNetworkSuggestions);
 
         Set<WifiNetworkSuggestion> matchingNetworkSuggestionsWithReqAppInteraction =
                 matchingNetworkSuggestions.stream()
@@ -293,6 +383,24 @@ public class WifiNetworkSuggestionsManager {
     }
 
     /**
+     * Invoked by {@link ClientModeImpl} on end of connection attempt to a network.
+     *
+     * @param failureCode Failure codes representing {@link WifiMetrics.ConnectionEvent} codes.
+     * @param network WifiConfiguration corresponding to the current network.
+     */
+    public void handleConnectionAttemptEnded(
+            int failureCode, @NonNull WifiConfiguration network) {
+        Log.v(TAG, "handleConnectionAttemptEnded " + failureCode + ", " + network);
+        mActiveNetworkSuggestionsMatchingConnection = null;
+        if (failureCode == WifiMetrics.ConnectionEvent.FAILURE_NONE) {
+            handleConnectionSuccess(network);
+        } else {
+            // TODO (b/115504887): Blacklist the corresponding network suggestion if the connection
+            // failed.
+        }
+    }
+
+    /**
      * Dump of {@link WifiNetworkSuggestionsManager}.
      */
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
@@ -306,6 +414,8 @@ public class WifiNetworkSuggestionsManager {
             }
         }
         pw.println("WifiNetworkSuggestionsManager - Networks End ----");
+        pw.println("WifiNetworkSuggestionsManager - Network Suggestions matching connection: "
+                + mActiveNetworkSuggestionsMatchingConnection);
     }
 }
 

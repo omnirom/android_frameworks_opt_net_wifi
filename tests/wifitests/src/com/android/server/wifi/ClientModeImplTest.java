@@ -94,6 +94,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvisioningTestUtil;
 import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
+import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStats;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -347,6 +348,7 @@ public class ClientModeImplTest {
     @Mock WifiConfigManager mWifiConfigManager;
     @Mock WifiNative mWifiNative;
     @Mock WifiScoreCard mWifiScoreCard;
+    @Mock WifiTrafficPoller mWifiTrafficPoller;
     @Mock WifiConnectivityManager mWifiConnectivityManager;
     @Mock WifiStateTracker mWifiStateTracker;
     @Mock PasspointManager mPasspointManager;
@@ -366,6 +368,7 @@ public class ClientModeImplTest {
     @Mock WifiDataStall mWifiDataStall;
     @Mock WifiNetworkFactory mWifiNetworkFactory;
     @Mock UntrustedWifiNetworkFactory mUntrustedWifiNetworkFactory;
+    @Mock WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
 
     final ArgumentCaptor<WifiNative.InterfaceCallback> mInterfaceCallbackCaptor =
             ArgumentCaptor.forClass(WifiNative.InterfaceCallback.class);
@@ -402,6 +405,7 @@ public class ClientModeImplTest {
         when(mWifiInjector.getWifiStateTracker()).thenReturn(mWifiStateTracker);
         when(mWifiInjector.getWifiMonitor()).thenReturn(mWifiMonitor);
         when(mWifiInjector.getWifiNative()).thenReturn(mWifiNative);
+        when(mWifiInjector.getWifiTrafficPoller()).thenReturn(mWifiTrafficPoller);
         when(mWifiInjector.getSelfRecovery()).thenReturn(mSelfRecovery);
         when(mWifiInjector.getWifiPermissionsUtil()).thenReturn(mWifiPermissionsUtil);
         when(mWifiInjector.makeTelephonyManager()).thenReturn(mTelephonyManager);
@@ -415,6 +419,8 @@ public class ClientModeImplTest {
         when(mWifiInjector.makeWifiNetworkFactory(any(), any())).thenReturn(mWifiNetworkFactory);
         when(mWifiInjector.makeUntrustedWifiNetworkFactory(any(), any()))
                 .thenReturn(mUntrustedWifiNetworkFactory);
+        when(mWifiInjector.getWifiNetworkSuggestionsManager())
+                .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiNative.initialize()).thenReturn(true);
 
         when(mWifiNetworkFactory.hasConnectionRequests()).thenReturn(true);
@@ -495,7 +501,7 @@ public class ClientModeImplTest {
     private void initializeCmi() throws Exception {
         mCmi = new ClientModeImpl(mContext, mFrameworkFacade, mLooper.getLooper(),
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
-                mWifiScoreCard, mWrongPasswordNotifier, mSarManager);
+                mWifiScoreCard, mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller);
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
         registerAsyncChannel((x) -> {
@@ -1278,12 +1284,12 @@ public class ClientModeImplTest {
 
 
     @Test
-    public void smToString() throws Exception {
-        assertEquals("CMD_CHANNEL_HALF_CONNECTED", mCmi.smToString(
+    public void getWhatToString() throws Exception {
+        assertEquals("CMD_CHANNEL_HALF_CONNECTED", mCmi.getWhatToString(
                 AsyncChannel.CMD_CHANNEL_HALF_CONNECTED));
-        assertEquals("CMD_PRE_DHCP_ACTION", mCmi.smToString(
+        assertEquals("CMD_PRE_DHCP_ACTION", mCmi.getWhatToString(
                 DhcpClient.CMD_PRE_DHCP_ACTION));
-        assertEquals("CMD_IP_REACHABILITY_LOST", mCmi.smToString(
+        assertEquals("CMD_IP_REACHABILITY_LOST", mCmi.getWhatToString(
                 ClientModeImpl.CMD_IP_REACHABILITY_LOST));
     }
 
@@ -1580,7 +1586,7 @@ public class ClientModeImplTest {
         when(mPasspointManager.startSubscriptionProvisioning(anyInt(),
                 any(OsuProvider.class), any(IProvisioningCallback.class))).thenReturn(true);
         mLooper.startAutoDispatch();
-        assertEquals(true, mCmi.syncStartSubscriptionProvisioning(
+        assertTrue(mCmi.syncStartSubscriptionProvisioning(
                 OTHER_USER_UID, mOsuProvider, mProvisioningCallback, mCmiAsyncChannel));
         verify(mPasspointManager).startSubscriptionProvisioning(OTHER_USER_UID, mOsuProvider,
                 mProvisioningCallback);
@@ -1594,7 +1600,7 @@ public class ClientModeImplTest {
     @Test
     public void syncStartSubscriptionProvisioningBeforeSupplicantOrAPStart() throws Exception {
         mLooper.startAutoDispatch();
-        assertEquals(false, mCmi.syncStartSubscriptionProvisioning(
+        assertFalse(mCmi.syncStartSubscriptionProvisioning(
                 OTHER_USER_UID, mOsuProvider, mProvisioningCallback, mCmiAsyncChannel));
         mLooper.stopAutoDispatch();
         verify(mPasspointManager, never()).startSubscriptionProvisioning(
@@ -1608,7 +1614,7 @@ public class ClientModeImplTest {
     @Test
     public void syncStartSubscriptionProvisioningNoOpWifiDisabled() throws Exception {
         mLooper.startAutoDispatch();
-        assertEquals(false, mCmi.syncStartSubscriptionProvisioning(
+        assertFalse(mCmi.syncStartSubscriptionProvisioning(
                 OTHER_USER_UID, mOsuProvider, mProvisioningCallback, mCmiAsyncChannel));
         mLooper.stopAutoDispatch();
         verify(mPasspointManager, never()).startSubscriptionProvisioning(
@@ -1728,7 +1734,7 @@ public class ClientModeImplTest {
         mLooper.dispatchAll();
 
         wifiInfo = mCmi.getWifiInfo();
-        assertEquals(null, wifiInfo.getBSSID());
+        assertNull(wifiInfo.getBSSID());
         assertEquals(WifiSsid.NONE, wifiInfo.getSSID());
         assertEquals(WifiConfiguration.INVALID_NETWORK_ID, wifiInfo.getNetworkId());
         assertEquals(SupplicantState.DISCONNECTED, wifiInfo.getSupplicantState());
@@ -2220,7 +2226,7 @@ public class ClientModeImplTest {
         verify(mWifiNative, never()).setMacAddress(eq(WIFI_IFACE_NAME), any(MacAddress.class));
         verify(mWifiMetrics, never())
                 .logStaEvent(eq(StaEvent.TYPE_MAC_CHANGE), any(WifiConfiguration.class));
-        assertEquals(mCmi.getWifiInfo().getMacAddress(), oldMac);
+        assertEquals(oldMac, mCmi.getWifiInfo().getMacAddress());
     }
 
     /**
@@ -2350,6 +2356,8 @@ public class ClientModeImplTest {
                 WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_REJECTION);
         verify(mWifiNetworkFactory).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_REJECTION), any());
+        verify(mWifiNetworkSuggestionsManager).handleConnectionAttemptEnded(
+                eq(WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_REJECTION), any());
         verifyConnectionEventTimeoutDoesNotOccur();
     }
 
@@ -2375,8 +2383,42 @@ public class ClientModeImplTest {
                 WifiMetrics.ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE);
         verify(mWifiNetworkFactory).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE), any());
+        verify(mWifiNetworkSuggestionsManager).handleConnectionAttemptEnded(
+                eq(WifiMetrics.ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE), any());
         verifyConnectionEventTimeoutDoesNotOccur();
+    }
 
+    /**
+     * Verifies that WifiLastResortWatchdog is not notified of authentication failures of type
+     * ERROR_AUTH_FAILURE_WRONG_PSWD.
+     * @throws Exception
+     */
+    @Test
+    public void testFailureWrongPassIsIgnoredByWatchdog() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD);
+        mLooper.dispatchAll();
+        verify(mWifiLastResortWatchdog, never()).noteConnectionFailureAndTriggerIfNeeded(
+                anyString(), anyString(), anyInt());
+    }
+
+    /**
+     * Verifies that WifiLastResortWatchdog is notified of other types of authentication failures.
+     * @throws Exception
+     */
+    @Test
+    public void testAuthenticationFailureUpdatesWatchdog() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_TIMEOUT);
+        mLooper.dispatchAll();
+        verify(mWifiLastResortWatchdog).noteConnectionFailureAndTriggerIfNeeded(
+                anyString(), anyString(), anyInt());
     }
 
     /**
@@ -2393,6 +2435,8 @@ public class ClientModeImplTest {
         verify(mWifiConnectivityManager, atLeastOnce()).handleConnectionAttemptEnded(
                 WifiMetrics.ConnectionEvent.FAILURE_DHCP);
         verify(mWifiNetworkFactory, atLeastOnce()).handleConnectionAttemptEnded(
+                eq(WifiMetrics.ConnectionEvent.FAILURE_DHCP), any());
+        verify(mWifiNetworkSuggestionsManager, atLeastOnce()).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_DHCP), any());
         verifyConnectionEventTimeoutDoesNotOccur();
     }
@@ -2412,6 +2456,8 @@ public class ClientModeImplTest {
                 WifiMetrics.ConnectionEvent.FAILURE_NONE);
         verify(mWifiNetworkFactory).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_NONE), any());
+        verify(mWifiNetworkSuggestionsManager).handleConnectionAttemptEnded(
+                eq(WifiMetrics.ConnectionEvent.FAILURE_NONE), any());
         verifyConnectionEventTimeoutDoesNotOccur();
     }
 
@@ -2425,6 +2471,53 @@ public class ClientModeImplTest {
         verify(mWifiScoreCard, never()).noteConnectionAttempt(any());
         mLooper.dispatchAll();
         verify(mWifiScoreCard).noteConnectionAttempt(any());
+        // But don't expect to see connection success yet
+        verify(mWifiScoreCard, never()).noteIpConfiguration(any());
+    }
+
+    /**
+     * Verify that score card is notified of a successful connection
+     */
+    @Test
+    public void testScoreCardNoteConnectionComplete() throws Exception {
+        connect();
+        mLooper.dispatchAll();
+        verify(mWifiScoreCard).noteIpConfiguration(any());
+    }
+
+    /**
+     * Verify that score card is notified when wifi is disabled while disconnected
+     */
+    @Test
+    public void testScoreCardNoteWifiDisabledWhileDisconnected() throws Exception {
+        // connecting and disconnecting shouldn't note wifi disabled
+        disconnect();
+        mLooper.dispatchAll();
+        verify(mWifiScoreCard, never()).noteWifiDisabled(any());
+
+        // disabling while disconnected should note wifi disabled
+        mCmi.setWifiStateForApiCalls(WifiManager.WIFI_STATE_DISABLED);
+        mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
+        mLooper.dispatchAll();
+        verify(mWifiScoreCard).noteWifiDisabled(any());
+    }
+
+    /**
+     * Verify that score card is notified when wifi is disabled while connected
+     */
+    @Test
+    public void testScoreCardNoteWifiDisabledWhileConnected() throws Exception {
+        // Get into connected state
+        connect();
+        mLooper.dispatchAll();
+        verify(mWifiScoreCard, never()).noteWifiDisabled(any());
+
+        // disabling while connected should note wifi disabled
+        mCmi.setWifiStateForApiCalls(WifiManager.WIFI_STATE_DISABLED);
+        mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
+        mLooper.dispatchAll();
+
+        verify(mWifiScoreCard).noteWifiDisabled(any());
     }
 
     /**
@@ -2689,5 +2782,75 @@ public class ClientModeImplTest {
         mLooper.dispatchAll();
         verify(mWifiDataStall).checkForDataStall(oldLLStats, newLLStats);
         verify(mWifiMetrics).incrementWifiLinkLayerUsageStats(newLLStats);
+    }
+
+    /**
+     * Verify that we update wifi usability stats entries during rssi poll and that when we get
+     * a data stall we label and save the current list of usability stats entries.
+     * @throws Exception
+     */
+    @Test
+    public void verifyRssiPollUpdatesWifiUsabilityMetrics() throws Exception {
+        mCmi.enableRssiPolling(true);
+        connect();
+
+        WifiLinkLayerStats stats = new WifiLinkLayerStats();
+        when(mWifiNative.getWifiLinkLayerStats(any())).thenReturn(stats);
+        when(mWifiDataStall.checkForDataStall(any(), any())).thenReturn(false);
+        mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
+        mLooper.dispatchAll();
+        verify(mWifiMetrics).updateWifiUsabilityStatsEntries(any(), eq(stats));
+        verify(mWifiMetrics, never()).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD);
+
+        when(mWifiDataStall.checkForDataStall(any(), any())).thenReturn(true);
+        mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
+        mLooper.dispatchAll();
+        verify(mWifiMetrics, times(2)).updateWifiUsabilityStatsEntries(any(), eq(stats));
+        verify(mWifiMetrics).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD);
+    }
+
+    /**
+     * Verify that when ordered to setPowerSave(true) while Interface is created,
+     * WifiNative is called with the right powerSave mode.
+     */
+    @Test
+    public void verifySetPowerSaveTrueSuccess() throws Exception {
+        mCmi.setOperationalMode(ClientModeImpl.CONNECT_MODE, WIFI_IFACE_NAME);
+        assertTrue(mCmi.setPowerSave(true));
+        verify(mWifiNative).setPowerSave(WIFI_IFACE_NAME, true);
+    }
+
+    /**
+     * Verify that when ordered to setPowerSave(false) while Interface is created,
+     * WifiNative is called with the right powerSave mode.
+     */
+    @Test
+    public void verifySetPowerSaveFalseSuccess() throws Exception {
+        mCmi.setOperationalMode(ClientModeImpl.CONNECT_MODE, WIFI_IFACE_NAME);
+        assertTrue(mCmi.setPowerSave(false));
+        verify(mWifiNative).setPowerSave(WIFI_IFACE_NAME, false);
+    }
+
+    /**
+     * Verify that when interface is not created yet (InterfaceName is null),
+     * then setPowerSave() returns with error and no call in WifiNative happens.
+     */
+    @Test
+    public void verifySetPowerSaveFailure() throws Exception {
+        boolean powerSave = true;
+        mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
+        assertFalse(mCmi.setPowerSave(powerSave));
+        verify(mWifiNative, never()).setPowerSave(anyString(), anyBoolean());
+    }
+
+    /**
+     * Verify that we call into WifiTrafficPoller during rssi poll
+     */
+    @Test
+    public void verifyRssiPollCallsWifiTrafficPoller() throws Exception {
+        mCmi.enableRssiPolling(true);
+        connect();
+
+        verify(mWifiTrafficPoller).notifyOnDataActivity(anyLong(), anyLong());
     }
 }

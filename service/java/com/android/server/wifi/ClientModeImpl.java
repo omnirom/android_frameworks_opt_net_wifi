@@ -105,6 +105,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.WnmData;
 import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
+import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStats;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.TelephonyUtil;
@@ -198,6 +199,7 @@ public class ClientModeImpl extends StateMachine {
     private final WifiScoreCard mWifiScoreCard;
     private final WifiScoreReport mWifiScoreReport;
     private final SarManager mSarManager;
+    private final WifiTrafficPoller mWifiTrafficPoller;
     public WifiScoreReport getWifiScoreReport() {
         return mWifiScoreReport;
     }
@@ -240,7 +242,7 @@ public class ClientModeImpl extends StateMachine {
                 mWifiInfo.setRssi(curRssi);
                 updateCapabilities();
                 int ret = startRssiMonitoringOffload(maxRssi, minRssi, rssiHandler);
-                Log.d(TAG, "Re-program RSSI thresholds for " + smToString(reason)
+                Log.d(TAG, "Re-program RSSI thresholds for " + getWhatToString(reason)
                         + ": [" + minRssi + ", " + maxRssi + "], curRssi=" + curRssi
                         + " ret=" + ret);
                 break;
@@ -269,8 +271,9 @@ public class ClientModeImpl extends StateMachine {
     private PowerManager.WakeLock mSuspendWakeLock;
 
     /**
-     * Interval in milliseconds between polling for RSSI
-     * and linkspeed information
+     * Interval in milliseconds between polling for RSSI and linkspeed information.
+     * This is also used as the polling interval for WifiTrafficPoller, which updates
+     * its data activity on every CMD_RSSI_POLL.
      */
     private static final int DEFAULT_POLL_RSSI_INTERVAL_MSECS = 3000;
 
@@ -643,7 +646,7 @@ public class ClientModeImpl extends StateMachine {
     // For message logging.
     private static final Class[] sMessageClasses = {
             AsyncChannel.class, ClientModeImpl.class, DhcpClient.class };
-    private static final SparseArray<String> sSmToString =
+    private static final SparseArray<String> sGetWhatToString =
             MessageUtils.findMessageNames(sMessageClasses);
 
 
@@ -769,13 +772,15 @@ public class ClientModeImpl extends StateMachine {
     private WifiStateTracker mWifiStateTracker;
     private final BackupManagerProxy mBackupManagerProxy;
     private final WrongPasswordNotifier mWrongPasswordNotifier;
+    private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
 
     public ClientModeImpl(Context context, FrameworkFacade facade, Looper looper,
                             UserManager userManager, WifiInjector wifiInjector,
                             BackupManagerProxy backupManagerProxy, WifiCountryCode countryCode,
                             WifiNative wifiNative, WifiScoreCard wifiScoreCard,
                             WrongPasswordNotifier wrongPasswordNotifier,
-                            SarManager sarManager) {
+                            SarManager sarManager,
+                            WifiTrafficPoller wifiTrafficPoller) {
         super(TAG, looper);
         mWifiInjector = wifiInjector;
         mWifiMetrics = mWifiInjector.getWifiMetrics();
@@ -789,6 +794,7 @@ public class ClientModeImpl extends StateMachine {
         mBackupManagerProxy = backupManagerProxy;
         mWrongPasswordNotifier = wrongPasswordNotifier;
         mSarManager = sarManager;
+        mWifiTrafficPoller = wifiTrafficPoller;
 
         mNetworkInfo = new NetworkInfo(ConnectivityManager.TYPE_WIFI, 0, NETWORKTYPE, "");
         mBatteryStats = IBatteryStats.Stub.asInterface(mFacade.getService(
@@ -849,6 +855,8 @@ public class ClientModeImpl extends StateMachine {
         // different score filter for these requests.
         mUntrustedNetworkFactory = mWifiInjector.makeUntrustedWifiNetworkFactory(
                 factoryNetworkCapabilities, mWifiConnectivityManager);
+
+        mWifiNetworkSuggestionsManager = mWifiInjector.getWifiNetworkSuggestionsManager();
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_ON);
@@ -2059,13 +2067,10 @@ public class ClientModeImpl extends StateMachine {
         String report;
         String key;
         StringBuilder sb = new StringBuilder();
-        if (mScreenOn) {
-            sb.append("!");
-        }
+        sb.append("screen=").append(mScreenOn ? "on" : "off");
         if (mMessageHandlingStatus != MESSAGE_HANDLING_STATUS_UNKNOWN) {
             sb.append("(").append(mMessageHandlingStatus).append(")");
         }
-        sb.append(smToString(msg));
         if (msg.sendingUid > 0 && msg.sendingUid != Process.WIFI_UID) {
             sb.append(" uid=" + msg.sendingUid);
         }
@@ -2459,6 +2464,92 @@ public class ClientModeImpl extends StateMachine {
         }
 
         return sb.toString();
+    }
+
+    @Override
+    protected String getWhatToString(int what) {
+        String s = sGetWhatToString.get(what);
+        if (s != null) {
+            return s;
+        }
+        switch (what) {
+            case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED:
+                s = "CMD_CHANNEL_HALF_CONNECTED";
+                break;
+            case AsyncChannel.CMD_CHANNEL_DISCONNECTED:
+                s = "CMD_CHANNEL_DISCONNECTED";
+                break;
+            case WifiManager.DISABLE_NETWORK:
+                s = "DISABLE_NETWORK";
+                break;
+            case WifiManager.CONNECT_NETWORK:
+                s = "CONNECT_NETWORK";
+                break;
+            case WifiManager.SAVE_NETWORK:
+                s = "SAVE_NETWORK";
+                break;
+            case WifiManager.FORGET_NETWORK:
+                s = "FORGET_NETWORK";
+                break;
+            case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
+                s = "SUPPLICANT_STATE_CHANGE_EVENT";
+                break;
+            case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
+                s = "AUTHENTICATION_FAILURE_EVENT";
+                break;
+            case WifiMonitor.SUP_REQUEST_IDENTITY:
+                s = "SUP_REQUEST_IDENTITY";
+                break;
+            case WifiMonitor.NETWORK_CONNECTION_EVENT:
+                s = "NETWORK_CONNECTION_EVENT";
+                break;
+            case WifiMonitor.NETWORK_DISCONNECTION_EVENT:
+                s = "NETWORK_DISCONNECTION_EVENT";
+                break;
+            case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
+                s = "ASSOCIATION_REJECTION_EVENT";
+                break;
+            case WifiMonitor.ANQP_DONE_EVENT:
+                s = "ANQP_DONE_EVENT";
+                break;
+            case WifiMonitor.RX_HS20_ANQP_ICON_EVENT:
+                s = "RX_HS20_ANQP_ICON_EVENT";
+                break;
+            case WifiMonitor.GAS_QUERY_DONE_EVENT:
+                s = "GAS_QUERY_DONE_EVENT";
+                break;
+            case WifiMonitor.HS20_REMEDIATION_EVENT:
+                s = "HS20_REMEDIATION_EVENT";
+                break;
+            case WifiMonitor.GAS_QUERY_START_EVENT:
+                s = "GAS_QUERY_START_EVENT";
+                break;
+            case WifiP2pServiceImpl.GROUP_CREATING_TIMED_OUT:
+                s = "GROUP_CREATING_TIMED_OUT";
+                break;
+            case WifiP2pServiceImpl.P2P_CONNECTION_CHANGED:
+                s = "P2P_CONNECTION_CHANGED";
+                break;
+            case WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST:
+                s = "DISCONNECT_WIFI_REQUEST";
+                break;
+            case WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE:
+                s = "DISCONNECT_WIFI_RESPONSE";
+                break;
+            case WifiP2pServiceImpl.SET_MIRACAST_MODE:
+                s = "SET_MIRACAST_MODE";
+                break;
+            case WifiP2pServiceImpl.BLOCK_DISCOVERY:
+                s = "BLOCK_DISCOVERY";
+                break;
+            case WifiManager.RSSI_PKTCNT_FETCH:
+                s = "RSSI_PKTCNT_FETCH";
+                break;
+            default:
+                s = "what:" + Integer.toString(what);
+                break;
+        }
+        return s;
     }
 
     private void handleScreenStateChanged(boolean screenOn) {
@@ -2934,7 +3025,7 @@ public class ClientModeImpl extends StateMachine {
         // power settings when we control suspend mode optimizations.
         // TODO: Remove this comment when the driver is fixed.
         setSuspendOptimizationsNative(SUSPEND_DUE_TO_DHCP, false);
-        mWifiNative.setPowerSave(mInterfaceName, false);
+        setPowerSave(false);
 
         // Update link layer stats
         getWifiLinkLayerStats();
@@ -3005,7 +3096,7 @@ public class ClientModeImpl extends StateMachine {
     void handlePostDhcpSetup() {
         /* Restore power save and suspend optimizations */
         setSuspendOptimizationsNative(SUSPEND_DUE_TO_DHCP, true);
-        mWifiNative.setPowerSave(mInterfaceName, true);
+        setPowerSave(true);
 
         p2pSendMessage(WifiP2pServiceImpl.BLOCK_DISCOVERY, WifiP2pServiceImpl.DISABLED);
 
@@ -3017,6 +3108,26 @@ public class ClientModeImpl extends StateMachine {
     public String getCapabilities(String capaType) {
 
         return mWifiNative.getCapabilities(mInterfaceName, capaType);
+    }
+
+    /**
+     * Set power save mode
+     *
+     * @param ps true to enable power save (default behavior)
+     *           false to disable power save.
+     * @return true for success, false for failure
+     */
+    public boolean setPowerSave(boolean ps) {
+        if (mInterfaceName != null) {
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "Setting power save for: " + mInterfaceName + " to: " + ps);
+            }
+            mWifiNative.setPowerSave(mInterfaceName, ps);
+        } else {
+            Log.e(TAG, "Failed to setPowerSave, interfaceName is null");
+            return false;
+        }
+        return true;
     }
 
     @VisibleForTesting
@@ -3072,6 +3183,8 @@ public class ClientModeImpl extends StateMachine {
         mWifiConnectivityManager.handleConnectionAttemptEnded(level2FailureCode);
         mNetworkFactory.handleConnectionAttemptEnded(
                 level2FailureCode, getCurrentWifiConfiguration());
+        mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
+                level2FailureCode, getCurrentWifiConfiguration());
         handleConnectionAttemptEndForDiagnostics(level2FailureCode);
     }
 
@@ -3123,6 +3236,7 @@ public class ClientModeImpl extends StateMachine {
             // Tell the framework whether the newly connected network is trusted or untrusted.
             updateCapabilities(c);
         }
+        mWifiScoreCard.noteIpConfiguration(mWifiInfo);
     }
 
     private void handleIPv4Failure() {
@@ -3643,101 +3757,6 @@ public class ClientModeImpl extends StateMachine {
         }
     }
 
-    String smToString(Message message) {
-        return smToString(message.what);
-    }
-
-    String smToString(int what) {
-        String s = sSmToString.get(what);
-        if (s != null) {
-            return s;
-        }
-        switch (what) {
-            case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED:
-                s = "AsyncChannel.CMD_CHANNEL_HALF_CONNECTED";
-                break;
-            case AsyncChannel.CMD_CHANNEL_DISCONNECTED:
-                s = "AsyncChannel.CMD_CHANNEL_DISCONNECTED";
-                break;
-            case WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST:
-                s = "WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST";
-                break;
-            case WifiManager.DISABLE_NETWORK:
-                s = "WifiManager.DISABLE_NETWORK";
-                break;
-            case WifiManager.CONNECT_NETWORK:
-                s = "CONNECT_NETWORK";
-                break;
-            case WifiManager.SAVE_NETWORK:
-                s = "SAVE_NETWORK";
-                break;
-            case WifiManager.FORGET_NETWORK:
-                s = "FORGET_NETWORK";
-                break;
-            case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
-                s = "SUPPLICANT_STATE_CHANGE_EVENT";
-                break;
-            case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
-                s = "AUTHENTICATION_FAILURE_EVENT";
-                break;
-            case WifiMonitor.SUP_REQUEST_IDENTITY:
-                s = "SUP_REQUEST_IDENTITY";
-                break;
-            case WifiMonitor.NETWORK_CONNECTION_EVENT:
-                s = "NETWORK_CONNECTION_EVENT";
-                break;
-            case WifiMonitor.FILS_NETWORK_CONNECTION_EVENT:
-                s = "FILS_NETWORK_CONNECTION_EVENT";
-                break;
-            case WifiMonitor.NETWORK_DISCONNECTION_EVENT:
-                s = "NETWORK_DISCONNECTION_EVENT";
-                break;
-            case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
-                s = "ASSOCIATION_REJECTION_EVENT";
-                break;
-            case WifiMonitor.ANQP_DONE_EVENT:
-                s = "WifiMonitor.ANQP_DONE_EVENT";
-                break;
-            case WifiMonitor.RX_HS20_ANQP_ICON_EVENT:
-                s = "WifiMonitor.RX_HS20_ANQP_ICON_EVENT";
-                break;
-            case WifiMonitor.GAS_QUERY_DONE_EVENT:
-                s = "WifiMonitor.GAS_QUERY_DONE_EVENT";
-                break;
-            case WifiMonitor.HS20_REMEDIATION_EVENT:
-                s = "WifiMonitor.HS20_REMEDIATION_EVENT";
-                break;
-            case WifiMonitor.GAS_QUERY_START_EVENT:
-                s = "WifiMonitor.GAS_QUERY_START_EVENT";
-                break;
-            case WifiP2pServiceImpl.GROUP_CREATING_TIMED_OUT:
-                s = "GROUP_CREATING_TIMED_OUT";
-                break;
-            case WifiP2pServiceImpl.P2P_CONNECTION_CHANGED:
-                s = "P2P_CONNECTION_CHANGED";
-                break;
-            case WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE:
-                s = "P2P.DISCONNECT_WIFI_RESPONSE";
-                break;
-            case WifiP2pServiceImpl.SET_MIRACAST_MODE:
-                s = "P2P.SET_MIRACAST_MODE";
-                break;
-            case WifiP2pServiceImpl.BLOCK_DISCOVERY:
-                s = "P2P.BLOCK_DISCOVERY";
-                break;
-            case WifiManager.RSSI_PKTCNT_FETCH:
-                s = "RSSI_PKTCNT_FETCH";
-                break;
-            case WifiMonitor.DPP_EVENT:
-                s = "WifiMonitor.DPP_EVENT";
-                break;
-            default:
-                s = "what:" + Integer.toString(what);
-                break;
-        }
-        return s;
-    }
-
     /**
      * Helper method to start other services and get state ready for client mode
      */
@@ -3797,7 +3816,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiNative.setSuspendOptimizations(mInterfaceName, mSuspendOptNeedsDisabled == 0
                 && mUserWantsSuspendOpt.get());
 
-        mWifiNative.setPowerSave(mInterfaceName, true);
+        setPowerSave(true);
 
         // Disable wpa_supplicant from auto reconnecting.
         mWifiNative.enableStaAutoReconnect(mInterfaceName, false);
@@ -3850,7 +3869,7 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
-     * Returns Wificonfiguration object correponding to the currently connected network, null if
+     * Returns WifiConfiguration object correponding to the currently connected network, null if
      * not connected.
      */
     public WifiConfiguration getCurrentWifiConfiguration() {
@@ -3925,6 +3944,8 @@ public class ClientModeImpl extends StateMachine {
             // Inform metrics that Wifi is being disabled (Toggled, airplane enabled, etc)
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_DISABLED);
             mWifiMetrics.logStaEvent(StaEvent.TYPE_WIFI_DISABLED);
+            // Inform scorecard that wifi is being disabled
+            mWifiScoreCard.noteWifiDisabled(mWifiInfo);
             // Inform sar manager that wifi is being disabled
             mSarManager.setClientWifiState(WifiManager.WIFI_STATE_DISABLED);
 
@@ -4013,10 +4034,12 @@ public class ClientModeImpl extends StateMachine {
                     reportConnectionAttemptEnd(
                             WifiMetrics.ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE,
                             WifiMetricsProto.ConnectionEvent.HLF_NONE);
-                    mWifiInjector.getWifiLastResortWatchdog()
-                            .noteConnectionFailureAndTriggerIfNeeded(
-                                    getTargetSsid(), mTargetRoamBSSID,
-                                    WifiLastResortWatchdog.FAILURE_CODE_AUTHENTICATION);
+                    if (reasonCode != WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD) {
+                        mWifiInjector.getWifiLastResortWatchdog()
+                                .noteConnectionFailureAndTriggerIfNeeded(
+                                        getTargetSsid(), mTargetRoamBSSID,
+                                        WifiLastResortWatchdog.FAILURE_CODE_AUTHENTICATION);
+                    }
                     break;
                 case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
                     SupplicantState state = handleSupplicantStateChange(message);
@@ -4629,31 +4652,31 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void updateCapabilities(WifiConfiguration config) {
-        if (mNetworkAgent == null) {
+        if (mNetworkAgent == null || config == null) {
             return;
         }
 
         final NetworkCapabilities result = new NetworkCapabilities(mDfltNetworkCapabilities);
 
-        if (mWifiInfo != null && !mWifiInfo.isTrusted()) {
+        if (!mWifiInfo.isTrusted()) {
             result.removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
         } else {
             result.addCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
         }
 
-        if (mWifiInfo != null && !WifiConfiguration.isMetered(config, mWifiInfo)) {
+        if (!WifiConfiguration.isMetered(config, mWifiInfo)) {
             result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
         } else {
             result.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
         }
 
-        if (mWifiInfo != null && mWifiInfo.getRssi() != WifiInfo.INVALID_RSSI) {
+        if (mWifiInfo.getRssi() != WifiInfo.INVALID_RSSI) {
             result.setSignalStrength(mWifiInfo.getRssi());
         } else {
             result.setSignalStrength(NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED);
         }
 
-        if (mWifiInfo != null && !mWifiInfo.getSSID().equals(WifiSsid.NONE)) {
+        if (!mWifiInfo.getSSID().equals(WifiSsid.NONE)) {
             result.setSSID(mWifiInfo.getSSID());
         } else {
             result.setSSID(null);
@@ -4956,16 +4979,16 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 }
                 case CMD_IP_CONFIGURATION_SUCCESSFUL:
-                    handleSuccessfulIpConfiguration();
-                    reportConnectionAttemptEnd(
-                            WifiMetrics.ConnectionEvent.FAILURE_NONE,
-                            WifiMetricsProto.ConnectionEvent.HLF_NONE);
                     if (getCurrentWifiConfiguration() == null) {
                         // The current config may have been removed while we were connecting,
                         // trigger a disconnect to clear up state.
+                        reportConnectionAttemptEnd(
+                                WifiMetrics.ConnectionEvent.FAILURE_NETWORK_DISCONNECTION,
+                                WifiMetricsProto.ConnectionEvent.HLF_NONE);
                         mWifiNative.disconnect(mInterfaceName);
                         transitionTo(mDisconnectingState);
                     } else {
+                        handleSuccessfulIpConfiguration();
                         sendConnectedState();
                         transitionTo(mConnectedState);
                     }
@@ -5032,12 +5055,15 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_RSSI_POLL:
                     if (message.arg1 == mRssiPollToken) {
                         WifiLinkLayerStats stats = getWifiLinkLayerStats();
-                        mWifiDataStall.checkForDataStall(mLastLinkLayerStats, stats);
+                        if (mWifiDataStall.checkForDataStall(mLastLinkLayerStats, stats)) {
+                            mWifiMetrics.addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD);
+                        }
                         mWifiMetrics.incrementWifiLinkLayerUsageStats(stats);
                         mLastLinkLayerStats = stats;
 
                         // Get Info and continue polling
                         fetchRssiLinkSpeedAndFrequencyNative();
+                        mWifiMetrics.updateWifiUsabilityStatsEntries(mWifiInfo, stats);
                         // Send the update score to network agent.
                         mWifiScoreReport.calculateAndReportScore(
                                 mWifiInfo, mNetworkAgent, mWifiMetrics);
@@ -5049,6 +5075,8 @@ public class ClientModeImpl extends StateMachine {
                         sendMessageDelayed(obtainMessage(CMD_RSSI_POLL, mRssiPollToken, 0),
                                 mPollRssiIntervalMsecs);
                         if (mVerboseLoggingEnabled) sendRssiChangeBroadcast(mWifiInfo.getRssi());
+                        mWifiTrafficPoller.notifyOnDataActivity(mWifiInfo.txSuccess,
+                                                                mWifiInfo.rxSuccess);
                     } else {
                         // Polling has completed
                     }
@@ -5442,6 +5470,9 @@ public class ClientModeImpl extends StateMachine {
                 log("Enter ConnectedState  mScreenOn=" + mScreenOn);
             }
 
+            reportConnectionAttemptEnd(
+                    WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                    WifiMetricsProto.ConnectionEvent.HLF_NONE);
             mWifiConnectivityManager.handleConnectionStateChanged(
                     WifiConnectivityManager.WIFI_STATE_CONNECTED);
 

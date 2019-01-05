@@ -21,13 +21,13 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
+import android.location.LocationManager;
 import android.os.RemoteException;
 import android.os.UserManager;
-import android.provider.Settings;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.server.wifi.WifiInjector;
 import com.android.server.wifi.WifiLog;
-import com.android.server.wifi.WifiSettingsStore;
 
 import java.util.List;
 
@@ -41,17 +41,17 @@ public class WifiPermissionsUtil {
     private final Context mContext;
     private final AppOpsManager mAppOps;
     private final UserManager mUserManager;
-    private final WifiSettingsStore mSettingsStore;
+    private final Object mLock = new Object();
+    @GuardedBy("mLock")
+    private LocationManager mLocationManager;
     private WifiLog mLog;
 
     public WifiPermissionsUtil(WifiPermissionsWrapper wifiPermissionsWrapper,
-            Context context, WifiSettingsStore settingsStore, UserManager userManager,
-            WifiInjector wifiInjector) {
+            Context context, UserManager userManager, WifiInjector wifiInjector) {
         mWifiPermissionsWrapper = wifiPermissionsWrapper;
         mContext = context;
         mUserManager = userManager;
         mAppOps = (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE);
-        mSettingsStore = settingsStore;
         mLog = wifiInjector.makeLog(TAG);
     }
 
@@ -166,6 +166,16 @@ public class WifiPermissionsUtil {
     }
 
     /**
+     * Checks that calling process has android.Manifest.permission.LOCATION_HARDWARE.
+     *
+     * @param uid The uid of the package
+     */
+    private boolean checkCallersHardwareLocationPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(Manifest.permission.LOCATION_HARDWARE, uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
      * API to determine if the caller has permissions to get scan results. Throws SecurityException
      * if the caller has no permission.
      * @param pkgName package name of the application requesting access
@@ -174,8 +184,10 @@ public class WifiPermissionsUtil {
     public void enforceCanAccessScanResults(String pkgName, int uid) throws SecurityException {
         mAppOps.checkPackage(uid, pkgName);
 
-        // Apps with NETWORK_SETTINGS & NETWORK_SETUP_WIZARD are granted a bypass.
-        if (checkNetworkSettingsPermission(uid) || checkNetworkSetupWizardPermission(uid)) {
+        // Apps with NETWORK_SETTINGS, NETWORK_SETUP_WIZARD & NETWORK_MANAGED_PROVISIONING
+        // are granted a bypass.
+        if (checkNetworkSettingsPermission(uid) || checkNetworkSetupWizardPermission(uid)
+                || checkNetworkManagedProvisioningPermission(uid)) {
             return;
         }
 
@@ -187,8 +199,8 @@ public class WifiPermissionsUtil {
 
         // Check if the calling Uid has CAN_READ_PEER_MAC_ADDRESS permission.
         boolean canCallingUidAccessLocation = checkCallerHasPeersMacAddressPermission(uid);
-        // LocationAccess by App: caller must have
-        // Coarse Location permission to have access to location information.
+        // LocationAccess by App: caller must have Coarse Location permission to have access to
+        // location information.
         boolean canAppPackageUseLocation = checkCallersLocationPermission(pkgName, uid);
 
         // If neither caller or app has location access, there is no need to check
@@ -204,6 +216,36 @@ public class WifiPermissionsUtil {
         // Otherwise, uid must have INTERACT_ACROSS_USERS_FULL permission.
         if (!isCurrentProfile(uid) && !checkInteractAcrossUsersFull(uid)) {
             throw new SecurityException("UID " + uid + " profile not permitted");
+        }
+    }
+
+    /**
+     * API to determine if the caller has permissions to get scan results. Throws SecurityException
+     * if the caller has no permission.
+     * @param pkgName package name of the application requesting access
+     * @param uid The uid of the package
+     *
+     * Note: This is to be used for checking permissions in the internal WifiScanner API surface
+     * for requests coming from system apps.
+     */
+    public void enforceCanAccessScanResultsForWifiScanner(String pkgName, int uid)
+            throws SecurityException {
+        mAppOps.checkPackage(uid, pkgName);
+
+        // Location mode must be enabled
+        if (!isLocationModeEnabled()) {
+            // Location mode is disabled, scan results cannot be returned
+            throw new SecurityException("Location mode is disabled for the device");
+        }
+        // LocationAccess by App: caller must have fine & hardware Location permission to have
+        // access to location information.
+        if (!checkCallersFineLocationPermission(pkgName, uid)
+                || !checkCallersHardwareLocationPermission(uid)) {
+            throw new SecurityException("UID " + uid + " has no location permission");
+        }
+        // Check if Wifi Scan request is an operation allowed for this App.
+        if (!isScanAllowedbyApps(pkgName, uid)) {
+            throw new SecurityException("UID " + uid + " has no wifi scan permission");
         }
     }
 
@@ -274,9 +316,22 @@ public class WifiPermissionsUtil {
         return mAppOps.noteOp(op, uid, pkgName) == AppOpsManager.MODE_ALLOWED;
     }
 
+
+    private boolean retrieveLocationManagerIfNecessary() {
+        // This is going to be accessed by multiple threads.
+        synchronized (mLock) {
+            if (mLocationManager == null) {
+                mLocationManager =
+                        (LocationManager) mContext.getSystemService(Context.LOCATION_SERVICE);
+            }
+        }
+        return mLocationManager != null;
+    }
+
+    // Retrieves a handle to LocationManager (if not already done) and check if location is enabled.
     private boolean isLocationModeEnabled() {
-        return (mSettingsStore.getLocationModeSetting(mContext)
-                 != Settings.Secure.LOCATION_MODE_OFF);
+        if (!retrieveLocationManagerIfNecessary()) return false;
+        return mLocationManager.isLocationEnabled();
     }
 
     /**
@@ -303,6 +358,15 @@ public class WifiPermissionsUtil {
     public boolean checkNetworkStackPermission(int uid) {
         return mWifiPermissionsWrapper.getUidPermission(
                 android.Manifest.permission.NETWORK_STACK, uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Returns true if the |uid| holds NETWORK_MANAGED_PROVISIONING permission.
+     */
+    public boolean checkNetworkManagedProvisioningPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(
+                android.Manifest.permission.NETWORK_MANAGED_PROVISIONING, uid)
                 == PackageManager.PERMISSION_GRANTED;
     }
 }
