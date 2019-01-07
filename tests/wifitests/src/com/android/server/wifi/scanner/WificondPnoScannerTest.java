@@ -27,7 +27,8 @@ import android.content.Context;
 import android.net.wifi.WifiScanner;
 import android.os.SystemClock;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.internal.R;
 import com.android.server.wifi.Clock;
@@ -93,7 +94,7 @@ public class WificondPnoScannerTest {
 
         WifiNative.PnoEventHandler pnoEventHandler = mock(WifiNative.PnoEventHandler.class);
         WifiNative.PnoSettings pnoSettings = createDummyPnoSettings(false);
-        ScanResults scanResults = createDummyScanResults(false);
+        ScanResults scanResults = createDummyScanResults();
 
         InOrder order = inOrder(pnoEventHandler, mWifiNative);
         // Start PNO scan
@@ -128,7 +129,7 @@ public class WificondPnoScannerTest {
         startSuccessfulPnoScan(null, pnoSettings, null, pnoEventHandler);
         mLooper.dispatchAll();
         InOrder order = inOrder(pnoEventHandler, mWifiNative);
-        ScanResults scanResults = createDummyScanResults(false);
+        ScanResults scanResults = createDummyScanResults();
         expectSuccessfulHwDisconnectedPnoScan(order, pnoSettings, pnoEventHandler, scanResults);
         verifyNoMoreInteractions(pnoEventHandler);
     }
@@ -167,9 +168,9 @@ public class WificondPnoScannerTest {
         return settings;
     }
 
-    private ScanResults createDummyScanResults(boolean allChannelsScanned) {
-        return ScanResults.create(0, allChannelsScanned, 2400, 2450, 2450, 2400, 2450, 2450, 2400,
-                2450, 2450);
+    private ScanResults createDummyScanResults() {
+        return ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED,  2400, 2450, 2450, 2400,
+                2450, 2450, 2400, 2450, 2450);
     }
 
     private void startSuccessfulPnoScan(WifiNative.ScanSettings scanSettings,

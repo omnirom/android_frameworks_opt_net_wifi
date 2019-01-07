@@ -15,6 +15,7 @@
  */
 package com.android.server.wifi;
 
+import static android.net.wifi.WifiManager.WIFI_FEATURE_DPP;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OWE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SAE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SUITE_B;
@@ -50,11 +51,11 @@ import android.hardware.wifi.supplicant.V1_0.ISupplicantIface;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIface;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback.BssidChangeReason;
+import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetwork;
 import android.hardware.wifi.supplicant.V1_0.IfaceType;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
 import android.hardware.wifi.supplicant.V1_0.WpsConfigMethods;
-import android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
 import android.net.IpConfiguration;
@@ -64,9 +65,10 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
 import android.os.IHwBinder;
 import android.os.RemoteException;
-import android.support.test.filters.SmallTest;
 import android.text.TextUtils;
 import android.util.SparseArray;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.hotspot2.AnqpEvent;
 import com.android.server.wifi.hotspot2.IconEvent;
@@ -134,6 +136,8 @@ public class SupplicantStaIfaceHalTest {
     ISupplicantStaIfaceCallback mISupplicantStaIfaceCallback;
     android.hardware.wifi.supplicant.V1_1.ISupplicantStaIfaceCallback
             mISupplicantStaIfaceCallbackV1_1;
+    android.hardware.wifi.supplicant.V1_2.ISupplicantStaIfaceCallback
+            mISupplicantStaIfaceCallbackV1_2;
     private SupplicantStaIfaceHal mDut;
     private ArgumentCaptor<IHwBinder.DeathRecipient> mServiceManagerDeathCaptor =
             ArgumentCaptor.forClass(IHwBinder.DeathRecipient.class);
@@ -1723,7 +1727,8 @@ public class SupplicantStaIfaceHalTest {
 
         executeAndValidateInitializationSequenceV1_2();
 
-        doAnswer(new GetKeyMgmtCapabilitiesAnswer(ISupplicantStaNetwork.KeyMgmtMask.SAE))
+        doAnswer(new GetKeyMgmtCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_2
+                .ISupplicantStaNetwork.KeyMgmtMask.SAE))
                 .when(mISupplicantStaIfaceMockV1_2).getKeyMgmtCapabilities(any(
                 android.hardware.wifi.supplicant.V1_2.ISupplicantStaIface
                         .getKeyMgmtCapabilitiesCallback.class));
@@ -1747,7 +1752,8 @@ public class SupplicantStaIfaceHalTest {
 
         executeAndValidateInitializationSequenceV1_2();
 
-        doAnswer(new GetKeyMgmtCapabilitiesAnswer(ISupplicantStaNetwork.KeyMgmtMask.SUITE_B_192))
+        doAnswer(new GetKeyMgmtCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_2
+                .ISupplicantStaNetwork.KeyMgmtMask.SUITE_B_192))
                 .when(mISupplicantStaIfaceMockV1_2).getKeyMgmtCapabilities(any(
                 android.hardware.wifi.supplicant.V1_2.ISupplicantStaIface
                         .getKeyMgmtCapabilitiesCallback.class));
@@ -1772,7 +1778,8 @@ public class SupplicantStaIfaceHalTest {
 
         executeAndValidateInitializationSequenceV1_2();
 
-        doAnswer(new GetKeyMgmtCapabilitiesAnswer(ISupplicantStaNetwork.KeyMgmtMask.OWE))
+        doAnswer(new GetKeyMgmtCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_2
+                .ISupplicantStaNetwork.KeyMgmtMask.OWE))
                 .when(mISupplicantStaIfaceMockV1_2).getKeyMgmtCapabilities(any(
                 android.hardware.wifi.supplicant.V1_2.ISupplicantStaIface
                         .getKeyMgmtCapabilitiesCallback.class));
@@ -1796,14 +1803,40 @@ public class SupplicantStaIfaceHalTest {
 
         executeAndValidateInitializationSequenceV1_2();
 
-        doAnswer(new GetKeyMgmtCapabilitiesAnswer(ISupplicantStaNetwork.KeyMgmtMask.OWE
-                | ISupplicantStaNetwork.KeyMgmtMask.SAE))
+        doAnswer(new GetKeyMgmtCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_2
+                .ISupplicantStaNetwork.KeyMgmtMask.OWE
+                | android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork.KeyMgmtMask.SAE))
                 .when(mISupplicantStaIfaceMockV1_2).getKeyMgmtCapabilities(any(
                 android.hardware.wifi.supplicant.V1_2.ISupplicantStaIface
                         .getKeyMgmtCapabilitiesCallback.class));
 
         assertEquals(WIFI_FEATURE_OWE | WIFI_FEATURE_WPA3_SAE,
                 mDut.getAdvancedKeyMgmtCapabilities(WLAN0_IFACE_NAME));
+    }
+
+    /**
+     * Test Easy Connect (DPP) key may management support
+     */
+    @Test
+    public void testGetKeyMgmtCapabilitiesDpp() throws Exception {
+        when(mServiceManagerMock.getTransport(eq(android.hardware.wifi.supplicant.V1_2.ISupplicant
+                .kInterfaceName), anyString()))
+                .thenReturn(IServiceManager.Transport.HWBINDER);
+        mISupplicantMockV1_2 = mock(android.hardware.wifi.supplicant.V1_2.ISupplicant.class);
+        when(mServiceManagerMock.getTransport(eq(android.hardware.wifi.supplicant.V1_1.ISupplicant
+                .kInterfaceName), anyString()))
+                .thenReturn(IServiceManager.Transport.HWBINDER);
+        mISupplicantMockV1_1 = mock(android.hardware.wifi.supplicant.V1_1.ISupplicant.class);
+
+        executeAndValidateInitializationSequenceV1_2();
+
+        doAnswer(new GetKeyMgmtCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_2
+                .ISupplicantStaNetwork.KeyMgmtMask.DPP))
+                .when(mISupplicantStaIfaceMockV1_2).getKeyMgmtCapabilities(any(
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaIface
+                        .getKeyMgmtCapabilitiesCallback.class));
+
+        assertEquals(WIFI_FEATURE_DPP, mDut.getAdvancedKeyMgmtCapabilities(WLAN0_IFACE_NAME));
     }
 
     private WifiConfiguration createTestWifiConfiguration() {
@@ -2011,6 +2044,18 @@ public class SupplicantStaIfaceHalTest {
                         any(android.hardware.wifi.supplicant.V1_1.ISupplicantStaIfaceCallback
                                 .class));
 
+        doAnswer(new MockAnswerUtil.AnswerWithArguments() {
+            public SupplicantStatus answer(
+                    android.hardware.wifi.supplicant.V1_2.ISupplicantStaIfaceCallback cb)
+                    throws RemoteException {
+                mISupplicantStaIfaceCallbackV1_2 = cb;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaIfaceMockV1_2)
+                .registerCallback_1_2(
+                        any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaIfaceCallback
+                                .class));
+
         mInOrder = inOrder(mServiceManagerMock, mISupplicantMock, mISupplicantMockV1_1,
                 mISupplicantStaIfaceMockV1_2, mWifiMonitor);
         // Initialize SupplicantStaIfaceHal, should call serviceManager.registerForNotifications
@@ -2034,8 +2079,8 @@ public class SupplicantStaIfaceHalTest {
                                 .addInterfaceCallback.class));
 
         mInOrder.verify(mISupplicantStaIfaceMockV1_2)
-                .registerCallback_1_1(
-                        any(android.hardware.wifi.supplicant.V1_1.ISupplicantStaIfaceCallback
+                .registerCallback_1_2(
+                        any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaIfaceCallback
                                 .class));
 
         // Ensure we don't try to use the listInterfaces method from 1.0 version.

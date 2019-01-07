@@ -32,19 +32,18 @@ import static org.mockito.Mockito.when;
 import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.content.Context;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantNetwork;
+import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback;
-import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback
-        .NetworkRequestEapSimGsmAuthParams;
-import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback
-        .NetworkRequestEapSimUmtsAuthParams;
+import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback.NetworkRequestEapSimGsmAuthParams;
+import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetworkCallback.NetworkRequestEapSimUmtsAuthParams;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
-import android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.os.RemoteException;
-import android.support.test.filters.SmallTest;
 import android.text.TextUtils;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.internal.R;
 import com.android.server.wifi.util.NativeUtil;
@@ -155,7 +154,8 @@ public class SupplicantStaNetworkHalTest {
         testWifiConfigurationSaveLoad(config);
         verify(mISupplicantStaNetworkV12).setSaePassword(any(String.class));
         verify(mISupplicantStaNetworkV12, never())
-                .getSaePassword(any(ISupplicantStaNetwork.getSaePasswordCallback.class));
+                .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .getSaePasswordCallback.class));
         verify(mISupplicantStaNetworkV12, never())
                 .getPskPassphrase(any(ISupplicantStaNetwork.getPskPassphraseCallback.class));
         verify(mISupplicantStaNetworkV12, never()).setPsk(any(byte[].class));
@@ -281,7 +281,8 @@ public class SupplicantStaNetworkHalTest {
 
         verify(mISupplicantStaNetworkV12, never()).setSaePassword(any(String.class));
         verify(mISupplicantStaNetworkV12, never())
-                .getSaePassword(any(ISupplicantStaNetwork.getSaePasswordCallback.class));
+                .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .getSaePasswordCallback.class));
         verify(mISupplicantStaNetworkV12, never())
                 .getPskPassphrase(any(ISupplicantStaNetwork.getPskPassphraseCallback.class));
         verify(mISupplicantStaNetworkV12, never()).setPsk(any(byte[].class));
@@ -308,7 +309,8 @@ public class SupplicantStaNetworkHalTest {
 
         verify(mISupplicantStaNetworkV12, never()).setSaePassword(any(String.class));
         verify(mISupplicantStaNetworkV12, never())
-                .getSaePassword(any(ISupplicantStaNetwork.getSaePasswordCallback.class));
+                .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .getSaePasswordCallback.class));
         verify(mISupplicantStaNetworkV12, never())
                 .getPskPassphrase(any(ISupplicantStaNetwork.getPskPassphraseCallback.class));
         verify(mISupplicantStaNetworkV12, never()).setPsk(any(byte[].class));
@@ -1028,7 +1030,8 @@ public class SupplicantStaNetworkHalTest {
                 cb.onValues(mStatusSuccess, mSupplicantVariables.pskPassphrase);
             }
         }).when(mISupplicantStaNetworkV12)
-                .getSaePassword(any(ISupplicantStaNetwork.getSaePasswordCallback.class));
+                .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .getSaePasswordCallback.class));
 
         /** PSK passphrase */
         doAnswer(new AnswerWithArguments() {
@@ -1115,7 +1118,8 @@ public class SupplicantStaNetworkHalTest {
                 cb.onValues(mStatusSuccess, mSupplicantVariables.keyMgmtMask);
             }
         }).when(mISupplicantStaNetworkV12)
-                .getKeyMgmt_1_2(any(ISupplicantStaNetwork.getKeyMgmt_1_2Callback.class));
+                .getKeyMgmt_1_2(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .getKeyMgmt_1_2Callback.class));
 
         /** allowedProtocols */
         doAnswer(new AnswerWithArguments() {
@@ -1173,7 +1177,8 @@ public class SupplicantStaNetworkHalTest {
                 cb.onValues(mStatusSuccess, mSupplicantVariables.groupCipherMask);
             }
         }).when(mISupplicantStaNetworkV12)
-                .getGroupCipher_1_2(any(ISupplicantStaNetwork.getGroupCipher_1_2Callback.class));
+                .getGroupCipher_1_2(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .getGroupCipher_1_2Callback.class));
 
         /** allowedPairwiseCiphers */
         doAnswer(new AnswerWithArguments() {
@@ -1203,8 +1208,8 @@ public class SupplicantStaNetworkHalTest {
                 cb.onValues(mStatusSuccess, mSupplicantVariables.pairwiseCipherMask);
             }
         }).when(mISupplicantStaNetworkV12)
-                .getPairwiseCipher_1_2(any(ISupplicantStaNetwork
-                        .getPairwiseCipher_1_2Callback.class));
+                .getPairwiseCipher_1_2(any(android.hardware.wifi.supplicant.V1_2
+                        .ISupplicantStaNetwork.getPairwiseCipher_1_2Callback.class));
 
         /** metadata: idstr */
         doAnswer(new AnswerWithArguments() {

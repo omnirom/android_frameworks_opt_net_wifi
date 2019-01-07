@@ -40,6 +40,7 @@ import android.util.ArrayMap;
 import android.util.LocalLog;
 import android.util.Log;
 import android.util.Pair;
+import android.util.StatsLog;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
@@ -132,7 +133,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         return (msgWhat == WifiScanner.CMD_ENABLE
                 || msgWhat == WifiScanner.CMD_DISABLE
                 || msgWhat == WifiScanner.CMD_START_PNO_SCAN
-                || msgWhat == WifiScanner.CMD_STOP_PNO_SCAN);
+                || msgWhat == WifiScanner.CMD_STOP_PNO_SCAN
+                || msgWhat == WifiScanner.CMD_REGISTER_SCAN_LISTENER);
     }
 
     // For non-privileged requests, retrieve the bundled package name for app-op & permission
@@ -713,6 +715,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 } catch (RemoteException e) {
                     loge(e.toString());
                 }
+                StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
+                        StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__ON);
             }
 
             @Override
@@ -723,6 +727,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 } catch (RemoteException e) {
                     loge(e.toString());
                 }
+                StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
+                        StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__OFF);
 
                 // if any scans are still active (never got results available then indicate failure)
                 mWifiMetrics.incrementScanReturnEntry(
@@ -1021,7 +1027,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 entry.reportEvent(WifiScanner.CMD_SCAN_RESULT, 0, parcelableAllResults);
             }
 
-            if (results.isAllChannelsScanned()) {
+            // Cache full band (with DFS or not) scan results.
+            if (results.getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
+                    || results.getBandScanned() == WifiScanner.WIFI_BAND_BOTH) {
                 mCachedScanResults.clear();
                 mCachedScanResults.addAll(Arrays.asList(results.getResults()));
             }

@@ -16,15 +16,19 @@
 
 package com.android.server.wifi;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.WorkSource;
+import android.os.WorkSource.WorkChain;
 import android.util.Slog;
+import android.util.SparseArray;
 
 import com.android.internal.app.IBatteryStats;
+import com.android.server.wifi.util.WifiAsyncChannel;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -35,32 +39,73 @@ import java.util.List;
  */
 public class WifiLockManager {
     private static final String TAG = "WifiLockManager";
+
+    private static final int LOW_LATENCY_SUPPORT_UNDEFINED = -1;
+    private static final int LOW_LATENCY_NOT_SUPPORTED     =  0;
+    private static final int LOW_LATENCY_SUPPORTED         =  1;
+
+    private int mLatencyModeSupport = LOW_LATENCY_SUPPORT_UNDEFINED;
+
     private boolean mVerboseLoggingEnabled = false;
 
     private final Context mContext;
     private final IBatteryStats mBatteryStats;
+    private final FrameworkFacade mFrameworkFacade;
     private final ClientModeImpl mClientModeImpl;
+    private final ActivityManager mActivityManager;
+    private final WifiAsyncChannel mChannel;
 
     private final List<WifiLock> mWifiLocks = new ArrayList<>();
+    // map UIDs to their corresponding records (for low-latency locks)
+    private final SparseArray<UidRec> mLowLatencyUidWatchList = new SparseArray<>();
     private int mCurrentOpMode;
+    private boolean mScreenOn = false;
 
     // For shell command support
     private boolean mForceHiPerfMode = false;
+    private boolean mForceLowLatencyMode = false;
 
     // some wifi lock statistics
     private int mFullHighPerfLocksAcquired;
     private int mFullHighPerfLocksReleased;
-    private int mFullLocksAcquired;
-    private int mFullLocksReleased;
-    private int mScanLocksAcquired;
-    private int mScanLocksReleased;
+    private int mFullLowLatencyLocksAcquired;
+    private int mFullLowLatencyLocksReleased;
 
     WifiLockManager(Context context, IBatteryStats batteryStats,
-            ClientModeImpl clientModeImpl) {
+            ClientModeImpl clientModeImpl, FrameworkFacade frameworkFacade) {
         mContext = context;
         mBatteryStats = batteryStats;
         mClientModeImpl = clientModeImpl;
+        mFrameworkFacade = frameworkFacade;
+        mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
+        mChannel = mFrameworkFacade.makeWifiAsyncChannel(TAG);
         mCurrentOpMode = WifiManager.WIFI_MODE_NO_LOCKS_HELD;
+
+        // Register for UID fg/bg transitions
+        registerUidImportanceTransitions();
+    }
+
+    // Detect UIDs going foreground/background
+    private void registerUidImportanceTransitions() {
+        mActivityManager.addOnUidImportanceListener(new ActivityManager.OnUidImportanceListener() {
+            @Override
+            public void onUidImportance(final int uid, final int importance) {
+                UidRec uidRec = mLowLatencyUidWatchList.get(uid);
+                if (uidRec == null) {
+                    // Not a uid in the watch list
+                    return;
+                }
+
+                boolean newModeIsFg =
+                        importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+                if (uidRec.mIsFg == newModeIsFg) {
+                    return; // already at correct state
+                }
+
+                uidRec.mIsFg = newModeIsFg;
+                updateOpMode();
+            }
+        }, ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE);
     }
 
     /**
@@ -114,19 +159,20 @@ public class WifiLockManager {
             return WifiManager.WIFI_MODE_FULL_HIGH_PERF;
         }
 
-        if (mWifiLocks.isEmpty()) {
-            return WifiManager.WIFI_MODE_NO_LOCKS_HELD;
+        // Check if mode is forced to low-latency
+        if (mForceLowLatencyMode) {
+            return WifiManager.WIFI_MODE_FULL_LOW_LATENCY;
+        }
+
+        if (mScreenOn && countFgLowLatencyUids() > 0) {
+            return WifiManager.WIFI_MODE_FULL_LOW_LATENCY;
         }
 
         if (mFullHighPerfLocksAcquired > mFullHighPerfLocksReleased) {
             return WifiManager.WIFI_MODE_FULL_HIGH_PERF;
         }
 
-        if (mFullLocksAcquired > mFullLocksReleased) {
-            return WifiManager.WIFI_MODE_FULL;
-        }
-
-        return WifiManager.WIFI_MODE_SCAN_ONLY;
+        return WifiManager.WIFI_MODE_NO_LOCKS_HELD;
     }
 
     /**
@@ -177,12 +223,18 @@ public class WifiLockManager {
             // "nested" acquire / release pairs.
             mBatteryStats.noteFullWifiLockAcquiredFromSource(newWorkSource);
             mBatteryStats.noteFullWifiLockReleasedFromSource(wl.mWorkSource);
-
-            wl.mWorkSource = newWorkSource;
         } catch (RemoteException e) {
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
+
+        if (wl.mMode == WifiManager.WIFI_MODE_FULL_LOW_LATENCY) {
+            addWsToLlWatchList(newWorkSource);
+            removeWsFromLlWatchList(wl.mWorkSource);
+            updateOpMode();
+        }
+
+        wl.mWorkSource = newWorkSource;
     }
 
     /**
@@ -193,6 +245,7 @@ public class WifiLockManager {
      */
     public boolean forceHiPerfMode(boolean isEnabled) {
         mForceHiPerfMode = isEnabled;
+        mForceLowLatencyMode = false;
         if (!updateOpMode()) {
             Slog.e(TAG, "Failed to force hi-perf mode, returning to normal mode");
             mForceHiPerfMode = false;
@@ -201,13 +254,116 @@ public class WifiLockManager {
         return true;
     }
 
-    private static boolean isValidLockMode(int lockMode) {
-        if (lockMode != WifiManager.WIFI_MODE_FULL
-                && lockMode != WifiManager.WIFI_MODE_SCAN_ONLY
-                && lockMode != WifiManager.WIFI_MODE_FULL_HIGH_PERF) {
+    /**
+     * Method Used for shell command support
+     *
+     * @param isEnabled True to force low-latency mode, false to leave it up to acquired wifiLocks.
+     * @return True for success, false for failure (failure turns forcing mode off)
+     */
+    public boolean forceLowLatencyMode(boolean isEnabled) {
+        mForceLowLatencyMode = isEnabled;
+        mForceHiPerfMode = false;
+        if (!updateOpMode()) {
+            Slog.e(TAG, "Failed to force low-latency mode, returning to normal mode");
+            mForceLowLatencyMode = false;
             return false;
         }
         return true;
+    }
+
+    /**
+     * Handler for screen state (on/off) changes
+     */
+    public void handleScreenStateChanged(boolean screenOn) {
+        if (mVerboseLoggingEnabled) {
+            Slog.d(TAG, "handleScreenStateChanged: screenOn = " + screenOn);
+        }
+
+        mScreenOn = screenOn;
+
+        // Update the running mode
+        updateOpMode();
+    }
+
+    private static boolean isValidLockMode(int lockMode) {
+        if (lockMode != WifiManager.WIFI_MODE_FULL
+                && lockMode != WifiManager.WIFI_MODE_SCAN_ONLY
+                && lockMode != WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                && lockMode != WifiManager.WIFI_MODE_FULL_LOW_LATENCY) {
+            return false;
+        }
+        return true;
+    }
+
+    private void addUidToLlWatchList(int uid) {
+        UidRec uidRec = mLowLatencyUidWatchList.get(uid);
+        if (uidRec != null) {
+            uidRec.mLockCount++;
+        } else {
+            uidRec = new UidRec(uid);
+            uidRec.mLockCount = 1;
+            mLowLatencyUidWatchList.put(uid, uidRec);
+
+            // Now check if the uid is running in foreground
+            try {
+                if (mFrameworkFacade.isAppForeground(uid)) {
+                    uidRec.mIsFg = true;
+                }
+            } catch (RemoteException e) {
+                Slog.e(TAG, "RemoteException during isAppForeground");
+            }
+        }
+    }
+
+    private void removeUidFromLlWatchList(int uid) {
+        UidRec uidRec = mLowLatencyUidWatchList.get(uid);
+        if (uidRec == null) {
+            Slog.e(TAG, "Failed to find uid in low-latency watch list");
+            return;
+        }
+
+        if (uidRec.mLockCount > 0) {
+            uidRec.mLockCount--;
+        } else {
+            Slog.e(TAG, "Error, uid record conatains no locks");
+        }
+        if (uidRec.mLockCount == 0) {
+            mLowLatencyUidWatchList.remove(uid);
+        }
+    }
+
+    private void addWsToLlWatchList(WorkSource ws) {
+        int wsSize = ws.size();
+        for (int i = 0; i < wsSize; i++) {
+            final int uid = ws.get(i);
+            addUidToLlWatchList(uid);
+        }
+
+        final List<WorkChain> workChains = ws.getWorkChains();
+        if (workChains != null) {
+            for (int i = 0; i < workChains.size(); ++i) {
+                final WorkChain workChain = workChains.get(i);
+                final int uid = workChain.getAttributionUid();
+                addUidToLlWatchList(uid);
+            }
+        }
+    }
+
+    private void removeWsFromLlWatchList(WorkSource ws) {
+        int wsSize = ws.size();
+        for (int i = 0; i < wsSize; i++) {
+            final int uid = ws.get(i);
+            removeUidFromLlWatchList(uid);
+        }
+
+        final List<WorkChain> workChains = ws.getWorkChains();
+        if (workChains != null) {
+            for (int i = 0; i < workChains.size(); ++i) {
+                final WorkChain workChain = workChains.get(i);
+                final int uid = workChain.getAttributionUid();
+                removeUidFromLlWatchList(uid);
+            }
+        }
     }
 
     private synchronized boolean addLock(WifiLock lock) {
@@ -229,14 +385,15 @@ public class WifiLockManager {
         try {
             mBatteryStats.noteFullWifiLockAcquiredFromSource(lock.mWorkSource);
             switch(lock.mMode) {
-                case WifiManager.WIFI_MODE_FULL:
-                    ++mFullLocksAcquired;
-                    break;
                 case WifiManager.WIFI_MODE_FULL_HIGH_PERF:
                     ++mFullHighPerfLocksAcquired;
                     break;
-                case WifiManager.WIFI_MODE_SCAN_ONLY:
-                    ++mScanLocksAcquired;
+                case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
+                    addWsToLlWatchList(lock.getWorkSource());
+                    ++mFullLowLatencyLocksAcquired;
+                    break;
+                default:
+                    // Do nothing
                     break;
             }
             lockAdded = true;
@@ -274,14 +431,15 @@ public class WifiLockManager {
         try {
             mBatteryStats.noteFullWifiLockReleasedFromSource(wifiLock.mWorkSource);
             switch(wifiLock.mMode) {
-                case WifiManager.WIFI_MODE_FULL:
-                    ++mFullLocksReleased;
-                    break;
                 case WifiManager.WIFI_MODE_FULL_HIGH_PERF:
                     ++mFullHighPerfLocksReleased;
                     break;
-                case WifiManager.WIFI_MODE_SCAN_ONLY:
-                    ++mScanLocksReleased;
+                case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
+                    removeWsFromLlWatchList(wifiLock.getWorkSource());
+                    ++mFullLowLatencyLocksReleased;
+                    break;
+                default:
+                    // Do nothing
                     break;
             }
 
@@ -295,7 +453,7 @@ public class WifiLockManager {
     }
 
     private synchronized boolean updateOpMode() {
-        int newLockMode = getStrongestLockMode();
+        final int newLockMode = getStrongestLockMode();
 
         if (newLockMode == mCurrentOpMode) {
             // No action is needed
@@ -315,16 +473,21 @@ public class WifiLockManager {
                 }
                 break;
 
+            case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
+                if (!setLowLatencyMode(false)) {
+                    Slog.e(TAG, "Failed to reset the OpMode from low-latency to Normal");
+                    return false;
+                }
+                break;
+
             case WifiManager.WIFI_MODE_NO_LOCKS_HELD:
-            case WifiManager.WIFI_MODE_FULL:
-            case WifiManager.WIFI_MODE_SCAN_ONLY:
             default:
                 // No action
                 break;
         }
 
         // Set the current mode, before we attempt to set the new mode
-        mCurrentOpMode = WifiManager.WIFI_MODE_FULL;
+        mCurrentOpMode = WifiManager.WIFI_MODE_NO_LOCKS_HELD;
 
         // Now switch to the new opMode
         switch (newLockMode) {
@@ -335,9 +498,14 @@ public class WifiLockManager {
                 }
                 break;
 
+            case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
+                if (!setLowLatencyMode(true)) {
+                    Slog.e(TAG, "Failed to set the OpMode to low-latency");
+                    return false;
+                }
+                break;
+
             case WifiManager.WIFI_MODE_NO_LOCKS_HELD:
-            case WifiManager.WIFI_MODE_FULL:
-            case WifiManager.WIFI_MODE_SCAN_ONLY:
                 // No action
                 break;
 
@@ -352,6 +520,40 @@ public class WifiLockManager {
         return true;
     }
 
+    private int getLowLatencyModeSupport() {
+        if (mLatencyModeSupport == LOW_LATENCY_SUPPORT_UNDEFINED) {
+            int supportedFeatures = mClientModeImpl.syncGetSupportedFeatures(mChannel);
+            if (supportedFeatures != 0) {
+                if ((supportedFeatures & WifiManager.WIFI_FEATURE_LOW_LATENCY) != 0) {
+                    mLatencyModeSupport = LOW_LATENCY_SUPPORTED;
+                } else {
+                    mLatencyModeSupport = LOW_LATENCY_NOT_SUPPORTED;
+                }
+            }
+        }
+
+        return mLatencyModeSupport;
+    }
+
+    private boolean setLowLatencyMode(boolean enabled) {
+        int lowLatencySupport = getLowLatencyModeSupport();
+
+        if (lowLatencySupport == LOW_LATENCY_SUPPORTED) {
+            return mClientModeImpl.setLowLatencyMode(enabled);
+        } else if (lowLatencySupport == LOW_LATENCY_NOT_SUPPORTED) {
+            // Since low-latency mode is not supported, use power save instead
+            // Note: low-latency mode enabled ==> power-save disabled
+            if (mVerboseLoggingEnabled) {
+                Slog.d(TAG, "low-latency is not supported, using power-save instead");
+            }
+
+            return mClientModeImpl.setPowerSave(!enabled);
+        } else {
+            // Support undefined, no need to attempt either functions
+            return false;
+        }
+    }
+
     private synchronized WifiLock findLockByBinder(IBinder binder) {
         for (WifiLock lock : mWifiLocks) {
             if (lock.getBinder() == binder) {
@@ -361,13 +563,26 @@ public class WifiLockManager {
         return null;
     }
 
+    private int countFgLowLatencyUids() {
+        int uidCount = 0;
+        int listSize = mLowLatencyUidWatchList.size();
+        for (int idx = 0; idx < listSize; idx++) {
+            UidRec uidRec = mLowLatencyUidWatchList.valueAt(idx);
+            if (uidRec.mIsFg) {
+                uidCount++;
+            }
+        }
+        return uidCount;
+    }
+
     protected void dump(PrintWriter pw) {
-        pw.println("Locks acquired: " + mFullLocksAcquired + " full, "
+        pw.println("Locks acquired: "
                 + mFullHighPerfLocksAcquired + " full high perf, "
-                + mScanLocksAcquired + " scan");
-        pw.println("Locks released: " + mFullLocksReleased + " full, "
+                + mFullLowLatencyLocksAcquired + " full low latency");
+        pw.println("Locks released: "
                 + mFullHighPerfLocksReleased + " full high perf, "
-                + mScanLocksReleased + " scan");
+                + mFullLowLatencyLocksReleased + " full low latency");
+
         pw.println();
         pw.println("Locks held:");
         for (WifiLock lock : mWifiLocks) {
@@ -427,6 +642,18 @@ public class WifiLockManager {
         public String toString() {
             return "WifiLock{" + this.mTag + " type=" + this.mMode + " uid=" + mUid
                     + " workSource=" + mWorkSource + "}";
+        }
+    }
+
+    private class UidRec {
+        final int mUid;
+        // Count of locks owned or co-owned by this UID
+        int mLockCount;
+        // Is this UID running in foreground
+        boolean mIsFg;
+
+        UidRec(int uid) {
+            mUid = uid;
         }
     }
 }

@@ -56,8 +56,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.RemoteException;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
 import android.telephony.TelephonyManager;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.dx.mockito.inline.extended.ExtendedMockito;
 import com.android.org.conscrypt.TrustManagerImpl;
@@ -488,7 +489,8 @@ public class PasspointProvisionerTest {
             }
         }).when(mPasspointManager).getANQPElements(any(ScanResult.class));
         OsuProviderInfo info = OsuProviderInfoTestUtil.TEST_OSU_PROVIDER_INFO;
-        mOsuProvider = new OsuProvider(null, info.getFriendlyName(), info.getServiceDescription(),
+        mOsuProvider = new OsuProvider(null, info.getFriendlyNames(),
+                info.getServiceDescription(),
                 info.getServerUri(),
                 info.getNetworkAccessIdentifier(), info.getMethodList(), null);
 

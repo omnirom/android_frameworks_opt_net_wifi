@@ -25,7 +25,8 @@ import static org.mockito.Mockito.*;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.net.wifi.WifiScanner;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.ScanResults;
 import com.android.server.wifi.WifiMonitor;
@@ -117,7 +118,7 @@ public class WificondScannerTest extends BaseWifiScannerImplTest {
         doSuccessfulSingleScanTest(settings,
                 expectedBandScanFreqs(WifiScanner.WIFI_BAND_24_GHZ),
                 new HashSet<String>(),
-                ScanResults.create(0, isAllChannelsScanned(WifiScanner.WIFI_BAND_24_GHZ),
+                ScanResults.create(0, WifiScanner.WIFI_BAND_24_GHZ,
                         2400, 2450, 2450, 2400, 2450, 2450, 2400, 2450, 2450), false);
 
         mWifiMonitor.sendMessage(IFACE_NAME, WifiMonitor.SCAN_RESULTS_EVENT);

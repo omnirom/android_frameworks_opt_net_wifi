@@ -33,7 +33,8 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.os.test.TestLooper;
 import android.provider.Settings;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.util.ScanResultUtil;
 
@@ -108,7 +109,7 @@ public class WakeupControllerTest {
         scanResults[0] = mTestScanResult;
         mTestScanDatas = new WifiScanner.ScanData[1];
         mTestScanDatas[0] = new WifiScanner.ScanData(0 /* id */, 0 /* flags */,
-                0 /* bucketsScanned */, true /* allChannelsScanned */, scanResults);
+                0 /* bucketsScanned */, WifiScanner.WIFI_BAND_BOTH /* bandScanned */, scanResults);
     }
 
     /** Initializes the wakeupcontroller in the given {@code enabled} state. */

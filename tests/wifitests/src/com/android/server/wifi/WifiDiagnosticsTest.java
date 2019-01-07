@@ -36,7 +36,8 @@ import static org.mockito.Mockito.when;
 
 import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.content.Context;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.internal.R;
 import com.android.server.am.ActivityManagerService;
@@ -69,6 +70,7 @@ public class WifiDiagnosticsTest {
     @Mock Process mExternalProcess;
     @Mock ActivityManagerService mActivityManagerService;
     @Mock WifiMetrics mWifiMetrics;
+    @Mock Clock mClock;
     WifiDiagnostics mWifiDiagnostics;
 
     private static final String FAKE_RING_BUFFER_NAME = "fake-ring-buffer";
@@ -122,7 +124,7 @@ public class WifiDiagnosticsTest {
         when(mWifiInjector.getWifiMetrics()).thenReturn(mWifiMetrics);
 
         mWifiDiagnostics = new WifiDiagnostics(
-                mContext, mWifiInjector, mWifiNative, mBuildProperties, mLastMileLogger);
+                mContext, mWifiInjector, mWifiNative, mBuildProperties, mLastMileLogger, mClock);
         mWifiNative.enableVerboseLogging(0);
     }
 
@@ -852,5 +854,14 @@ public class WifiDiagnosticsTest {
         when(mBuildProperties.isUserBuild()).thenReturn(true);
         mWifiDiagnostics.takeBugReport("", "");
         verify(mActivityManagerService, never()).requestWifiBugReport(anyString(), anyString());
+    }
+
+    /** Verifies that we flush HAL ringbuffer when capture bugreport. */
+    @Test
+    public void captureBugReportFlushRingBufferData() {
+        when(mBuildProperties.isUserBuild()).thenReturn(false);
+        when(mWifiNative.flushRingBufferData()).thenReturn(true);
+        mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_NONE);
+        verify(mWifiNative).flushRingBufferData();
     }
 }

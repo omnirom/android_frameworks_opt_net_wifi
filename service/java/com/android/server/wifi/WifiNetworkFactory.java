@@ -23,6 +23,7 @@ import android.annotation.NonNull;
 import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.content.Context;
+import android.content.Intent;
 import android.net.MacAddress;
 import android.net.NetworkCapabilities;
 import android.net.NetworkFactory;
@@ -42,6 +43,7 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.os.WorkSource;
 import android.text.TextUtils;
 import android.util.Log;
@@ -70,6 +72,10 @@ public class WifiNetworkFactory extends NetworkFactory {
     public static final int NETWORK_CONNECTION_TIMEOUT_MS = 30 * 1000; // 30 seconds
     @VisibleForTesting
     public static final int USER_SELECTED_NETWORK_CONNECT_RETRY_MAX = 3; // max of 3 retries.
+    @VisibleForTesting
+    public static final String UI_START_INTENT_ACTION = "com.android.settings.wifi.NETWORK_REQUEST";
+    @VisibleForTesting
+    public static final String UI_START_INTENT_CATEGORY = "android.intent.category.DEFAULT";
 
     private final Context mContext;
     private final ActivityManager mActivityManager;
@@ -78,6 +84,7 @@ public class WifiNetworkFactory extends NetworkFactory {
     private final Handler mHandler;
     private final WifiInjector mWifiInjector;
     private final WifiConnectivityManager mWifiConnectivityManager;
+    private final WifiConfigManager mWifiConfigManager;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiScanner.ScanSettings mScanSettings;
     private final NetworkFactoryScanListener mScanListener;
@@ -88,8 +95,14 @@ public class WifiNetworkFactory extends NetworkFactory {
     private WifiScanner mWifiScanner;
 
     private int mGenericConnectionReqCount = 0;
+    // Request that is being actively processed. All new requests start out as an "active" request
+    // because we're processing it & handling all the user interactions associated with it. Once we
+    // successfully connect to the network, we transition that request to "connected".
     private NetworkRequest mActiveSpecificNetworkRequest;
     private WifiNetworkSpecifier mActiveSpecificNetworkRequestSpecifier;
+    // Request corresponding to the the network that the device is currently connected to.
+    private NetworkRequest mConnectedSpecificNetworkRequest;
+    private WifiNetworkSpecifier mConnectedSpecificNetworkRequestSpecifier;
     private WifiConfiguration mUserSelectedNetwork;
     private int mUserSelectedNetworkConnectRetryCount;
     private List<ScanResult> mActiveMatchedScanResults;
@@ -97,7 +110,8 @@ public class WifiNetworkFactory extends NetworkFactory {
     private boolean mVerboseLoggingEnabled = false;
     private boolean mPeriodicScanTimerSet = false;
     private boolean mConnectionTimeoutSet = false;
-    private boolean mIsConnectedToUserSelectedNetwork = false;
+    private boolean mIsPeriodicScanPaused = false;
+    private boolean mWifiEnabled = false;
 
     // Scan listener for scan requests.
     private class NetworkFactoryScanListener implements WifiScanner.ScanListener {
@@ -223,6 +237,7 @@ public class WifiNetworkFactory extends NetworkFactory {
                               ActivityManager activityManager, AlarmManager alarmManager,
                               Clock clock, WifiInjector wifiInjector,
                               WifiConnectivityManager connectivityManager,
+                              WifiConfigManager configManager,
                               WifiPermissionsUtil wifiPermissionsUtil) {
         super(looper, context, TAG, nc);
         mContext = context;
@@ -232,6 +247,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         mHandler = new Handler(looper);
         mWifiInjector = wifiInjector;
         mWifiConnectivityManager = connectivityManager;
+        mWifiConfigManager = configManager;
         mWifiPermissionsUtil = wifiPermissionsUtil;
         // Create the scan settings.
         mScanSettings = new WifiScanner.ScanSettings();
@@ -291,6 +307,23 @@ public class WifiNetworkFactory extends NetworkFactory {
         }
     }
 
+    private boolean canNewRequestOverrideExistingRequest(
+            WifiNetworkSpecifier newRequest, WifiNetworkSpecifier existingRequest) {
+        if (existingRequest == null) return true;
+        // Request from app with NETWORK_SETTINGS can override any existing requests.
+        if (mWifiPermissionsUtil.checkNetworkSettingsPermission(newRequest.requestorUid)) {
+            return true;
+        }
+        // Request from fg app can override any existing requests.
+        if (isRequestFromForegroundApp(newRequest.requestorUid)) return true;
+        // Request from fg service can override only if the existing request is not from a fg app.
+        if (!isRequestFromForegroundApp(existingRequest.requestorUid)) return true;
+        Log.e(TAG, "Already processing request from a foreground app "
+                + existingRequest.requestorUid + ". Rejecting request from "
+                + newRequest.requestorUid);
+        return false;
+    }
+
     /**
      * Check whether to accept the new network connection request.
      *
@@ -308,6 +341,10 @@ public class WifiNetworkFactory extends NetworkFactory {
                 Log.e(TAG, "Invalid network specifier mentioned. Rejecting");
                 return false;
             }
+            if (!mWifiEnabled) {
+                Log.e(TAG, "Wifi off. Rejecting");
+                return false;
+            }
 
             WifiNetworkSpecifier wns = (WifiNetworkSpecifier) ns;
             if (!WifiConfigurationUtil.validateNetworkSpecifier(wns)) {
@@ -322,20 +359,17 @@ public class WifiNetworkFactory extends NetworkFactory {
                         + " Rejecting request from " + wns.requestorUid);
                 return false;
             }
-            // If there is a pending request, only proceed if the new request is from a foreground
+            // If there is an active request, only proceed if the new request is from a foreground
             // app.
-            if (mActiveSpecificNetworkRequest != null
-                    && !mWifiPermissionsUtil.checkNetworkSettingsPermission(wns.requestorUid)
-                    && !isRequestFromForegroundApp(wns.requestorUid)) {
-                WifiNetworkSpecifier aWns =
-                        (WifiNetworkSpecifier) mActiveSpecificNetworkRequest
-                                .networkCapabilities
-                                .getNetworkSpecifier();
-                if (isRequestFromForegroundApp(aWns.requestorUid)) {
-                    Log.e(TAG, "Already processing active request from a foreground app "
-                            + aWns.requestorUid + ". Rejecting request from " + wns.requestorUid);
-                    return false;
-                }
+            if (!canNewRequestOverrideExistingRequest(
+                    wns, mActiveSpecificNetworkRequestSpecifier)) {
+                return false;
+            }
+            // If there is a connected request, only proceed if the new request is from a foreground
+            // app.
+            if (!canNewRequestOverrideExistingRequest(
+                    wns, mConnectedSpecificNetworkRequestSpecifier)) {
+                return false;
             }
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Accepted network request with specifier from fg "
@@ -368,9 +402,13 @@ public class WifiNetworkFactory extends NetworkFactory {
                 Log.e(TAG, "Invalid network specifier mentioned. Rejecting");
                 return;
             }
+            if (!mWifiEnabled) {
+                Log.e(TAG, "Wifi off. Rejecting");
+                return;
+            }
             retrieveWifiScanner();
             // Reset state from any previous request.
-            resetStateForActiveRequestStart();
+            setupForActiveRequest();
 
             // Store the active network request.
             mActiveSpecificNetworkRequest = new NetworkRequest(networkRequest);
@@ -379,7 +417,8 @@ public class WifiNetworkFactory extends NetworkFactory {
                     wns.ssidPatternMatcher, wns.bssidPatternMatcher, wns.wifiConfiguration,
                     wns.requestorUid);
 
-            // TODO(b/113878056): Start UI flow here.
+            // Start UI to let the user grant/disallow this request from the app.
+            startUi();
             // Trigger periodic scans for finding a network in the request.
             startPeriodicScans();
         }
@@ -400,19 +439,30 @@ public class WifiNetworkFactory extends NetworkFactory {
         } else {
             // Invalid network specifier.
             if (!(ns instanceof WifiNetworkSpecifier)) {
-                Log.e(TAG, "Invalid network specifier mentioned. Ingoring");
+                Log.e(TAG, "Invalid network specifier mentioned. Ignoring");
                 return;
             }
-            if (mActiveSpecificNetworkRequest == null) {
-                Log.e(TAG, "Network release received with no active request. Ignoring");
+            if (!mWifiEnabled) {
+                Log.e(TAG, "Wifi off. Ignoring");
                 return;
             }
-            if (!mActiveSpecificNetworkRequest.equals(networkRequest)) {
-                Log.e(TAG, "Network specifier does not match the active request. Ignoring");
+            if (mActiveSpecificNetworkRequest == null && mConnectedSpecificNetworkRequest == null) {
+                Log.e(TAG, "Network release received with no active/connected request."
+                        + " Ignoring");
                 return;
             }
-            Log.w(TAG, "App released request, cancelling " + mActiveSpecificNetworkRequest);
-            resetStateForActiveRequestEnd();
+            if (Objects.equals(mActiveSpecificNetworkRequest, networkRequest)) {
+                Log.i(TAG, "App released request, cancelling "
+                        + mActiveSpecificNetworkRequest);
+                teardownForActiveRequest();
+            } else if (Objects.equals(mConnectedSpecificNetworkRequest, networkRequest)) {
+                Log.i(TAG, "App released request, cancelling "
+                        + mConnectedSpecificNetworkRequest);
+                teardownForConnectedNetwork();
+            } else {
+                Log.e(TAG, "Network specifier does not match the active/connected request."
+                        + " Ignoring");
+            }
         }
     }
 
@@ -424,10 +474,11 @@ public class WifiNetworkFactory extends NetworkFactory {
     }
 
     /**
-     * Check if there is at-least one connection request.
+     * Check if there is at least one connection request.
      */
     public boolean hasConnectionRequests() {
-        return mGenericConnectionReqCount > 0 || mActiveSpecificNetworkRequest != null;
+        return mGenericConnectionReqCount > 0 || mActiveSpecificNetworkRequest != null
+                || mConnectedSpecificNetworkRequest != null;
     }
 
     /**
@@ -448,17 +499,41 @@ public class WifiNetworkFactory extends NetworkFactory {
                 : Process.INVALID_UID;
     }
 
+    // Helper method to add the provided network configuration to WifiConfigManager, if it does not
+    // already exist & return the allocated network ID. This ID will be used in the CONNECT_NETWORK
+    // request to ClientModeImpl.
+    // If the network already exists, just return the network ID of the existing network.
+    private int addNetworkToWifiConfigManager(@NonNull WifiConfiguration network) {
+        WifiConfiguration existingSavedNetwork =
+                mWifiConfigManager.getConfiguredNetwork(network.configKey());
+        if (existingSavedNetwork != null) {
+            return existingSavedNetwork.networkId;
+        }
+        NetworkUpdateResult networkUpdateResult =
+                mWifiConfigManager.addOrUpdateNetwork(network, Process.WIFI_UID);
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Added network to config manager " + networkUpdateResult.netId);
+        }
+        return networkUpdateResult.netId;
+    }
+
     // Helper method to trigger a connection request & schedule a timeout alarm to track the
     // connection request.
     private void connectToNetwork(@NonNull WifiConfiguration network) {
         // Cancel connection timeout alarm for any previous connection attempts.
         cancelConnectionTimeout();
 
+        // First add the network to WifiConfigManager and then use the obtained networkId
+        // in the CONNECT_NETWORK request.
+        // Note: We don't do any error checks on the networkId because ClientModeImpl will do the
+        // necessary checks when processing CONNECT_NETWORK.
+        int networkId = addNetworkToWifiConfigManager(network);
+
         // Send the connect request to ClientModeImpl.
+        // TODO(b/117601161): Refactor this.
         Message msg = Message.obtain();
         msg.what = WifiManager.CONNECT_NETWORK;
-        msg.arg1 = WifiConfiguration.INVALID_NETWORK_ID;
-        msg.obj = network;
+        msg.arg1 = networkId;
         msg.replyTo = mSrcMessenger;
         mWifiInjector.getClientModeImpl().sendMessage(msg);
 
@@ -486,7 +561,7 @@ public class WifiNetworkFactory extends NetworkFactory {
 
     private void handleRejectUserSelection() {
         Log.w(TAG, "User dismissed notification, cancelling " + mActiveSpecificNetworkRequest);
-        resetStateForActiveRequestEnd();
+        teardownForActiveRequest();
     }
 
     private boolean isUserSelectedNetwork(WifiConfiguration config) {
@@ -530,10 +605,8 @@ public class WifiNetworkFactory extends NetworkFactory {
                         + callback, e);
             }
         }
-        // Cancel connection timeout alarm.
-        cancelConnectionTimeout();
-        // Set the connection status.
-        mIsConnectedToUserSelectedNetwork = true;
+        // transition the request from "active" to "connected".
+        setupForConnectedRequest();
     }
 
     /**
@@ -561,15 +634,52 @@ public class WifiNetworkFactory extends NetworkFactory {
                         + callback, e);
             }
         }
-        resetStateForActiveRequestEnd();
+        teardownForActiveRequest();
     }
 
-    private void resetState() {
-        if (mIsConnectedToUserSelectedNetwork) {
-            Log.i(TAG, "Disconnecting from network on reset");
-            mWifiInjector.getClientModeImpl().disconnectCommand();
+    /**
+     * Invoked by {@link ClientModeImpl} to indicate screen state changes.
+     */
+    public void handleScreenStateChanged(boolean screenOn) {
+        // If there is no active request or if the user has already selected a network,
+        // ignore screen state changes.
+        if (mActiveSpecificNetworkRequest == null || mUserSelectedNetwork != null) return;
+
+        // Pause periodic scans when the screen is off & resume when the screen is on.
+        if (screenOn) {
+            if (mVerboseLoggingEnabled) Log.v(TAG, "Resuming scans on screen on");
+            startScan();
+            mIsPeriodicScanPaused = false;
+        } else {
+            if (mVerboseLoggingEnabled) Log.v(TAG, "Pausing scans on screen off");
+            cancelPeriodicScans();
+            mIsPeriodicScanPaused = true;
         }
-        // Send the abort to the UI.
+    }
+
+    /**
+     * Invoked by {@link ClientModeImpl} to indicate wifi state toggle.
+     */
+    public void setWifiState(boolean enabled) {
+        if (mVerboseLoggingEnabled) Log.v(TAG, "setWifiState " + enabled);
+        if (enabled) {
+            reevaluateAllRequests(); // Re-evaluate any pending requests.
+        } else {
+            if (mActiveSpecificNetworkRequest != null) {
+                Log.w(TAG, "Wifi off, cancelling " + mActiveSpecificNetworkRequest);
+                teardownForActiveRequest();
+            }
+            if (mConnectedSpecificNetworkRequest != null) {
+                Log.w(TAG, "Wifi off, cancelling " + mConnectedSpecificNetworkRequest);
+                teardownForConnectedNetwork();
+            }
+        }
+        mWifiEnabled = enabled;
+    }
+
+    // Common helper method for start/end of active request processing.
+    private void cleanupActiveRequest() {
+        // Send the abort to the UI for the current active request.
         for (INetworkRequestMatchCallback callback : mRegisteredCallbacks.getCallbacks()) {
             try {
                 callback.onAbort();
@@ -582,7 +692,8 @@ public class WifiNetworkFactory extends NetworkFactory {
         mActiveSpecificNetworkRequestSpecifier = null;
         mUserSelectedNetwork = null;
         mUserSelectedNetworkConnectRetryCount = 0;
-        mIsConnectedToUserSelectedNetwork = false;
+        mIsPeriodicScanPaused = false;
+        // Cancel periodic scan, connection timeout alarm.
         cancelPeriodicScans();
         cancelConnectionTimeout();
         // Remove any callbacks registered for the request.
@@ -591,15 +702,42 @@ public class WifiNetworkFactory extends NetworkFactory {
         // attempt failed.
     }
 
-    // Invoked at the termination of previous active request processing.
-    private void resetStateForActiveRequestEnd() {
-        resetState();
-        mWifiConnectivityManager.setSpecificNetworkRequestInProgress(false);
+    // Invoked at the start of new active request processing.
+    private void setupForActiveRequest() {
+        if (mActiveSpecificNetworkRequest != null) {
+            cleanupActiveRequest();
+        }
     }
 
-    // Invoked at the start of new active request processing.
-    private void resetStateForActiveRequestStart() {
-        resetState();
+    // Invoked at the termination of current active request processing.
+    private void teardownForActiveRequest() {
+        cleanupActiveRequest();
+        // ensure there is no connected request in progress.
+        if (mConnectedSpecificNetworkRequest == null) {
+            mWifiConnectivityManager.setSpecificNetworkRequestInProgress(false);
+        }
+    }
+
+    // Invoked at the start of new connected request processing.
+    private void setupForConnectedRequest() {
+        mConnectedSpecificNetworkRequest = mActiveSpecificNetworkRequest;
+        mConnectedSpecificNetworkRequestSpecifier = mActiveSpecificNetworkRequestSpecifier;
+        mActiveSpecificNetworkRequest = null;
+        mActiveSpecificNetworkRequestSpecifier = null;
+        // Cancel connection timeout alarm.
+        cancelConnectionTimeout();
+    }
+
+    // Invoked at the termination of current connected request processing.
+    private void teardownForConnectedNetwork() {
+        Log.i(TAG, "Disconnecting from network on reset");
+        mWifiInjector.getClientModeImpl().disconnectCommand();
+        mConnectedSpecificNetworkRequest = null;
+        mConnectedSpecificNetworkRequestSpecifier = null;
+        // ensure there is no active request in progress.
+        if (mActiveSpecificNetworkRequest == null) {
+            mWifiConnectivityManager.setSpecificNetworkRequestInProgress(false);
+        }
     }
 
     /**
@@ -668,6 +806,10 @@ public class WifiNetworkFactory extends NetworkFactory {
     }
 
     private void scheduleNextPeriodicScan() {
+        if (mIsPeriodicScanPaused) {
+            Log.e(TAG, "Scan triggered when periodic scanning paused. Ignoring...");
+            return;
+        }
         mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                 mClock.getElapsedSinceBootMillis() + PERIODIC_SCAN_INTERVAL_MS,
                 TAG, mPeriodicScanTimerListener, mHandler);
@@ -709,14 +851,12 @@ public class WifiNetworkFactory extends NetworkFactory {
     // request.
     private List<ScanResult> getNetworksMatchingActiveNetworkRequest(
             ScanResult[] scanResults) {
-        if (mActiveSpecificNetworkRequest == null) {
+        if (mActiveSpecificNetworkRequestSpecifier == null) {
             Log.e(TAG, "Scan results received with no active network request. Ignoring...");
             return new ArrayList<>();
         }
         List<ScanResult> matchedScanResults = new ArrayList<>();
-        WifiNetworkSpecifier wns = (WifiNetworkSpecifier)
-                mActiveSpecificNetworkRequest.networkCapabilities.getNetworkSpecifier();
-        checkNotNull(wns);
+        WifiNetworkSpecifier wns = mActiveSpecificNetworkRequestSpecifier;
 
         for (ScanResult scanResult : scanResults) {
             if (doesScanResultMatchWifiNetworkSpecifier(wns, scanResult)) {
@@ -724,7 +864,7 @@ public class WifiNetworkFactory extends NetworkFactory {
             }
         }
         if (mVerboseLoggingEnabled) {
-            Log.e(TAG, "List of scan results matching the active request "
+            Log.v(TAG, "List of scan results matching the active request "
                     + matchedScanResults);
         }
         return matchedScanResults;
@@ -758,6 +898,16 @@ public class WifiNetworkFactory extends NetworkFactory {
                 mClock.getElapsedSinceBootMillis() + NETWORK_CONNECTION_TIMEOUT_MS,
                 TAG, mConnectionTimeoutAlarmListener, mHandler);
         mConnectionTimeoutSet = true;
+    }
+
+    private void startUi() {
+        Intent intent = new Intent();
+        intent.setAction(UI_START_INTENT_ACTION);
+        intent.addCategory(UI_START_INTENT_CATEGORY);
+        intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
+        mContext.startActivityAsUser(intent,
+                UserHandle.getUserHandleForUid(
+                        mActiveSpecificNetworkRequestSpecifier.requestorUid));
     }
 }
 

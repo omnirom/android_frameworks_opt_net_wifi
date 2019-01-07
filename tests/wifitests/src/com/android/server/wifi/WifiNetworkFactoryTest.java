@@ -19,6 +19,7 @@ package com.android.server.wifi;
 import static android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
 import static android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE;
 import static android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_GONE;
+import static android.net.NetworkFactory.CMD_REQUEST_NETWORK;
 
 import static com.android.server.wifi.WifiNetworkFactory.PERIODIC_SCAN_INTERVAL_MS;
 import static com.android.server.wifi.util.NativeUtil.addEnclosingQuotes;
@@ -30,9 +31,11 @@ import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.AlarmManager.OnAlarmListener;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.MacAddress;
 import android.net.NetworkCapabilities;
+import android.net.NetworkFactory;
 import android.net.NetworkRequest;
 import android.net.wifi.INetworkRequestMatchCallback;
 import android.net.wifi.INetworkRequestUserSelectionCallback;
@@ -49,6 +52,7 @@ import android.os.Messenger;
 import android.os.PatternMatcher;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.os.WorkSource;
 import android.os.test.TestLooper;
 import android.test.suitebuilder.annotation.SmallTest;
@@ -71,6 +75,7 @@ import java.util.List;
  */
 @SmallTest
 public class WifiNetworkFactoryTest {
+    private static final int TEST_NETWORK_ID_1 = 104;
     private static final int TEST_UID_1 = 10423;
     private static final int TEST_UID_2 = 10424;
     private static final int TEST_CALLBACK_IDENTIFIER = 123;
@@ -87,12 +92,13 @@ public class WifiNetworkFactoryTest {
     private static final String TEST_BSSID_1_2_OUI = "12:34:23:00:00:00";
     private static final String TEST_BSSID_OUI_MASK = "ff:ff:ff:00:00:00";
 
-    @Mock WifiConnectivityManager mWifiConnectivityManager;
     @Mock Context mContext;
     @Mock ActivityManager mActivityManager;
     @Mock AlarmManager mAlarmManager;
     @Mock Clock mClock;
     @Mock WifiInjector mWifiInjector;
+    @Mock WifiConnectivityManager mWifiConnectivityManager;
+    @Mock WifiConfigManager mWifiConfigManager;
     @Mock WifiPermissionsUtil mWifiPermissionsUtil;
     @Mock WifiScanner mWifiScanner;
     @Mock PackageManager mPackageManager;
@@ -114,6 +120,8 @@ public class WifiNetworkFactoryTest {
             ArgumentCaptor.forClass(OnAlarmListener.class);
     ArgumentCaptor<OnAlarmListener> mConnectionTimeoutAlarmListenerArgumentCaptor =
             ArgumentCaptor.forClass(OnAlarmListener.class);
+    ArgumentCaptor<ScanListener> mScanListenerArgumentCaptor =
+            ArgumentCaptor.forClass(ScanListener.class);
     InOrder mInOrder;
 
     private WifiNetworkFactory mWifiNetworkFactory;
@@ -139,14 +147,19 @@ public class WifiNetworkFactoryTest {
                 .thenReturn(IMPORTANCE_FOREGROUND_SERVICE);
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
         when(mWifiInjector.getClientModeImpl()).thenReturn(mClientModeImpl);
+        when(mWifiConfigManager.addOrUpdateNetwork(any(), anyInt()))
+                .thenReturn(new NetworkUpdateResult(TEST_NETWORK_ID_1));
 
         mWifiNetworkFactory = new WifiNetworkFactory(mLooper.getLooper(), mContext,
                 mNetworkCapabilities, mActivityManager, mAlarmManager, mClock, mWifiInjector,
-                mWifiConnectivityManager, mWifiPermissionsUtil);
+                mWifiConnectivityManager, mWifiConfigManager, mWifiPermissionsUtil);
 
         mNetworkRequest = new NetworkRequest.Builder()
                 .setCapabilities(mNetworkCapabilities)
                 .build();
+
+        // Setup with wifi on.
+        mWifiNetworkFactory.setWifiState(true);
     }
 
     /**
@@ -340,6 +353,60 @@ public class WifiNetworkFactoryTest {
     }
 
     /**
+     * Validates handling of acceptNetwork with a network specifier from a foreground
+     * app when we're connected to a request from a foreground app.
+     */
+    @Test
+    public void
+            testHandleAcceptNetworkRequestFromFgAppWithSpecifierWithConnectedRequestFromFgApp()
+            throws Exception {
+        when(mActivityManager.getPackageImportance(TEST_PACKAGE_NAME_1))
+                .thenReturn(IMPORTANCE_FOREGROUND);
+        when(mActivityManager.getPackageImportance(TEST_PACKAGE_NAME_2))
+                .thenReturn(IMPORTANCE_FOREGROUND);
+
+        // Connect to request 1
+        sendNetworkRequestAndSetupForConnectionStatus(TEST_SSID_1);
+        // Send network connection success indication.
+        assertNotNull(mSelectedNetwork);
+        mWifiNetworkFactory.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, mSelectedNetwork);
+
+        // Make request 2 which will be accepted because a fg app request can
+        // override an existing fg app request.
+        WifiNetworkSpecifier specifier2 = createWifiNetworkSpecifier(TEST_UID_2, false);
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier2);
+        assertTrue(mWifiNetworkFactory.acceptRequest(mNetworkRequest, 0));
+    }
+
+    /**
+     * Validates handling of acceptNetwork with a network specifier from a foreground
+     * service when we're connected to a request from a foreground app.
+     */
+    @Test
+    public void
+            testHandleAcceptNetworkRequestFromFgSvcWithSpecifierWithConnectedRequestFromFgApp()
+            throws Exception {
+        when(mActivityManager.getPackageImportance(TEST_PACKAGE_NAME_1))
+                .thenReturn(IMPORTANCE_FOREGROUND);
+        when(mActivityManager.getPackageImportance(TEST_PACKAGE_NAME_2))
+                .thenReturn(IMPORTANCE_FOREGROUND_SERVICE);
+
+        // Connect to request 1
+        sendNetworkRequestAndSetupForConnectionStatus(TEST_SSID_1);
+        // Send network connection success indication.
+        assertNotNull(mSelectedNetwork);
+        mWifiNetworkFactory.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, mSelectedNetwork);
+
+        // Make request 2 which will be rejected because a fg service request cannot
+        // override a fg app request.
+        WifiNetworkSpecifier specifier2 = createWifiNetworkSpecifier(TEST_UID_2, false);
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier2);
+        assertFalse(mWifiNetworkFactory.acceptRequest(mNetworkRequest, 0));
+    }
+
+    /**
      * Verify handling of new network request with network specifier.
      */
     @Test
@@ -348,10 +415,20 @@ public class WifiNetworkFactoryTest {
         mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier);
         mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
 
-        verify(mWifiScanner).startScan(mScanSettingsArgumentCaptor.capture(), any(),
-                mWorkSourceArgumentCaptor.capture());
+        // Verify UI start.
+        ArgumentCaptor<Intent> intentArgumentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(mContext).startActivityAsUser(
+                intentArgumentCaptor.capture(), eq(UserHandle.getUserHandleForUid(TEST_UID_1)));
+        Intent intent = intentArgumentCaptor.getValue();
+        assertNotNull(intent);
+        assertEquals(intent.getAction(), WifiNetworkFactory.UI_START_INTENT_ACTION);
+        assertTrue(intent.getCategories().contains(WifiNetworkFactory.UI_START_INTENT_CATEGORY));
+        assertTrue((intent.getFlags() & Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) != 0);
+        assertTrue((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
 
         // Verify scan settings.
+        verify(mWifiScanner).startScan(mScanSettingsArgumentCaptor.capture(), any(),
+                mWorkSourceArgumentCaptor.capture());
         ScanSettings scanSettings = mScanSettingsArgumentCaptor.getValue();
         assertNotNull(scanSettings);
         assertEquals(WifiScanner.WIFI_BAND_BOTH_WITH_DFS, scanSettings.band);
@@ -372,10 +449,20 @@ public class WifiNetworkFactoryTest {
         mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier);
         mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
 
-        verify(mWifiScanner).startScan(mScanSettingsArgumentCaptor.capture(), any(),
-                mWorkSourceArgumentCaptor.capture());
+        // Verify UI start.
+        ArgumentCaptor<Intent> intentArgumentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(mContext).startActivityAsUser(
+                intentArgumentCaptor.capture(), eq(UserHandle.getUserHandleForUid(TEST_UID_1)));
+        Intent intent = intentArgumentCaptor.getValue();
+        assertNotNull(intent);
+        assertEquals(intent.getAction(), WifiNetworkFactory.UI_START_INTENT_ACTION);
+        assertTrue(intent.getCategories().contains(WifiNetworkFactory.UI_START_INTENT_CATEGORY));
+        assertTrue((intent.getFlags() & Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) != 0);
+        assertTrue((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
 
         // Verify scan settings.
+        verify(mWifiScanner).startScan(mScanSettingsArgumentCaptor.capture(), any(),
+                mWorkSourceArgumentCaptor.capture());
         ScanSettings scanSettings = mScanSettingsArgumentCaptor.getValue();
         assertNotNull(scanSettings);
         assertEquals(WifiScanner.WIFI_BAND_BOTH_WITH_DFS, scanSettings.band);
@@ -400,7 +487,7 @@ public class WifiNetworkFactoryTest {
     public void testHandleNetworkRequestWithSpecifierAfterPreviousHiddenNetworkRequest() {
         testHandleNetworkRequestWithSpecifierForHiddenNetwork();
         mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
-        reset(mWifiScanner, mWifiConnectivityManager);
+        reset(mWifiScanner, mWifiConnectivityManager, mContext);
         testHandleNetworkRequestWithSpecifier();
     }
 
@@ -824,6 +911,15 @@ public class WifiNetworkFactoryTest {
         // Disable connectivity manager
         verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(true);
 
+        ArgumentCaptor<WifiConfiguration> wifiConfigurationCaptor =
+                ArgumentCaptor.forClass(WifiConfiguration.class);
+        verify(mWifiConfigManager).addOrUpdateNetwork(
+                wifiConfigurationCaptor.capture(), eq(Process.WIFI_UID));
+        WifiConfiguration network =  wifiConfigurationCaptor.getValue();
+        assertNotNull(network);
+        WifiConfigurationTestUtil.assertConfigurationEqual(selectedNetwork, network);
+        assertTrue(network.ephemeral);
+
         ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
         verify(mClientModeImpl).sendMessage(messageCaptor.capture());
 
@@ -831,9 +927,49 @@ public class WifiNetworkFactoryTest {
         assertNotNull(message);
 
         assertEquals(WifiManager.CONNECT_NETWORK, message.what);
-        WifiConfiguration network =  (WifiConfiguration) message.obj;
-        WifiConfigurationTestUtil.assertConfigurationEqual(selectedNetwork, network);
-        assertTrue(network.ephemeral);
+        assertEquals(TEST_NETWORK_ID_1, message.arg1);
+    }
+
+    /**
+     * Verify handling of user selection to trigger connection to an existing saved network.
+     */
+    @Test
+    public void testNetworkSpecifierHandleUserSelectionConnectToExistingSavedNetwork()
+            throws Exception {
+        sendNetworkRequestAndSetupForUserSelection();
+
+        INetworkRequestUserSelectionCallback networkRequestUserSelectionCallback =
+                mNetworkRequestUserSelectionCallback.getValue();
+        assertNotNull(networkRequestUserSelectionCallback);
+
+        WifiConfiguration selectedNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+
+        // Have a saved network with the same configuration.
+        WifiConfiguration matchingSavedNetwork = new WifiConfiguration(selectedNetwork);
+        matchingSavedNetwork.networkId = TEST_NETWORK_ID_1;
+        when(mWifiConfigManager.getConfiguredNetwork(selectedNetwork.configKey()))
+                .thenReturn(matchingSavedNetwork);
+
+        // Now trigger user selection to one of the network.
+        networkRequestUserSelectionCallback.select(selectedNetwork);
+        mLooper.dispatchAll();
+
+        // Cancel periodic scans.
+        verify(mAlarmManager).cancel(any(OnAlarmListener.class));
+        // Disable connectivity manager
+        verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(true);
+
+        // verify we don't try to add the network to WifiConfigManager.
+        verify(mWifiConfigManager, never()).addOrUpdateNetwork(any(), anyInt());
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(mClientModeImpl).sendMessage(messageCaptor.capture());
+
+        Message message = messageCaptor.getValue();
+        assertNotNull(message);
+
+        assertEquals(WifiManager.CONNECT_NETWORK, message.what);
+        assertEquals(TEST_NETWORK_ID_1, message.arg1);
     }
 
     /**
@@ -966,7 +1102,7 @@ public class WifiNetworkFactoryTest {
         // verify we canceled the timeout alarm.
         verify(mAlarmManager, never())
                 .cancel(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
-        // Verify we reset the network request handling.
+        // Verify we don't reset the network request handling.
         verify(mWifiConnectivityManager, never())
                 .setSpecificNetworkRequestInProgress(false);
 
@@ -1090,7 +1226,7 @@ public class WifiNetworkFactoryTest {
      *  Verify handling for new network request while processing another one.
      */
     @Test
-    public void testHandleNetworkRequestWithSpecifierWhenScanning() throws Exception {
+    public void testHandleNewNetworkRequestWithSpecifierWhenScanning() throws Exception {
         WifiNetworkSpecifier specifier1 = createWifiNetworkSpecifier(TEST_UID_1, false);
         mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier1);
         mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
@@ -1126,7 +1262,7 @@ public class WifiNetworkFactoryTest {
      *  Verify handling for new network request while processing another one.
      */
     @Test
-    public void testHandleNetworkRequestWithSpecifierAfterMatch() throws Exception {
+    public void testHandleNewNetworkRequestWithSpecifierAfterMatch() throws Exception {
         sendNetworkRequestAndSetupForUserSelection();
         WifiNetworkSpecifier specifier1 =
                 (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
@@ -1167,7 +1303,7 @@ public class WifiNetworkFactoryTest {
      *  Verify handling for new network request while processing another one.
      */
     @Test
-    public void testHandleNetworkRequestWithSpecifierAfterConnect() throws Exception {
+    public void testHandleNewNetworkRequestWithSpecifierAfterConnect() throws Exception {
         sendNetworkRequestAndSetupForConnectionStatus();
         WifiNetworkSpecifier specifier1 =
                 (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
@@ -1200,7 +1336,7 @@ public class WifiNetworkFactoryTest {
      *  Verify handling for new network request while processing another one.
      */
     @Test
-    public void testHandleNetworkRequestWithSpecifierAfterConnectionSuccess() throws Exception {
+    public void testHandleNewNetworkRequestWithSpecifierAfterConnectionSuccess() throws Exception {
         sendNetworkRequestAndSetupForConnectionStatus();
         WifiNetworkSpecifier specifier1 =
                 (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
@@ -1209,7 +1345,6 @@ public class WifiNetworkFactoryTest {
         assertNotNull(mSelectedNetwork);
         mWifiNetworkFactory.handleConnectionAttemptEnded(
                 WifiMetrics.ConnectionEvent.FAILURE_NONE, mSelectedNetwork);
-
         // Cancel the connection timeout.
         verify(mAlarmManager).cancel(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
 
@@ -1220,27 +1355,305 @@ public class WifiNetworkFactoryTest {
 
         verify(mWifiConnectivityManager, times(1)).setSpecificNetworkRequestInProgress(true);
         verify(mWifiScanner, times(2)).startScan(any(), any(), any());
+        // we shouldn't disconnect until the user accepts the next request.
+        verify(mClientModeImpl, never()).disconnectCommand();
+
+        // Remove the connected request1 & ensure we disconnect.
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier1);
+        mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
         verify(mClientModeImpl).disconnectCommand();
 
-        // Remove the stale request1 & ensure nothing happens.
+        verifyNoMoreInteractions(mWifiConnectivityManager, mWifiScanner, mClientModeImpl,
+                mAlarmManager);
+
+        // Now remove the active request2 & ensure auto-join is re-enabled.
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier2);
+        mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
+
+        verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(false);
+
+        verifyNoMoreInteractions(mWifiConnectivityManager, mWifiScanner, mClientModeImpl,
+                mAlarmManager);
+    }
+
+    /**
+     *  Verify handling for new network request while processing another one.
+     */
+    @Test
+    public void testHandleNewNetworkRequestWithSpecifierWhichUserSelectedAfterConnectionSuccess()
+            throws Exception {
+        sendNetworkRequestAndSetupForConnectionStatus(TEST_SSID_1);
+        WifiNetworkSpecifier specifier1 =
+                (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
+
+        // Send network connection success indication.
+        assertNotNull(mSelectedNetwork);
+        mWifiNetworkFactory.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, mSelectedNetwork);
+        // Cancel the connection timeout.
+        verify(mAlarmManager).cancel(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
+
+        // Send second request & we simulate the user selecting the request & connecting to it.
+        reset(mNetworkRequestMatchCallback, mWifiScanner, mAlarmManager);
+        sendNetworkRequestAndSetupForConnectionStatus(TEST_SSID_2);
+        WifiNetworkSpecifier specifier2 =
+                (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
+        assertNotNull(mSelectedNetwork);
+        mWifiNetworkFactory.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, mSelectedNetwork);
+        // Cancel the connection timeout.
+        verify(mAlarmManager).cancel(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
+
+        // We shouldn't explicitly disconnect, the new connection attempt will implicitly disconnect
+        // from the connected network.
+        verify(mClientModeImpl, never()).disconnectCommand();
+
+        // Remove the stale request1 & ensure nothing happens (because it was replaced by the
+        // second request)
         mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier1);
         mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
 
         verifyNoMoreInteractions(mWifiConnectivityManager, mWifiScanner, mClientModeImpl,
                 mAlarmManager);
 
-        // Remove the active request2 & ensure auto-join is re-enabled.
+        // Now remove the rejected request2, ensure we disconnect & re-enable auto-join.
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier2);
+        mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
+        verify(mClientModeImpl).disconnectCommand();
+        verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(false);
+
+        verifyNoMoreInteractions(mWifiConnectivityManager, mWifiScanner, mClientModeImpl,
+                mAlarmManager);
+    }
+
+    /**
+     *  Verify handling for new network request while processing another one.
+     */
+    @Test
+    public void testHandleNewNetworkRequestWithSpecifierWhichUserRejectedAfterConnectionSuccess()
+            throws Exception {
+        sendNetworkRequestAndSetupForConnectionStatus(TEST_SSID_1);
+        WifiNetworkSpecifier specifier1 =
+                (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
+
+        // Send network connection success indication.
+        assertNotNull(mSelectedNetwork);
+        mWifiNetworkFactory.handleConnectionAttemptEnded(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE, mSelectedNetwork);
+        // Cancel the connection timeout.
+        verify(mAlarmManager).cancel(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
+
+        // Send second request & we simulate the user rejecting the request.
+        reset(mNetworkRequestMatchCallback, mWifiScanner, mAlarmManager);
+        sendNetworkRequestAndSetupForUserSelection(TEST_SSID_2);
+        WifiNetworkSpecifier specifier2 =
+                (WifiNetworkSpecifier) mNetworkRequest.networkCapabilities.getNetworkSpecifier();
+        mNetworkRequestUserSelectionCallback.getValue().reject();
+        mLooper.dispatchAll();
+        // cancel periodic scans.
+        verify(mAlarmManager).cancel(mPeriodicScanListenerArgumentCaptor.getValue());
+
+        // we shouldn't disconnect/re-enable auto-join until the connected request is released.
+        verify(mWifiConnectivityManager, never()).setSpecificNetworkRequestInProgress(false);
+        verify(mClientModeImpl, never()).disconnectCommand();
+
+        // Remove the connected request1 & ensure we disconnect & ensure auto-join is re-enabled.
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier1);
+        mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
+        verify(mClientModeImpl).disconnectCommand();
+        verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(false);
+
+        verifyNoMoreInteractions(mWifiConnectivityManager, mWifiScanner, mClientModeImpl,
+                mAlarmManager);
+
+        // Now remove the rejected request2 & ensure nothing happens
         mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier2);
         mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
 
+        verifyNoMoreInteractions(mWifiConnectivityManager, mWifiScanner, mClientModeImpl,
+                mAlarmManager);
+    }
+
+    /**
+     * Verify handling of screen state changes while triggering periodic scans to find matching
+     * networks.
+     */
+    @Test
+    public void testNetworkSpecifierHandleScreenStateChangedWhileScanning() throws Exception {
+        sendNetworkRequestAndSetupForUserSelection();
+
+        // Turn off screen.
+        mWifiNetworkFactory.handleScreenStateChanged(false);
+
+        // 1. Cancel the scan timer.
+        mInOrder.verify(mAlarmManager).cancel(
+                mPeriodicScanListenerArgumentCaptor.getValue());
+        // 2. Simulate the scan results from an ongoing scan, ensure no more scans are scheduled.
+        mScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas);
+
+        // Ensure no more interactions.
+        mInOrder.verifyNoMoreInteractions();
+
+        // Now, turn the screen on.
+        mWifiNetworkFactory.handleScreenStateChanged(true);
+
+        // Verify that we resumed periodic scanning.
+        mInOrder.verify(mWifiScanner).startScan(any(), any(), any());
+    }
+
+    /**
+     * Verify handling of screen state changes after the active network request was released.
+     */
+    @Test
+    public void testNetworkSpecifierHandleScreenStateChangedWithoutActiveRequest()
+            throws Exception {
+        sendNetworkRequestAndSetupForUserSelection();
+        // Now release the active network request.
+        mWifiNetworkFactory.releaseNetworkFor(mNetworkRequest);
+        // Cancel the scan timer on release.
+        mInOrder.verify(mAlarmManager).cancel(
+                mPeriodicScanListenerArgumentCaptor.getValue());
+
+        // Turn off screen.
+        mWifiNetworkFactory.handleScreenStateChanged(false);
+
+        // Now, turn the screen on.
+        mWifiNetworkFactory.handleScreenStateChanged(true);
+
+        // Ensure that we did not pause or resume scanning.
+        mInOrder.verifyNoMoreInteractions();
+    }
+
+    /**
+     * Verify handling of screen state changes after user selected a network to connect to.
+     */
+    @Test
+    public void testNetworkSpecifierHandleScreenStateChangedAfterUserSelection() throws Exception {
+        sendNetworkRequestAndSetupForConnectionStatus();
+
+        // Turn off screen.
+        mWifiNetworkFactory.handleScreenStateChanged(false);
+
+        // Now, turn the screen on.
+        mWifiNetworkFactory.handleScreenStateChanged(true);
+
+        // Ensure that we did not pause or resume scanning.
+        mInOrder.verifyNoMoreInteractions();
+    }
+
+    /**
+     * Verify we don't accept specific network request when wifi is off.
+     */
+    @Test
+    public void testHandleAcceptNetworkRequestWithSpecifierWhenWifiOff() throws Exception {
+        when(mActivityManager.getPackageImportance(TEST_PACKAGE_NAME_1))
+                .thenReturn(IMPORTANCE_FOREGROUND);
+
+        WifiNetworkSpecifier specifier = createWifiNetworkSpecifier(TEST_UID_1, false);
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier);
+
+        // set wifi off.
+        mWifiNetworkFactory.setWifiState(false);
+        assertFalse(mWifiNetworkFactory.acceptRequest(mNetworkRequest, 0));
+
+        // set wifi on.
+        mWifiNetworkFactory.setWifiState(true);
+        assertTrue(mWifiNetworkFactory.acceptRequest(mNetworkRequest, 0));
+    }
+
+    /**
+     * Verify handling of new network request with network specifier when wifi is off.
+     */
+    @Test
+    public void testHandleNetworkRequestWithSpecifierWhenWifiOff() {
+        WifiNetworkSpecifier specifier = createWifiNetworkSpecifier(TEST_UID_1, false);
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier);
+
+        // set wifi off
+        mWifiNetworkFactory.setWifiState(false);
+        mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
+        verify(mWifiScanner, never()).startScan(any(), any(), any());
+
+        // set wifi on
+        mWifiNetworkFactory.setWifiState(true);
+        mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
+        verify(mWifiScanner).startScan(any(), any(), any());
+    }
+
+    /**
+     *  Verify wifi toggle off when scanning.
+     */
+    @Test
+    public void testHandleNetworkRequestWithSpecifierWifiOffWhenScanning() throws Exception {
+        WifiNetworkSpecifier specifier1 = createWifiNetworkSpecifier(TEST_UID_1, false);
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier1);
+        mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
+
+        // Register callback.
+        mWifiNetworkFactory.addCallback(mAppBinder, mNetworkRequestMatchCallback,
+                TEST_CALLBACK_IDENTIFIER);
+        verify(mNetworkRequestMatchCallback).onUserSelectionCallbackRegistration(any());
+
+        verify(mWifiScanner).startScan(any(), any(), any());
+
+        // toggle wifi off & verify we aborted ongoing request.
+        mWifiNetworkFactory.setWifiState(false);
+        verify(mNetworkRequestMatchCallback).onAbort();
         verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(false);
     }
 
-    // Helper method to setup the necessary pre-requisite steps for tracking connection status.
+    /**
+     *  Verify wifi toggle off after connection attempt is started.
+     */
+    @Test
+    public void testHandleNetworkRequestWithSpecifierWifiOffAfterConnect() throws Exception {
+        sendNetworkRequestAndSetupForConnectionStatus();
+
+        // toggle wifi off & verify we aborted ongoing request.
+        mWifiNetworkFactory.setWifiState(false);
+        verify(mAlarmManager).cancel(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
+        verify(mNetworkRequestMatchCallback).onAbort();
+        verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(false);
+    }
+
+    /**
+     * Verify handling of new network request with network specifier when wifi is off & then on.
+     * Note: Unlike the other unit tests, this test invokes the top level
+     * {@link NetworkFactory#CMD_REQUEST_NETWORK} to simulate the full flow.
+     */
+    @Test
+    public void testFullHandleNetworkRequestWithSpecifierWhenWifiOff() {
+        WifiNetworkSpecifier specifier = createWifiNetworkSpecifier(TEST_UID_1, false);
+        mNetworkRequest.networkCapabilities.setNetworkSpecifier(specifier);
+
+        // set wifi off
+        mWifiNetworkFactory.setWifiState(false);
+        // Add the request, should do nothing.
+        Message message = Message.obtain();
+        message.what = CMD_REQUEST_NETWORK;
+        message.obj = mNetworkRequest;
+        mWifiNetworkFactory.sendMessage(message);
+        mLooper.dispatchAll();
+        verify(mWifiScanner, never()).startScan(any(), any(), any());
+
+        // set wifi on
+        mWifiNetworkFactory.setWifiState(true);
+        mLooper.dispatchAll();
+        // Should trigger a re-evaluation of existing requests and the pending request will be
+        // processed now.
+        verify(mWifiScanner).startScan(any(), any(), any());
+    }
+
     private Messenger sendNetworkRequestAndSetupForConnectionStatus() throws RemoteException {
+        return sendNetworkRequestAndSetupForConnectionStatus(TEST_SSID_1);
+    }
+
+    // Helper method to setup the necessary pre-requisite steps for tracking connection status.
+    private Messenger sendNetworkRequestAndSetupForConnectionStatus(String targetSsid)
+            throws RemoteException {
         when(mClock.getElapsedSinceBootMillis()).thenReturn(0L);
 
-        sendNetworkRequestAndSetupForUserSelection();
+        sendNetworkRequestAndSetupForUserSelection(targetSsid);
 
         INetworkRequestUserSelectionCallback networkRequestUserSelectionCallback =
                 mNetworkRequestUserSelectionCallback.getValue();
@@ -1252,18 +1665,18 @@ public class WifiNetworkFactoryTest {
         mLooper.dispatchAll();
 
         // Cancel the periodic scan timer.
-        verify(mAlarmManager).cancel(mPeriodicScanListenerArgumentCaptor.getValue());
+        mInOrder.verify(mAlarmManager).cancel(mPeriodicScanListenerArgumentCaptor.getValue());
         // Disable connectivity manager
-        verify(mWifiConnectivityManager).setSpecificNetworkRequestInProgress(true);
+        verify(mWifiConnectivityManager, atLeastOnce()).setSpecificNetworkRequestInProgress(true);
 
         ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
-        verify(mClientModeImpl).sendMessage(messageCaptor.capture());
+        verify(mClientModeImpl, atLeastOnce()).sendMessage(messageCaptor.capture());
 
         Message message = messageCaptor.getValue();
         assertNotNull(message);
 
         // Start the connection timeout alarm.
-        verify(mAlarmManager).set(eq(AlarmManager.ELAPSED_REALTIME_WAKEUP),
+        mInOrder.verify(mAlarmManager).set(eq(AlarmManager.ELAPSED_REALTIME_WAKEUP),
                 eq((long) WifiNetworkFactory.NETWORK_CONNECTION_TIMEOUT_MS), any(),
                 mConnectionTimeoutAlarmListenerArgumentCaptor.capture(), any());
         assertNotNull(mConnectionTimeoutAlarmListenerArgumentCaptor.getValue());
@@ -1271,15 +1684,20 @@ public class WifiNetworkFactoryTest {
         return message.replyTo;
     }
 
-    // Helper method to setup the necessary pre-requisite steps for user selection.
     private void sendNetworkRequestAndSetupForUserSelection() throws RemoteException {
+        sendNetworkRequestAndSetupForUserSelection(TEST_SSID_1);
+    }
+
+    // Helper method to setup the necessary pre-requisite steps for user selection.
+    private void sendNetworkRequestAndSetupForUserSelection(String targetSsid)
+            throws RemoteException {
         // Setup scan data for open networks.
         setupScanData(SCAN_RESULT_TYPE_WPA_PSK,
                 TEST_SSID_1, TEST_SSID_2, TEST_SSID_3, TEST_SSID_4);
 
         // Setup network specifier for open networks.
         PatternMatcher ssidPatternMatch =
-                new PatternMatcher(TEST_SSID_1, PatternMatcher.PATTERN_LITERAL);
+                new PatternMatcher(targetSsid, PatternMatcher.PATTERN_LITERAL);
         Pair<MacAddress, MacAddress> bssidPatternMatch =
                 Pair.create(MacAddress.ALL_ZEROS_ADDRESS, MacAddress.ALL_ZEROS_ADDRESS);
         WifiConfiguration wifiConfiguration = new WifiConfiguration();
@@ -1309,8 +1727,6 @@ public class WifiNetworkFactoryTest {
         when(mClock.getElapsedSinceBootMillis()).thenReturn(0L);
 
         OnAlarmListener alarmListener = null;
-        ArgumentCaptor<ScanListener> scanListenerArgumentCaptor =
-                ArgumentCaptor.forClass(ScanListener.class);
         ScanListener scanListener = null;
 
         mInOrder = inOrder(mWifiScanner, mAlarmManager);
@@ -1324,8 +1740,8 @@ public class WifiNetworkFactoryTest {
                 alarmListener.onAlarm();
             }
             mInOrder.verify(mWifiScanner).startScan(
-                    any(), scanListenerArgumentCaptor.capture(), any());
-            scanListener = scanListenerArgumentCaptor.getValue();
+                    any(), mScanListenerArgumentCaptor.capture(), any());
+            scanListener = mScanListenerArgumentCaptor.getValue();
             assertNotNull(scanListener);
 
             // Now trigger the scan results callback and verify the alarm set for the next scan.

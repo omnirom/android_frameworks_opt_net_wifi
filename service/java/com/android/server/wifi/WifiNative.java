@@ -25,6 +25,7 @@ import android.net.apf.ApfCapabilities;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
+import android.os.Handler;
 import android.os.INetworkManagementService;
 import android.os.RemoteException;
 import android.net.wifi.WifiDppConfig;
@@ -77,13 +78,15 @@ public class WifiNative {
     private final INetworkManagementService mNwManagementService;
     private final PropertyService mPropertyService;
     private final WifiMetrics mWifiMetrics;
+    private final Handler mHandler;
     private boolean mVerboseLoggingEnabled = false;
 
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
                       WificondControl condControl, WifiMonitor wifiMonitor,
                       INetworkManagementService nwService,
-                      PropertyService propertyService, WifiMetrics wifiMetrics) {
+                      PropertyService propertyService, WifiMetrics wifiMetrics,
+                      Handler handler) {
         mWifiVendorHal = vendorHal;
         mSupplicantStaIfaceHal = staIfaceHal;
         mHostapdHal = hostapdHal;
@@ -92,6 +95,7 @@ public class WifiNative {
         mNwManagementService = nwService;
         mPropertyService = propertyService;
         mWifiMetrics = wifiMetrics;
+        mHandler = handler;
     }
 
     /**
@@ -647,7 +651,6 @@ public class WifiNative {
             mInterfaceId = id;
         }
 
-        // TODO(b/76219766): We may need to listen for link state changes in SoftAp mode.
         /**
          * Note: We should ideally listen to
          * {@link BaseNetworkObserver#interfaceStatusChanged(String, boolean)} here. But, that
@@ -659,25 +662,28 @@ public class WifiNative {
          */
         @Override
         public void interfaceLinkStateChanged(String ifaceName, boolean unusedIsLinkUp) {
-            synchronized (mLock) {
-                final Iface ifaceWithId = mIfaceMgr.getIface(mInterfaceId);
-                if (ifaceWithId == null) {
-                    if (mVerboseLoggingEnabled) {
-                        Log.v(TAG, "Received iface link up/down notification on an invalid iface="
-                                + mInterfaceId);
+            // This is invoked from the main system_server thread. Post to our handler.
+            mHandler.post(() -> {
+                synchronized (mLock) {
+                    final Iface ifaceWithId = mIfaceMgr.getIface(mInterfaceId);
+                    if (ifaceWithId == null) {
+                        if (mVerboseLoggingEnabled) {
+                            Log.v(TAG, "Received iface link up/down notification on an invalid"
+                                    + " iface=" + mInterfaceId);
+                        }
+                        return;
                     }
-                    return;
-                }
-                final Iface ifaceWithName = mIfaceMgr.getIface(ifaceName);
-                if (ifaceWithName == null || ifaceWithName != ifaceWithId) {
-                    if (mVerboseLoggingEnabled) {
-                        Log.v(TAG, "Received iface link up/down notification on an invalid iface="
-                                + ifaceName);
+                    final Iface ifaceWithName = mIfaceMgr.getIface(ifaceName);
+                    if (ifaceWithName == null || ifaceWithName != ifaceWithId) {
+                        if (mVerboseLoggingEnabled) {
+                            Log.v(TAG, "Received iface link up/down notification on an invalid"
+                                    + " iface=" + ifaceName);
+                        }
+                        return;
                     }
-                    return;
+                    onInterfaceStateChanged(ifaceWithName, isInterfaceUp(ifaceName));
                 }
-                onInterfaceStateChanged(ifaceWithName, isInterfaceUp(ifaceName));
-            }
+            });
         }
     }
 
@@ -1554,6 +1560,15 @@ public class WifiNative {
         return mWifiVendorHal.setMacAddress(interfaceName, mac);
     }
 
+    /**
+     * Get the factory MAC address of the given interface
+     * @param interfaceName Name of the interface.
+     * @return factory MAC address, or null on a failed call or if feature is unavailable.
+     */
+    public MacAddress getFactoryMacAddress(@NonNull String interfaceName) {
+        return mWifiVendorHal.getFactoryMacAddress(interfaceName);
+    }
+
     /********************************************************
      * Hostapd operations
      ********************************************************/
@@ -2034,6 +2049,16 @@ public class WifiNative {
     }
 
     /**
+     * Enable or disable low latency mode.
+     *
+     * @param enabled true to enable, false to disable.
+     * @return true on success, false on failure
+     */
+    public boolean setLowLatencyMode(boolean enabled) {
+        return mWifiVendorHal.setLowLatencyMode(enabled);
+    }
+
+    /**
      * Set concurrency priority between P2P & STA operations.
      *
      * @param isStaHigherPriority Set to true to prefer STA over P2P during concurrency operations,
@@ -2191,6 +2216,120 @@ public class WifiNative {
      */
     public void removeNetworkIfCurrent(@NonNull String ifaceName, int networkId) {
         mSupplicantStaIfaceHal.removeNetworkIfCurrent(ifaceName, networkId);
+    }
+
+    /*
+     * DPP
+     */
+
+    /**
+     * Adds a DPP peer URI to the URI list.
+     *
+     * @param ifaceName Interface name
+     * @param uri Bootstrap (URI) string (e.g. DPP:....)
+     * @return ID, or -1 for failure
+     */
+    public int addDppPeerUri(@NonNull String ifaceName, @NonNull String uri) {
+        return mSupplicantStaIfaceHal.addDppPeerUri(ifaceName, uri);
+    }
+
+    /**
+     * Removes a DPP URI to the URI list given an ID.
+     *
+     * @param ifaceName Interface name
+     * @param bootstrapId Bootstrap (URI) ID
+     * @return true when operation is successful, or false for failure
+     */
+    public boolean removeDppUri(@NonNull String ifaceName, int bootstrapId)  {
+        return mSupplicantStaIfaceHal.removeDppUri(ifaceName, bootstrapId);
+    }
+
+    /**
+     * Stops/aborts DPP Initiator request
+     *
+     * @param ifaceName Interface name
+     * @return true when operation is successful, or false for failure
+     */
+    public boolean stopDppInitiator(@NonNull String ifaceName)  {
+        return mSupplicantStaIfaceHal.stopDppInitiator(ifaceName);
+    }
+
+    /**
+     * Starts DPP Configurator-Initiator request
+     *
+     * @param ifaceName Interface name
+     * @param peerBootstrapId Peer's bootstrap (URI) ID
+     * @param ownBootstrapId Own bootstrap (URI) ID - Optional, 0 for none
+     * @param ssid SSID of the selected network
+     * @param password Password of the selected network, or
+     * @param psk PSK of the selected network in hexadecimal representation
+     * @param netRole The network role of the enrollee (STA or AP)
+     * @param securityAkm Security AKM to use: PSK, SAE
+     * @return true when operation is successful, or false for failure
+     */
+    public boolean startDppConfiguratorInitiator(@NonNull String ifaceName, int peerBootstrapId,
+            int ownBootstrapId, @NonNull String ssid, String password, String psk,
+            int netRole, int securityAkm)  {
+        return mSupplicantStaIfaceHal.startDppConfiguratorInitiator(ifaceName, peerBootstrapId,
+                ownBootstrapId, ssid, password, psk, netRole, securityAkm);
+    }
+
+    /**
+     * Starts DPP Enrollee-Initiator request
+     *
+     * @param ifaceName Interface name
+     * @param peerBootstrapId Peer's bootstrap (URI) ID
+     * @param ownBootstrapId Own bootstrap (URI) ID - Optional, 0 for none
+     * @return true when operation is successful, or false for failure
+     */
+    public boolean startDppEnrolleeInitiator(@NonNull String ifaceName, int peerBootstrapId,
+            int ownBootstrapId)  {
+        return mSupplicantStaIfaceHal.startDppEnrolleeInitiator(ifaceName, peerBootstrapId,
+                ownBootstrapId);
+    }
+
+    /**
+     * Callback to notify about DPP success, failure and progress events.
+     */
+    public interface DppEventCallback {
+        /**
+         * Called when local DPP Enrollee successfully receives a new Wi-Fi configuratrion from the
+         * peer DPP configurator.
+         *
+         * @param newWifiConfiguration New Wi-Fi configuration received from the configurator
+         */
+        void onSuccessConfigReceived(WifiConfiguration newWifiConfiguration);
+
+        /**
+         * Called when DPP success events take place, except for when configuration is received from
+         * an external Configurator. The callback onSuccessConfigReceived will be used in this case.
+         *
+         * @param dppStatusCode Status code of the progress event.
+         */
+        void onSuccess(int dppStatusCode);
+
+        /**
+         * DPP Progress event.
+         *
+         * @param dppStatusCode Status code of the progress event.
+         */
+        void onProgress(int dppStatusCode);
+
+        /**
+         * DPP Failure event.
+         *
+         * @param dppStatusCode Status code of the failure event.
+         */
+        void onFailure(int dppStatusCode);
+    }
+
+    /**
+     * Registers DPP event callbacks.
+     *
+     * @param dppEventCallback Callback object.
+     */
+    public void registerDppEventCallback(DppEventCallback dppEventCallback) {
+        mSupplicantStaIfaceHal.registerDppCallback(dppEventCallback);
     }
 
     /********************************************************
@@ -2660,6 +2799,15 @@ public class WifiNative {
      */
     public boolean getRingBufferData(String ringName) {
         return mWifiVendorHal.getRingBufferData(ringName);
+    }
+
+    /**
+     * Request hal to flush ring buffers to files
+     *
+     * @return true on success, false otherwise.
+     */
+    public boolean flushRingBufferData() {
+        return mWifiVendorHal.flushRingBufferData();
     }
 
     /**

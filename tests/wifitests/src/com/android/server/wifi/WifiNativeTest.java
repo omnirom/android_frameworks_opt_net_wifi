@@ -19,16 +19,17 @@ package com.android.server.wifi;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import android.net.MacAddress;
 import android.net.wifi.WifiConfiguration;
+import android.os.Handler;
 import android.os.INetworkManagementService;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -157,6 +158,7 @@ public class WifiNativeTest {
     @Mock private INetworkManagementService mNwService;
     @Mock private PropertyService mPropertyService;
     @Mock private WifiMetrics mWifiMetrics;
+    @Mock private Handler mHandler;
     private WifiNative mWifiNative;
 
     @Before
@@ -167,7 +169,7 @@ public class WifiNativeTest {
         when(mWifiVendorHal.startVendorHalAp()).thenReturn(true);
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mStaIfaceHal, mHostapdHal, mWificondControl,
-                mWifiMonitor, mNwService, mPropertyService, mWifiMetrics);
+                mWifiMonitor, mNwService, mPropertyService, mWifiMetrics, mHandler);
     }
 
     /**
@@ -601,5 +603,71 @@ public class WifiNativeTest {
         SarInfo sarInfo = new SarInfo();
         assertFalse(mWifiNative.selectTxPowerScenario(sarInfo));
         verify(mWifiVendorHal).selectTxPowerScenario(sarInfo);
+    }
+
+    /**
+     * Test that setPowerSave() with true, results in calling into SupplicantStaIfaceHal
+     */
+    @Test
+    public void testSetPowerSaveTrue() throws Exception {
+        mWifiNative.setPowerSave(WIFI_IFACE_NAME, true);
+        verify(mStaIfaceHal).setPowerSave(WIFI_IFACE_NAME, true);
+    }
+
+    /**
+     * Test that setPowerSave() with false, results in calling into SupplicantStaIfaceHal
+     */
+    @Test
+    public void testSetPowerSaveFalse() throws Exception {
+        mWifiNative.setPowerSave(WIFI_IFACE_NAME, false);
+        verify(mStaIfaceHal).setPowerSave(WIFI_IFACE_NAME, false);
+    }
+
+    /**
+     * Test that setLowLatencyMode() with true, results in calling into WifiVendorHal
+     */
+    @Test
+    public void testLowLatencyModeTrue() throws Exception {
+        when(mWifiVendorHal.setLowLatencyMode(anyBoolean())).thenReturn(true);
+        assertTrue(mWifiNative.setLowLatencyMode(true));
+        verify(mWifiVendorHal).setLowLatencyMode(true);
+    }
+
+    /**
+     * Test that setLowLatencyMode() with false, results in calling into WifiVendorHal
+     */
+    @Test
+    public void testLowLatencyModeFalse() throws Exception {
+        when(mWifiVendorHal.setLowLatencyMode(anyBoolean())).thenReturn(true);
+        assertTrue(mWifiNative.setLowLatencyMode(false));
+        verify(mWifiVendorHal).setLowLatencyMode(false);
+    }
+
+   /**
+     * Test that setLowLatencyMode() returns with failure when WifiVendorHal fails.
+     */
+    @Test
+    public void testSetLowLatencyModeFail() throws Exception {
+        final boolean lowLatencyMode = true;
+        when(mWifiVendorHal.setLowLatencyMode(anyBoolean())).thenReturn(false);
+        assertFalse(mWifiNative.setLowLatencyMode(lowLatencyMode));
+        verify(mWifiVendorHal).setLowLatencyMode(lowLatencyMode);
+    }
+
+    @Test
+    public void testGetFactoryMacAddress() throws Exception {
+        when(mWifiVendorHal.getFactoryMacAddress(any())).thenReturn(MacAddress.BROADCAST_ADDRESS);
+        assertNotNull(mWifiNative.getFactoryMacAddress(WIFI_IFACE_NAME));
+        verify(mWifiVendorHal).getFactoryMacAddress(any());
+    }
+
+    /**
+     * Test that flushRingBufferData(), results in calling into WifiVendorHal
+     */
+    @Test
+    public void testFlushRingBufferDataTrue() throws Exception {
+        when(mWifiVendorHal.flushRingBufferData()).thenReturn(true);
+        assertTrue(mWifiNative.flushRingBufferData());
+        verify(mWifiVendorHal).flushRingBufferData();
     }
 }

@@ -77,6 +77,7 @@ import android.hardware.wifi.V1_0.WifiStatus;
 import android.hardware.wifi.V1_0.WifiStatusCode;
 import android.hardware.wifi.V1_2.IWifiChipEventCallback.IfaceInfo;
 import android.hardware.wifi.V1_2.IWifiChipEventCallback.RadioModeInfo;
+import android.hardware.wifi.V1_3.WifiChannelStats;
 import android.net.KeepalivePacketData;
 import android.net.MacAddress;
 import android.net.apf.ApfCapabilities;
@@ -87,11 +88,13 @@ import android.net.wifi.WifiSsid;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
 import android.system.OsConstants;
 import android.util.Pair;
 
+import androidx.test.filters.SmallTest;
+
 import com.android.server.wifi.HalDeviceManager.InterfaceDestroyedListener;
+import com.android.server.wifi.WifiLinkLayerStats.ChannelStats;
 import com.android.server.wifi.util.NativeUtil;
 
 import org.junit.Before;
@@ -120,6 +123,8 @@ public class WifiVendorHalTest {
     private static final String TEST_IFACE_NAME_1 = "wlan1";
     private static final MacAddress TEST_MAC_ADDRESS = MacAddress.fromString("ee:33:a2:94:10:92");
     private static final int SAR_SENSOR_INVALID_STATE = -6;
+    private static final int[] TEST_FREQUENCIES =
+            {2412, 2417, 2422, 2427, 2432, 2437};
 
     WifiVendorHal mWifiVendorHal;
     private WifiStatus mWifiStatusSuccess;
@@ -140,6 +145,8 @@ public class WifiVendorHalTest {
     private android.hardware.wifi.V1_1.IWifiChip mIWifiChipV11;
     @Mock
     private android.hardware.wifi.V1_2.IWifiChip mIWifiChipV12;
+    @Mock
+    private android.hardware.wifi.V1_3.IWifiChip mIWifiChipV13;
     @Mock
     private IWifiStaIface mIWifiStaIface;
     @Mock
@@ -170,6 +177,11 @@ public class WifiVendorHalTest {
 
         @Override
         protected android.hardware.wifi.V1_2.IWifiChip getWifiChipForV1_2Mockable() {
+            return null;
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_3.IWifiChip getWifiChipForV1_3Mockable() {
             return null;
         }
 
@@ -206,6 +218,11 @@ public class WifiVendorHalTest {
         }
 
         @Override
+        protected android.hardware.wifi.V1_3.IWifiChip getWifiChipForV1_3Mockable() {
+            return null;
+        }
+
+        @Override
         protected android.hardware.wifi.V1_2.IWifiStaIface getWifiStaIfaceForV1_2Mockable(
                 String ifaceName) {
             return mIWifiStaIfaceV12;
@@ -219,7 +236,7 @@ public class WifiVendorHalTest {
     }
 
     /**
-     * Spy used to return the V1_2 IWifiChip and V1_3 IWifiStaIface mock objects to simulate
+     * Spy used to return the V1_3 IWifiChip and V1_3 IWifiStaIface mock objects to simulate
      * the 1.3 HAL running on the device.
      */
     private class WifiVendorHalSpyV1_3 extends WifiVendorHal {
@@ -234,7 +251,12 @@ public class WifiVendorHalTest {
 
         @Override
         protected android.hardware.wifi.V1_2.IWifiChip getWifiChipForV1_2Mockable() {
-            return mIWifiChipV12;
+            return null;
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_3.IWifiChip getWifiChipForV1_3Mockable() {
+            return mIWifiChipV13;
         }
 
         @Override
@@ -731,6 +753,24 @@ public class WifiVendorHalTest {
     }
 
     /**
+     * Test translation to WifiManager.WIFI_FEATURE_* for V1.3
+     *
+     * Test the added features in V1.3
+     */
+    @Test
+    public void testChipFeatureMaskTranslation_1_3() {
+        int caps = (
+                android.hardware.wifi.V1_3.IWifiChip.ChipCapabilityMask.SET_LATENCY_MODE
+                        | android.hardware.wifi.V1_1.IWifiChip.ChipCapabilityMask.D2D_RTT
+        );
+        int expected = (
+                WifiManager.WIFI_FEATURE_LOW_LATENCY
+                        | WifiManager.WIFI_FEATURE_D2D_RTT
+        );
+        assertEquals(expected, mWifiVendorHal.wifiFeatureMaskFromChipCapabilities_1_3(caps));
+    }
+
+    /**
      * Test get supported features. Tests whether we coalesce information from different sources
      * (IWifiStaIface, IWifiChip and HalDeviceManager) into the bitmask of supported features
      * correctly.
@@ -771,6 +811,26 @@ public class WifiVendorHalTest {
                 .thenReturn(halDeviceManagerSupportedIfaces);
 
         assertEquals(expectedFeatureSet, mWifiVendorHal.getSupportedFeatureSet(TEST_IFACE_NAME));
+    }
+
+    /**
+     * Test |getFactoryMacAddress| gets called when the hal version is V1_3
+     * @throws Exception
+     */
+    @Test
+    public void testGetFactoryMacWithHalV1_3() throws Exception {
+        doAnswer(new AnswerWithArguments() {
+            public void answer(
+                    android.hardware.wifi.V1_3.IWifiStaIface.getFactoryMacAddressCallback cb)
+                    throws RemoteException {
+                cb.onValues(mWifiStatusSuccess, MacAddress.BROADCAST_ADDRESS.toByteArray());
+            }
+        }).when(mIWifiStaIfaceV13).getFactoryMacAddress(any(
+                android.hardware.wifi.V1_3.IWifiStaIface.getFactoryMacAddressCallback.class));
+        mWifiVendorHal = new WifiVendorHalSpyV1_3(mHalDeviceManager, mLooper.getLooper());
+        assertEquals(MacAddress.BROADCAST_ADDRESS.toString(),
+                mWifiVendorHal.getFactoryMacAddress(TEST_IFACE_NAME).toString());
+        verify(mIWifiStaIfaceV13).getFactoryMacAddress(any());
     }
 
     /**
@@ -943,6 +1003,17 @@ public class WifiVendorHalTest {
         assertEquals(radio.onTimeInMsForRoamScan, wifiLinkLayerStats.on_time_roam_scan);
         assertEquals(radio.onTimeInMsForPnoScan, wifiLinkLayerStats.on_time_pno_scan);
         assertEquals(radio.onTimeInMsForHs20Scan, wifiLinkLayerStats.on_time_hs20_scan);
+        assertEquals(radio.channelStats.size(),
+                wifiLinkLayerStats.channelStatsMap.size());
+        for (int j = 0; j < radio.channelStats.size(); j++) {
+            WifiChannelStats channelStats = radio.channelStats.get(j);
+            ChannelStats retrievedChannelStats =
+                    wifiLinkLayerStats.channelStatsMap.get(channelStats.channel.centerFreq);
+            assertNotNull(retrievedChannelStats);
+            assertEquals(channelStats.channel.centerFreq, retrievedChannelStats.frequency);
+            assertEquals(channelStats.onTimeInMs, retrievedChannelStats.radioOnTimeMs);
+            assertEquals(channelStats.ccaBusyTimeInMs, retrievedChannelStats.ccaBusyTimeMs);
+        }
     }
 
 
@@ -992,6 +1063,13 @@ public class WifiVendorHalTest {
         rstat.onTimeInMsForRoamScan = r.nextInt() & 0xFFFFFF;
         rstat.onTimeInMsForPnoScan = r.nextInt() & 0xFFFFFF;
         rstat.onTimeInMsForHs20Scan = r.nextInt() & 0xFFFFFF;
+        for (int j = 0; j < TEST_FREQUENCIES.length; j++) {
+            WifiChannelStats channelStats = new WifiChannelStats();
+            channelStats.channel.centerFreq = TEST_FREQUENCIES[j];
+            channelStats.onTimeInMs = r.nextInt() & 0xFFFFFF;
+            channelStats.ccaBusyTimeInMs = r.nextInt() & 0xFFFFFF;
+            rstat.channelStats.add(channelStats);
+        }
         rstats.add(rstat);
     }
 
@@ -1380,6 +1458,23 @@ public class WifiVendorHalTest {
 
         verify(mIWifiChip).forceDumpToDebugRingBuffer("Gunk");
         verify(mIWifiChip).forceDumpToDebugRingBuffer("Glop");
+    }
+
+    /**
+     * Test flush ring buffer to files.
+     *
+     * Try once before hal start, and once after.
+     */
+    @Test
+    public void testFlushRingBufferToFile() throws Exception {
+        mWifiVendorHal = new WifiVendorHalSpyV1_3(mHalDeviceManager, mLooper.getLooper());
+        when(mIWifiChipV13.flushRingBufferToFile()).thenReturn(mWifiStatusSuccess);
+
+        assertFalse(mWifiVendorHal.flushRingBufferData());
+
+        assertTrue(mWifiVendorHal.startVendorHalSta());
+        assertTrue(mWifiVendorHal.flushRingBufferData());
+        verify(mIWifiChipV13).flushRingBufferToFile();
     }
 
     /**
@@ -2702,7 +2797,7 @@ public class WifiVendorHalTest {
         mWifiVendorHal.stopVendorHal();
     }
 
-     /**
+    /**
      * Test the selectTxPowerScenario HIDL method invocation with IWifiChip 1.2 interface.
      * The following inputs:
      *   - Sensor support is enabled
@@ -2762,6 +2857,46 @@ public class WifiVendorHalTest {
         verify(mIWifiChipV12).resetTxPowerScenario();
         verify(mIWifiChipV12, never()).selectTxPowerScenario_1_2(anyInt());
         mWifiVendorHal.stopVendorHal();
+    }
+
+    /**
+     * Test the setLowLatencyMode HIDL method invocation with IWifiChip 1.2 interface.
+     * Function should return false
+     */
+    @Test
+    public void testSetLowLatencyMode_1_2() throws RemoteException {
+        // Expose the 1.2 IWifiChip.
+        mWifiVendorHal = new WifiVendorHalSpyV1_2(mHalDeviceManager, mLooper.getLooper());
+        assertFalse(mWifiVendorHal.setLowLatencyMode(true));
+        assertFalse(mWifiVendorHal.setLowLatencyMode(false));
+    }
+
+    /**
+     * Test the setLowLatencyMode HIDL method invocation with IWifiChip 1.3 interface
+     */
+    @Test
+    public void testSetLowLatencyMode_1_3_enabled() throws RemoteException {
+        int mode = android.hardware.wifi.V1_3.IWifiChip.LatencyMode.LOW;
+
+        // Expose the 1.3 IWifiChip.
+        mWifiVendorHal = new WifiVendorHalSpyV1_3(mHalDeviceManager, mLooper.getLooper());
+        when(mIWifiChipV13.setLatencyMode(anyInt())).thenReturn(mWifiStatusSuccess);
+        assertTrue(mWifiVendorHal.setLowLatencyMode(true));
+        verify(mIWifiChipV13).setLatencyMode(eq(mode));
+    }
+
+    /**
+     * Test the setLowLatencyMode HIDL method invocation with IWifiChip 1.3 interface
+     */
+    @Test
+    public void testSetLowLatencyMode_1_3_disabled() throws RemoteException {
+        int mode = android.hardware.wifi.V1_3.IWifiChip.LatencyMode.NORMAL;
+
+        // Expose the 1.3 IWifiChip.
+        mWifiVendorHal = new WifiVendorHalSpyV1_3(mHalDeviceManager, mLooper.getLooper());
+        when(mIWifiChipV13.setLatencyMode(anyInt())).thenReturn(mWifiStatusSuccess);
+        assertTrue(mWifiVendorHal.setLowLatencyMode(false));
+        verify(mIWifiChipV13).setLatencyMode(eq(mode));
     }
 
     /**
@@ -3146,7 +3281,7 @@ public class WifiVendorHalTest {
         scanResults[0] = result.second;
         WifiScanner.ScanData scanData =
                 new WifiScanner.ScanData(mWifiVendorHal.mScan.cmdId, 1,
-                        staScanData.bucketsScanned, false, scanResults);
+                        staScanData.bucketsScanned, WifiScanner.WIFI_BAND_UNSPECIFIED, scanResults);
         scanDatas.add(scanData);
         return Pair.create(staScanDatas, scanDatas);
     }

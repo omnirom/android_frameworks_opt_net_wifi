@@ -19,6 +19,7 @@ package com.android.server.wifi;
 import android.annotation.NonNull;
 import android.content.Context;
 import android.util.Base64;
+import android.util.SparseLongArray;
 import android.content.Intent;
 
 import android.net.wifi.WifiManager;
@@ -84,6 +85,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     public static final int REPORT_REASON_USER_ACTION               = 7;
     public static final int REPORT_REASON_WIFINATIVE_FAILURE        = 8;
     public static final int REPORT_REASON_NUD_FAILURE               = 9;
+    public static final int REPORT_REASON_REACHABILITY_LOST         = 10;
 
     /** Data stall offset */
     private static final int  DATA_STALL_OFFSET_REASON_CODE         = 256;
@@ -98,6 +100,12 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private static final int MinWakeupIntervals[] = new int[] { 0, 3600, 60, 10 };
     /** minimum buffer size for each of the log levels */
     private static final int MinBufferSizes[] = new int[] { 0, 16384, 16384, 65536 };
+
+    /** Map from dump reason to elapsed time millis */
+    private final SparseLongArray mLastDumpTime = new SparseLongArray();
+
+    /** Minimum dump period with same error code */
+    public static final long MIN_DUMP_TIME_WINDOW_MILLIS = 10 * 60 * 1000; // 10 mins
 
     @VisibleForTesting public static final String FIRMWARE_DUMP_SECTION_HEADER =
             "FW Memory dump";
@@ -118,10 +126,11 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private int mMaxRingBufferSizeBytes;
     private WifiInjector mWifiInjector;
     private Context mContext;
+    private Clock mClock;
 
     public WifiDiagnostics(Context context, WifiInjector wifiInjector,
                            WifiNative wifiNative, BuildProperties buildProperties,
-                           LastMileLogger lastMileLogger) {
+                           LastMileLogger lastMileLogger, Clock clock) {
         super(wifiNative);
         RING_BUFFER_BYTE_LIMIT_SMALL = context.getResources().getInteger(
                 R.integer.config_wifi_logger_ring_buffer_default_size_limit_kb) * 1024;
@@ -137,6 +146,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         mWifiMetrics = wifiInjector.getWifiMetrics();
         mWifiInjector = wifiInjector;
         mContext = context;
+        mClock = clock;
     }
 
     @Override
@@ -224,6 +234,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     public synchronized void captureBugReportData(int reason) {
         BugReport report = captureBugreport(reason, isVerboseLoggingEnabled());
         mLastBugReports.addLast(report);
+        flushDump(reason);
     }
 
     @Override
@@ -250,6 +261,9 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
             pw.print(mLastBugReports.get(i));
             pw.println("--------------------------------------------------------------------");
         }
+
+        pw.println("Last Flush Time: " + mLastDumpTime.toString());
+        pw.println("--------------------------------------------------------------------");
 
         dumpPacketFates(pw);
         mLastMileLogger.dump(pw);
@@ -532,6 +546,26 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private boolean enableVerboseLoggingForDogfood() {
         return true;
 
+    }
+
+    private boolean flushDump(int errorCode) {
+        if (mBuildProperties.isUserBuild()) return false;
+
+        if (errorCode == REPORT_REASON_USER_ACTION) return false;
+
+        long currentTime = mClock.getWallClockMillis();
+        int index = mLastDumpTime.indexOfKey(errorCode);
+        if (index >= 0) {
+            if (currentTime - mLastDumpTime.valueAt(index) < MIN_DUMP_TIME_WINDOW_MILLIS) {
+                return false;
+            }
+        }
+        if (!mWifiNative.flushRingBufferData()) {
+            mLog.wC("could not flush ringbuffer");
+            return false;
+        }
+        mLastDumpTime.put(errorCode, currentTime);
+        return true;
     }
 
     private BugReport captureBugreport(int errorCode, boolean captureFWDump) {

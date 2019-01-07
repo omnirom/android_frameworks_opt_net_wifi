@@ -59,6 +59,7 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiNetworkAgentSpecifier;
 import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
@@ -89,6 +90,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.util.Pair;
 import android.util.SparseArray;
+import android.util.StatsLog;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
@@ -125,7 +127,9 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -486,7 +490,7 @@ public class ClientModeImpl extends StateMachine {
     /* Disconnecting state watchdog */
     static final int CMD_DISCONNECTING_WATCHDOG_TIMER                   = BASE + 96;
 
-    /* Remove a packages associated configrations */
+    /* Remove a packages associated configurations */
     static final int CMD_REMOVE_APP_CONFIGURATIONS                      = BASE + 97;
 
     /* Disable an ephemeral network */
@@ -512,6 +516,9 @@ public class ClientModeImpl extends StateMachine {
 
     // Get the list of OSU providers associated with a Passpoint network.
     static final int CMD_GET_MATCHING_OSU_PROVIDERS                     = BASE + 109;
+
+    // Get the list of installed Passpoint configurations matched with OSU providers
+    static final int CMD_GET_MATCHING_PASSPOINT_CONFIGS_FOR_OSU_PROVIDERS = BASE + 110;
 
     /* Commands from/to the SupplicantStateTracker */
     /* Reset the supplicant state tracker */
@@ -686,7 +693,7 @@ public class ClientModeImpl extends StateMachine {
     private AtomicBoolean mUserWantsSuspendOpt = new AtomicBoolean(true);
 
     /* Tracks if user has enabled Connected Mac Randomization through settings */
-    private AtomicBoolean mEnableConnectedMacRandomization = new AtomicBoolean(false);
+    private boolean mEnableConnectedMacRandomization = false;
 
     /**
      * Supplicant scan interval in milliseconds.
@@ -890,7 +897,7 @@ public class ClientModeImpl extends StateMachine {
                 new ContentObserver(getHandler()) {
                     @Override
                     public void onChange(boolean selfChange) {
-                        updateConnectedMacRandomizationSetting();
+                        updateConnectedMacRandomizationGlobalToggle();
                     }
                 });
 
@@ -906,7 +913,7 @@ public class ClientModeImpl extends StateMachine {
         mUserWantsSuspendOpt.set(mFacade.getIntegerSetting(mContext,
                 Settings.Global.WIFI_SUSPEND_OPTIMIZATIONS_ENABLED, 1) == 1);
 
-        updateConnectedMacRandomizationSetting();
+        getHandler().post(() -> updateConnectedMacRandomizationGlobalToggle());
 
         PowerManager powerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
         mWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, getName());
@@ -1725,6 +1732,24 @@ public class ClientModeImpl extends StateMachine {
         List<OsuProvider> providers = new ArrayList<>((Set<OsuProvider>) resultMsg.obj);
         resultMsg.recycle();
         return providers;
+    }
+
+    /**
+     * Returns the matching Passpoint configurations for given OSU(Online Sign-Up) Providers
+     *
+     * @param osuProviders a list of {@link OsuProvider}
+     * @param channel  AsyncChannel to use for the response
+     * @return Map that consists of {@link OsuProvider} and matching {@link PasspointConfiguration}.
+     */
+    public Map<OsuProvider, PasspointConfiguration> syncGetMatchingPasspointConfigsForOsuProviders(
+            List<OsuProvider> osuProviders, AsyncChannel channel) {
+        Message resultMsg =
+                channel.sendMessageSynchronously(
+                        CMD_GET_MATCHING_PASSPOINT_CONFIGS_FOR_OSU_PROVIDERS, osuProviders);
+        Map<OsuProvider, PasspointConfiguration> result =
+                (Map<OsuProvider, PasspointConfiguration>) resultMsg.obj;
+        resultMsg.recycle();
+        return result;
     }
 
     /**
@@ -2582,6 +2607,12 @@ public class ClientModeImpl extends StateMachine {
         mWifiMetrics.setScreenState(screenOn);
 
         mWifiConnectivityManager.handleScreenStateChanged(screenOn);
+        mNetworkFactory.handleScreenStateChanged(screenOn);
+
+        WifiLockManager wifiLockManager = mWifiInjector.getWifiLockManager();
+        if (wifiLockManager != null) {
+            wifiLockManager.handleScreenStateChanged(screenOn);
+        }
 
         if (mVerboseLoggingEnabled) log("handleScreenStateChanged Exit: " + screenOn);
     }
@@ -2808,6 +2839,9 @@ public class ClientModeImpl extends StateMachine {
         } catch (RemoteException e) {
             // Won't happen.
         }
+        StatsLog.write(StatsLog.WIFI_SIGNAL_STRENGTH_CHANGED,
+                WifiManager.calculateSignalLevel(newRssi, WifiManager.RSSI_LEVELS));
+
         Intent intent = new Intent(WifiManager.RSSI_CHANGED_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_NEW_RSSI, newRssi);
@@ -2982,6 +3016,7 @@ public class ClientModeImpl extends StateMachine {
         if (wifiConfig != null) {
             ScanResultMatchInfo matchInfo = ScanResultMatchInfo.fromWifiConfiguration(wifiConfig);
             mWifiInjector.getWakeupController().setLastDisconnectInfo(matchInfo);
+            mWifiNetworkSuggestionsManager.handleDisconnect(wifiConfig, getCurrentBSSID());
         }
 
         stopRssiMonitoringOffload();
@@ -3130,6 +3165,24 @@ public class ClientModeImpl extends StateMachine {
         return true;
     }
 
+    /**
+     * Set low latency mode
+     *
+     * @param enabled true to enable low latency
+     *                false to disable low latency (default behavior).
+     * @return true for success, false for failure
+     */
+    public boolean setLowLatencyMode(boolean enabled) {
+        if (mVerboseLoggingEnabled) {
+            Log.d(TAG, "Setting low latency mode to " + enabled);
+        }
+        if (!mWifiNative.setLowLatencyMode(enabled)) {
+            Log.e(TAG, "Failed to setLowLatencyMode");
+            return false;
+        }
+        return true;
+    }
+
     @VisibleForTesting
     public static final long DIAGS_CONNECT_TIMEOUT_MILLIS = 60 * 1000;
 
@@ -3142,8 +3195,6 @@ public class ClientModeImpl extends StateMachine {
         mWifiScoreCard.noteConnectionAttempt(mWifiInfo);
         mWifiDiagnostics.reportConnectionEvent(WifiDiagnostics.CONNECTION_EVENT_STARTED);
         mWrongPasswordNotifier.onNewConnectionAttempt();
-        // TODO(b/35329124): Remove CMD_DIAGS_CONNECT_TIMEOUT, once ClientModeImpl
-        // grows a proper CONNECTING state.
         removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
         sendMessageDelayed(CMD_DIAGS_CONNECT_TIMEOUT, DIAGS_CONNECT_TIMEOUT_MILLIS);
     }
@@ -3151,19 +3202,7 @@ public class ClientModeImpl extends StateMachine {
     private void handleConnectionAttemptEndForDiagnostics(int level2FailureCode) {
         switch (level2FailureCode) {
             case WifiMetrics.ConnectionEvent.FAILURE_NONE:
-                // Ideally, we'd wait until IP reachability has been confirmed. this code falls
-                // short in two ways:
-                // - at the time of the CMD_IP_CONFIGURATION_SUCCESSFUL event, we don't know if we
-                //   actually have ARP reachability. it might be better to wait until the wifi
-                //   network has been validated by IpClient.
-                // - in the case of a roaming event (intra-SSID), we probably trigger when L2 is
-                //   complete.
-                //
-                // TODO(b/34181219): Fix the above.
-                removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
-                mWifiDiagnostics.reportConnectionEvent(WifiDiagnostics.CONNECTION_EVENT_SUCCEEDED);
                 break;
-            case WifiMetrics.ConnectionEvent.FAILURE_REDUNDANT_CONNECTION_ATTEMPT:
             case WifiMetrics.ConnectionEvent.FAILURE_CONNECT_NETWORK_FAILED:
                 // WifiDiagnostics doesn't care about pre-empted connections, or cases
                 // where we failed to initiate a connection attempt with supplicant.
@@ -3184,7 +3223,7 @@ public class ClientModeImpl extends StateMachine {
         mNetworkFactory.handleConnectionAttemptEnded(
                 level2FailureCode, getCurrentWifiConfiguration());
         mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
-                level2FailureCode, getCurrentWifiConfiguration());
+                level2FailureCode, getCurrentWifiConfiguration(), getCurrentBSSID());
         handleConnectionAttemptEndForDiagnostics(level2FailureCode);
     }
 
@@ -3402,7 +3441,6 @@ public class ClientModeImpl extends StateMachine {
         MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
         MacAddress newMac = config.getOrCreateRandomizedMacAddress();
         mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
-
         if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
             Log.wtf(TAG, "Config generated an invalid MAC address");
         } else if (currentMac.equals(newMac)) {
@@ -3418,18 +3456,45 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
-     * Update whether Connected MAC Randomization is enabled in ClientModeImpl
-     * and WifiInfo.
+     * Sets the current MAC to the factory MAC address.
      */
-    private void updateConnectedMacRandomizationSetting() {
+    private void setCurrentMacToFactoryMac(WifiConfiguration config) {
+        MacAddress factoryMac = mWifiNative.getFactoryMacAddress(mInterfaceName);
+        if (factoryMac == null) {
+            Log.e(TAG, "Fail to set factory MAC address. Factory MAC is null.");
+            return;
+        }
+        String currentMacStr = mWifiNative.getMacAddress(mInterfaceName);
+        if (!TextUtils.equals(currentMacStr, factoryMac.toString())) {
+            if (mWifiNative.setMacAddress(mInterfaceName, factoryMac)) {
+                mWifiMetrics.logStaEvent(StaEvent.TYPE_MAC_CHANGE, config);
+            } else {
+                Log.e(TAG, "Failed to set MAC address to " + "'" + factoryMac.toString() + "'");
+            }
+        }
+    }
+
+    /**
+     * Set Connected MAC Randomization to on/off depending on the current Settings.Global flag,
+     * and also reassociate to update the MAC address if needed.
+     */
+    private void updateConnectedMacRandomizationGlobalToggle() {
         int macRandomizationFlag = mFacade.getIntegerSetting(
                 mContext, Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED, 0);
         boolean macRandomizationEnabled = (macRandomizationFlag == 1);
-        mEnableConnectedMacRandomization.set(macRandomizationEnabled);
-        mWifiInfo.setEnableConnectedMacRandomization(macRandomizationEnabled);
-        mWifiMetrics.setIsMacRandomizationOn(macRandomizationEnabled);
-        Log.d(TAG, "EnableConnectedMacRandomization Setting changed to "
-                + macRandomizationEnabled);
+        if (mEnableConnectedMacRandomization != macRandomizationEnabled) {
+            mEnableConnectedMacRandomization = macRandomizationEnabled;
+            mWifiInfo.setEnableConnectedMacRandomization(macRandomizationEnabled);
+            mWifiMetrics.setIsMacRandomizationOn(macRandomizationEnabled);
+            Log.d(TAG, "EnableConnectedMacRandomization Setting changed to "
+                    + macRandomizationEnabled);
+            // Reconnect to the network (if there is one) to update the MAC address
+            WifiConfiguration config = getCurrentWifiConfiguration();
+            if (config != null) {
+                disconnectCommand();
+                startConnectToNetwork(config.networkId, Process.WIFI_UID, config.BSSID);
+            }
+        }
     }
 
     /**
@@ -3439,7 +3504,7 @@ public class ClientModeImpl extends StateMachine {
      * @return boolean true if Connected MAC randomization is enabled, false otherwise
      */
     public boolean isConnectedMacRandomizationEnabled() {
-        return mEnableConnectedMacRandomization.get();
+        return mEnableConnectedMacRandomization;
     }
 
     /**
@@ -3634,6 +3699,10 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_GET_MATCHING_OSU_PROVIDERS:
                     replyToMessage(message, message.what, new ArrayList<OsuProvider>());
+                    break;
+                case CMD_GET_MATCHING_PASSPOINT_CONFIGS_FOR_OSU_PROVIDERS:
+                    replyToMessage(message, message.what,
+                            new HashMap<OsuProvider, PasspointConfiguration>());
                     break;
                 case CMD_START_SUBSCRIPTION_PROVISIONING:
                     replyToMessage(message, message.what, 0);
@@ -3925,6 +3994,7 @@ public class ClientModeImpl extends StateMachine {
 
             // Inform WifiConnectivityManager that Wifi is enabled
             mWifiConnectivityManager.setWifiEnabled(true);
+            mNetworkFactory.setWifiState(true);
             // Inform metrics that Wifi is Enabled (but not yet connected)
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_DISCONNECTED);
             mWifiMetrics.logStaEvent(StaEvent.TYPE_WIFI_ENABLED);
@@ -3941,6 +4011,7 @@ public class ClientModeImpl extends StateMachine {
 
             // Inform WifiConnectivityManager that Wifi is disabled
             mWifiConnectivityManager.setWifiEnabled(false);
+            mNetworkFactory.setWifiState(false);
             // Inform metrics that Wifi is being disabled (Toggled, airplane enabled, etc)
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_DISABLED);
             mWifiMetrics.logStaEvent(StaEvent.TYPE_WIFI_DISABLED);
@@ -4186,6 +4257,11 @@ public class ClientModeImpl extends StateMachine {
                             mPasspointManager.getMatchingOsuProviders(
                                     (List<ScanResult>) message.obj));
                     break;
+                case CMD_GET_MATCHING_PASSPOINT_CONFIGS_FOR_OSU_PROVIDERS:
+                    replyToMessage(message, message.what,
+                            mPasspointManager.getMatchingPasspointConfigsForOsuProviders(
+                                    (List<OsuProvider>) message.obj));
+                    break;
                 case CMD_START_SUBSCRIPTION_PROVISIONING:
                     IProvisioningCallback callback = (IProvisioningCallback) message.obj;
                     OsuProvider provider =
@@ -4236,8 +4312,11 @@ public class ClientModeImpl extends StateMachine {
                     mTargetNetworkId = netId;
                     setTargetBssid(config, bssid);
 
-                    if (mEnableConnectedMacRandomization.get()) {
+                    if (mEnableConnectedMacRandomization && config.macRandomizationSetting
+                            == WifiConfiguration.RANDOMIZATION_PERSISTENT) {
                         configureRandomizedMacAddress(config);
+                    } else {
+                        setCurrentMacToFactoryMac(config);
                     }
 
                     String currentMacAddress = mWifiNative.getMacAddress(mInterfaceName);
@@ -4676,6 +4755,10 @@ public class ClientModeImpl extends StateMachine {
             result.setSignalStrength(NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED);
         }
 
+        if (config.osu) {
+            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+        }
+
         if (!mWifiInfo.getSSID().equals(WifiSsid.NONE)) {
             result.setSSID(mWifiInfo.getSSID());
         } else {
@@ -5004,6 +5087,8 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_IP_REACHABILITY_LOST:
                     if (mVerboseLoggingEnabled && message.obj != null) log((String) message.obj);
+                    mWifiDiagnostics.captureBugReportData(
+                            WifiDiagnostics.REPORT_REASON_REACHABILITY_LOST);
                     if (mIpReachabilityDisconnectEnabled) {
                         if (mDisconnectOnlyOnInitialIpReachability && !mIpReachabilityMonitorActive) {
                             logd("CMD_IP_REACHABILITY_LOST Connect session is over, skip ip reachability lost indication.");
@@ -5520,6 +5605,10 @@ public class ClientModeImpl extends StateMachine {
                                         WifiConfiguration.NetworkSelectionStatus
                                         .DISABLED_NO_INTERNET_PERMANENT);
                             } else {
+                                // stop collect last-mile stats since validation fail
+                                removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
+                                mWifiDiagnostics.reportConnectionEvent(
+                                        WifiDiagnostics.CONNECTION_EVENT_FAILED);
                                 mWifiConfigManager.incrementNetworkNoInternetAccessReports(
                                         config.networkId);
                                 // If this was not the last selected network, update network
@@ -5539,6 +5628,10 @@ public class ClientModeImpl extends StateMachine {
                     return HANDLED;
                 case CMD_NETWORK_STATUS:
                     if (message.arg1 == NetworkAgent.VALID_NETWORK) {
+                        // stop collect last-mile stats since validation pass
+                        removeMessages(CMD_DIAGS_CONNECT_TIMEOUT);
+                        mWifiDiagnostics.reportConnectionEvent(
+                                WifiDiagnostics.CONNECTION_EVENT_SUCCEEDED);
                         config = getCurrentWifiConfiguration();
                         if (config != null) {
                             // re-enable autojoin
@@ -6418,5 +6511,25 @@ public class ClientModeImpl extends StateMachine {
         String result = (String)resultMsg.obj;
         resultMsg.recycle();
         return result;
+    }
+
+    /**
+     * Gets the factory MAC address of wlan0 (station interface).
+     * @return String representation of the factory MAC address.
+     */
+    public String getFactoryMacAddress() {
+        MacAddress macAddress = mWifiNative.getFactoryMacAddress(mInterfaceName);
+        if (macAddress != null) {
+            return macAddress.toString();
+        }
+        return null;
+    }
+
+    /**
+     * Sets the current device mobility state.
+     * @param state the new device mobility state
+     */
+    public void setDeviceMobilityState(@DeviceMobilityState int state) {
+        mWifiConnectivityManager.setDeviceMobilityState(state);
     }
 }

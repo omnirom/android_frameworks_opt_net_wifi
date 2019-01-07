@@ -161,6 +161,18 @@ public class WifiNetworkSelector {
             localLog("Stay on current network because of good RSSI and ongoing traffic");
             return true;
         }
+        WifiConfiguration network =
+                mWifiConfigManager.getConfiguredNetwork(wifiInfo.getNetworkId());
+
+        if (network == null) {
+            localLog("Current network was removed.");
+            return false;
+        }
+
+        // OSU (Online Sign Up) network for Passpoint Release 2 is sufficient network.
+        if (network.osu) {
+            return true;
+        }
 
         // Ephemeral network is not qualified.
         if (wifiInfo.isEphemeral()) {
@@ -177,14 +189,6 @@ public class WifiNetworkSelector {
         }
         if (!hasQualifiedRssi) {
             localLog("Current network RSSI[" + currentRssi + "]-acceptable but not qualified.");
-            return false;
-        }
-
-        WifiConfiguration network =
-                mWifiConfigManager.getConfiguredNetwork(wifiInfo.getNetworkId());
-
-        if (network == null) {
-            localLog("Current network was removed.");
             return false;
         }
 
@@ -559,25 +563,34 @@ public class WifiNetworkSelector {
             return null;
         }
 
-        // Go through the registered network evaluators in order until a network is selected.
+        // Go through the registered network evaluators in order
         WifiConfiguration selectedNetwork = null;
+        WifiCandidates wifiCandidates = new WifiCandidates();
+        int evaluatorIndex = 0;
         for (NetworkEvaluator registeredEvaluator : mEvaluators) {
+            final int evIndex = evaluatorIndex++; // final required due to lambda below
             localLog("About to run " + registeredEvaluator.getName() + " :");
-            selectedNetwork = registeredEvaluator.evaluateNetworks(
+            WifiConfiguration choice = registeredEvaluator.evaluateNetworks(
                     new ArrayList<>(mFilteredNetworks), currentNetwork, currentBssid, connected,
                     untrustedNetworkAllowed,
                     (scanDetail, config, score) -> {
                         if (config != null) {
                             mConnectableNetworks.add(Pair.create(scanDetail, config));
+                            wifiCandidates.add(scanDetail, config, evIndex, score);
                         }
                     }
                     );
-            if (selectedNetwork != null) {
+            if (selectedNetwork == null && choice != null) {
+                selectedNetwork = choice; // First one wins
                 localLog(registeredEvaluator.getName() + " selects "
                         + WifiNetworkSelector.toNetworkString(selectedNetwork) + " : "
                         + selectedNetwork.getNetworkSelectionStatus().getCandidate().BSSID);
-                break;
             }
+        }
+
+        if (mConnectableNetworks.size() != wifiCandidates.size()) {
+            localLog("Connectable: " + mConnectableNetworks.size()
+                    + " Candidates: " + wifiCandidates.size());
         }
 
         if (selectedNetwork != null) {
