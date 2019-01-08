@@ -188,12 +188,15 @@ public class WifiStateMachinePrime {
      */
     public void stopSoftAPMode() {
         mHandler.post(() -> {
+            ArraySet<ActiveModeManager> removeList = new ArraySet();
             for (ActiveModeManager manager : mActiveModeManagers) {
                 if (manager instanceof SoftApManager) {
                     Log.d(TAG, "Stopping SoftApModeManager");
                     manager.stop();
+                    removeList.add(manager);
                 }
             }
+            mActiveModeManagers.removeAll(removeList);
             updateBatteryStatsWifiState(false);
         });
     }
