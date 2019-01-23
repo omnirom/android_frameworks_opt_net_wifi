@@ -18,6 +18,7 @@ package com.android.server.wifi.hotspot2;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -71,10 +72,12 @@ import java.util.Set;
 public class PasspointProviderTest {
     private static final long PROVIDER_ID = 12L;
     private static final int CREATOR_UID = 1234;
-    private static final String CA_CERTIFICATE_NAME = "CACERT_HS2_12";
+    private static final String CA_CERTIFICATE_NAME = "CACERT_HS2_12_0";
+    private static final String CA_CERTIFICATE_NAME_2 = "CACERT_HS2_12_1";
     private static final String CLIENT_CERTIFICATE_NAME = "USRCERT_HS2_12";
     private static final String CLIENT_PRIVATE_KEY_NAME = "USRPKEY_HS2_12";
-    private static final String CA_CERTIFICATE_ALIAS = "HS2_12";
+    private static final String CA_CERTIFICATE_ALIAS = "HS2_12_0";
+    private static final String CA_CERTIFICATE_ALIAS_2 = "HS2_12_1";
     private static final String CLIENT_CERTIFICATE_ALIAS = "HS2_12";
     private static final String CLIENT_PRIVATE_KEY_ALIAS = "HS2_12";
 
@@ -234,7 +237,7 @@ public class PasspointProviderTest {
         certCredential.setCertSha256Fingerprint(
                 MessageDigest.getInstance("SHA-256").digest(FakeKeys.CLIENT_CERT.getEncoded()));
         credential.setCertCredential(certCredential);
-        credential.setCaCertificate(FakeKeys.CA_CERT0);
+        credential.setCaCertificates(new X509Certificate[]{FakeKeys.CA_CERT0, FakeKeys.CA_CERT1});
         credential.setClientPrivateKey(FakeKeys.RSA_KEY1);
         credential.setClientCertificateChain(new X509Certificate[] {FakeKeys.CLIENT_CERT});
         config.setCredential(credential);
@@ -242,6 +245,8 @@ public class PasspointProviderTest {
 
         // Install client certificate and key to the keystore successfully.
         when(mKeyStore.putCertInKeyStore(CA_CERTIFICATE_NAME, FakeKeys.CA_CERT0))
+                .thenReturn(true);
+        when(mKeyStore.putCertInKeyStore(CA_CERTIFICATE_NAME_2, FakeKeys.CA_CERT1))
                 .thenReturn(true);
         when(mKeyStore.putKeyInKeyStore(CLIENT_PRIVATE_KEY_NAME, FakeKeys.RSA_KEY1))
                 .thenReturn(true);
@@ -252,10 +257,11 @@ public class PasspointProviderTest {
         // Verify client certificate and key in the configuration gets cleared and aliases
         // are set correctly.
         PasspointConfiguration curConfig = mProvider.getConfig();
-        assertTrue(curConfig.getCredential().getCaCertificate() == null);
+        assertTrue(curConfig.getCredential().getCaCertificates() == null);
         assertTrue(curConfig.getCredential().getClientPrivateKey() == null);
         assertTrue(curConfig.getCredential().getClientCertificateChain() == null);
-        assertTrue(mProvider.getCaCertificateAlias().equals(CA_CERTIFICATE_ALIAS));
+        assertTrue(mProvider.getCaCertificateAliases().equals(
+                Arrays.asList(CA_CERTIFICATE_ALIAS, CA_CERTIFICATE_ALIAS_2)));
         assertTrue(mProvider.getClientPrivateKeyAlias().equals(CLIENT_PRIVATE_KEY_ALIAS));
         assertTrue(mProvider.getClientCertificateAlias().equals(CLIENT_CERTIFICATE_ALIAS));
     }
@@ -274,7 +280,7 @@ public class PasspointProviderTest {
         certCredential.setCertSha256Fingerprint(
                 MessageDigest.getInstance("SHA-256").digest(FakeKeys.CLIENT_CERT.getEncoded()));
         credential.setCertCredential(certCredential);
-        credential.setCaCertificate(FakeKeys.CA_CERT0);
+        credential.setCaCertificates(new X509Certificate[]{FakeKeys.CA_CERT0, FakeKeys.CA_CERT1});
         credential.setClientPrivateKey(FakeKeys.RSA_KEY1);
         credential.setClientCertificateChain(new X509Certificate[] {FakeKeys.CLIENT_CERT});
         config.setCredential(credential);
@@ -283,19 +289,21 @@ public class PasspointProviderTest {
         // Failed to install client certificate to the keystore.
         when(mKeyStore.putCertInKeyStore(CA_CERTIFICATE_NAME, FakeKeys.CA_CERT0))
                 .thenReturn(true);
+        when(mKeyStore.putCertInKeyStore(CA_CERTIFICATE_NAME_2, FakeKeys.CA_CERT1))
+                .thenReturn(false);
         when(mKeyStore.putKeyInKeyStore(CLIENT_PRIVATE_KEY_NAME, FakeKeys.RSA_KEY1))
                 .thenReturn(true);
         when(mKeyStore.putCertInKeyStore(CLIENT_CERTIFICATE_NAME, FakeKeys.CLIENT_CERT))
-                .thenReturn(false);
+                .thenReturn(true);
         assertFalse(mProvider.installCertsAndKeys());
 
         // Verify certificates and key in the configuration are not cleared and aliases
         // are not set.
         PasspointConfiguration curConfig = mProvider.getConfig();
-        assertTrue(curConfig.getCredential().getCaCertificate() != null);
+        assertTrue(curConfig.getCredential().getCaCertificates() != null);
         assertTrue(curConfig.getCredential().getClientCertificateChain() != null);
         assertTrue(curConfig.getCredential().getClientPrivateKey() != null);
-        assertTrue(mProvider.getCaCertificateAlias() == null);
+        assertTrue(mProvider.getCaCertificateAliases() == null);
         assertTrue(mProvider.getClientPrivateKeyAlias() == null);
         assertTrue(mProvider.getClientCertificateAlias() == null);
     }
@@ -312,7 +320,7 @@ public class PasspointProviderTest {
         certCredential.setCertSha256Fingerprint(
                 MessageDigest.getInstance("SHA-256").digest(FakeKeys.CLIENT_CERT.getEncoded()));
         credential.setCertCredential(certCredential);
-        credential.setCaCertificate(FakeKeys.CA_CERT0);
+        credential.setCaCertificates(new X509Certificate[]{FakeKeys.CA_CERT0, FakeKeys.CA_CERT1});
         credential.setClientPrivateKey(FakeKeys.RSA_KEY1);
         credential.setClientCertificateChain(new X509Certificate[] {FakeKeys.CLIENT_CERT});
         config.setCredential(credential);
@@ -321,21 +329,25 @@ public class PasspointProviderTest {
         // Install client certificate and key to the keystore successfully.
         when(mKeyStore.putCertInKeyStore(CA_CERTIFICATE_NAME, FakeKeys.CA_CERT0))
                 .thenReturn(true);
+        when(mKeyStore.putCertInKeyStore(CA_CERTIFICATE_NAME_2, FakeKeys.CA_CERT1))
+                .thenReturn(true);
         when(mKeyStore.putKeyInKeyStore(CLIENT_PRIVATE_KEY_NAME, FakeKeys.RSA_KEY1))
                 .thenReturn(true);
         when(mKeyStore.putCertInKeyStore(CLIENT_CERTIFICATE_NAME, FakeKeys.CLIENT_CERT))
                 .thenReturn(true);
         assertTrue(mProvider.installCertsAndKeys());
-        assertTrue(mProvider.getCaCertificateAlias().equals(CA_CERTIFICATE_ALIAS));
+        assertTrue(mProvider.getCaCertificateAliases().equals(
+                Arrays.asList(CA_CERTIFICATE_ALIAS, CA_CERTIFICATE_ALIAS_2)));
         assertTrue(mProvider.getClientPrivateKeyAlias().equals(CLIENT_PRIVATE_KEY_ALIAS));
         assertTrue(mProvider.getClientCertificateAlias().equals(CLIENT_CERTIFICATE_ALIAS));
 
         // Uninstall certificates and key from the keystore.
         mProvider.uninstallCertsAndKeys();
         verify(mKeyStore).removeEntryFromKeyStore(CA_CERTIFICATE_NAME);
+        verify(mKeyStore).removeEntryFromKeyStore(CA_CERTIFICATE_NAME_2);
         verify(mKeyStore).removeEntryFromKeyStore(CLIENT_CERTIFICATE_NAME);
         verify(mKeyStore).removeEntryFromKeyStore(CLIENT_PRIVATE_KEY_NAME);
-        assertTrue(mProvider.getCaCertificateAlias() == null);
+        assertTrue(mProvider.getCaCertificateAliases() == null);
         assertTrue(mProvider.getClientPrivateKeyAlias() == null);
         assertTrue(mProvider.getClientCertificateAlias() == null);
     }
@@ -894,8 +906,9 @@ public class PasspointProviderTest {
         BitSet allowedProtocols = new BitSet();
         allowedProtocols.set(WifiConfiguration.Protocol.RSN);
 
-        // Create provider.
+        // Create provider for R2.
         PasspointConfiguration config = new PasspointConfiguration();
+        config.setUpdateIdentifier(1234);
         HomeSp homeSp = new HomeSp();
         homeSp.setFqdn(fqdn);
         homeSp.setFriendlyName(friendlyName);
@@ -908,7 +921,7 @@ public class PasspointProviderTest {
         userCredential.setPassword(encodedPasswordStr);
         userCredential.setNonEapInnerMethod(Credential.UserCredential.AUTH_METHOD_MSCHAPV2);
         credential.setUserCredential(userCredential);
-        credential.setCaCertificate(FakeKeys.CA_CERT0);
+        credential.setCaCertificates(new X509Certificate[] {FakeKeys.CA_CERT0});
         config.setCredential(credential);
         mProvider = createProvider(config);
 
@@ -927,6 +940,7 @@ public class PasspointProviderTest {
         assertTrue(Arrays.equals(rcOIs, wifiConfig.roamingConsortiumIds));
         assertTrue(wifiConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP));
         assertTrue(wifiConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X));
+        assertEquals(wifiConfig.updateIdentifier, Integer.toString(config.getUpdateIdentifier()));
         assertEquals(allowedProtocols, wifiConfig.allowedProtocols);
         assertFalse(wifiConfig.shared);
         assertEquals(realm, wifiEnterpriseConfig.getRealm());
@@ -968,7 +982,7 @@ public class PasspointProviderTest {
         certCredential.setCertSha256Fingerprint(
                 MessageDigest.getInstance("SHA-256").digest(FakeKeys.CLIENT_CERT.getEncoded()));
         credential.setCertCredential(certCredential);
-        credential.setCaCertificate(FakeKeys.CA_CERT0);
+        credential.setCaCertificates(new X509Certificate[] {FakeKeys.CA_CERT0});
         credential.setClientPrivateKey(FakeKeys.RSA_KEY1);
         credential.setClientCertificateChain(new X509Certificate[] {FakeKeys.CLIENT_CERT});
         config.setCredential(credential);
@@ -994,6 +1008,7 @@ public class PasspointProviderTest {
         assertTrue(wifiConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP));
         assertTrue(wifiConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X));
         assertEquals(allowedProtocols, wifiConfig.allowedProtocols);
+        assertNull(wifiConfig.updateIdentifier);
         assertFalse(wifiConfig.shared);
         assertEquals(realm, wifiEnterpriseConfig.getRealm());
         assertEquals(fqdn, wifiEnterpriseConfig.getDomainSuffixMatch());
@@ -1047,6 +1062,7 @@ public class PasspointProviderTest {
         assertTrue(wifiConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP));
         assertTrue(wifiConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X));
         assertEquals(allowedProtocols, wifiConfig.allowedProtocols);
+        assertNull(wifiConfig.updateIdentifier);
         assertFalse(wifiConfig.shared);
         assertEquals(realm, wifiEnterpriseConfig.getRealm());
         assertEquals(fqdn, wifiEnterpriseConfig.getDomainSuffixMatch());

@@ -45,6 +45,8 @@ import android.annotation.CheckResult;
 import android.app.ActivityManager;
 import android.app.ActivityManager.RunningAppProcessInfo;
 import android.app.AppOpsManager;
+import android.app.admin.DeviceAdminInfo;
+import android.app.admin.DevicePolicyManagerInternal;
 import android.bluetooth.BluetoothAdapter;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -53,6 +55,7 @@ import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
+import android.content.pm.ResolveInfo;
 import android.database.ContentObserver;
 import android.net.DhcpInfo;
 import android.net.DhcpResults;
@@ -99,6 +102,7 @@ import android.os.UserManager;
 import android.os.WorkSource;
 import android.os.SystemProperties;
 import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.MutableInt;
@@ -139,6 +143,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -147,7 +152,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * @hide
  */
-public class WifiServiceImpl extends AbstractWifiService {
+public class WifiServiceImpl extends BaseWifiService {
     private static final String TAG = "WifiService";
     private static final boolean VDBG = false;
 
@@ -818,6 +823,26 @@ public class WifiServiceImpl extends AbstractWifiService {
         return false;
     }
 
+    // Helper method to check if the entity initiating the binder call is a DO/PO app.
+    private boolean isDeviceOrProfileOwner(int uid) {
+        final DevicePolicyManagerInternal dpmi =
+                mWifiInjector.getWifiPermissionsWrapper().getDevicePolicyManagerInternal();
+        if (dpmi == null) return false;
+        return dpmi.isActiveAdminWithPolicy(uid, DeviceAdminInfo.USES_POLICY_DEVICE_OWNER)
+                || dpmi.isActiveAdminWithPolicy(uid, DeviceAdminInfo.USES_POLICY_PROFILE_OWNER);
+    }
+
+    // Helper method to check if the entity initiating the binder call is the default car dock app.
+    private boolean isDefaultCarDock(String packageName) {
+        final Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_CAR_DOCK);
+        final ResolveInfo ri = mContext.getPackageManager().resolveActivity(
+                intent, PackageManager.GET_META_DATA | PackageManager.MATCH_DEFAULT_ONLY);
+        if (ri == null || ri.activityInfo == null) {
+            return false;
+        }
+        return Objects.equals(packageName, ri.activityInfo.packageName);
+    }
+
     private void enforceNetworkSettingsPermission() {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS,
                 "WifiService");
@@ -911,8 +936,11 @@ public class WifiServiceImpl extends AbstractWifiService {
     private boolean isTargetSdkLessThanQOrPrivileged(String packageName, int pid, int uid) {
         return isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)
                 || isPrivileged(pid, uid)
+                // DO/PO apps should be able to add/modify saved networks.
+                || isDeviceOrProfileOwner(uid)
                 // TODO: Remove this system app bypass once Q is released.
-                || isSystem(packageName);
+                || isSystem(packageName)
+                || isDefaultCarDock(packageName);
     }
 
     /**
@@ -1498,7 +1526,7 @@ public class WifiServiceImpl extends AbstractWifiService {
         }
         enforceLocationPermission(packageName, uid);
         // also need to verify that Locations services are enabled.
-        if (mSettingsStore.getLocationModeSetting(mContext) == Settings.Secure.LOCATION_MODE_OFF) {
+        if (!mWifiPermissionsUtil.isLocationModeEnabled()) {
             throw new SecurityException("Location mode is not enabled.");
         }
 
@@ -1508,12 +1536,7 @@ public class WifiServiceImpl extends AbstractWifiService {
         }
 
         // the app should be in the foreground
-        try {
-            if (!mFrameworkFacade.isAppForeground(uid)) {
-                return LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE;
-            }
-        } catch (RemoteException e) {
-            mLog.warn("RemoteException during isAppForeground when calling startLOHS").flush();
+        if (!mFrameworkFacade.isAppForeground(uid)) {
             return LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE;
         }
 
@@ -1802,7 +1825,7 @@ public class WifiServiceImpl extends AbstractWifiService {
      * see {@link android.net.wifi.WifiManager#getSupportedFeatures}
      */
     @Override
-    public int getSupportedFeatures() {
+    public long getSupportedFeatures() {
         enforceAccessPermission();
         if (mVerboseLoggingEnabled) {
             mLog.info("getSupportedFeatures uid=%").c(Binder.getCallingUid()).flush();
@@ -1895,28 +1918,62 @@ public class WifiServiceImpl extends AbstractWifiService {
 
     /**
      * see {@link android.net.wifi.WifiManager#getConfiguredNetworks()}
+     *
+     * @param packageName String name of the calling package
      * @return the list of configured networks
      */
     @Override
     public ParceledListSlice<WifiConfiguration> getConfiguredNetworks(String packageName) {
         enforceAccessPermission();
-        if (Binder.getCallingUid() != Process.SHELL_UID) { // bypass shell: can get varioud pkg name
-            mAppOps.checkPackage(Binder.getCallingUid(), packageName);
+        int callingUid = Binder.getCallingUid();
+        if (callingUid != Process.SHELL_UID) { // bypass shell: can get varioud pkg name
+            long ident = Binder.clearCallingIdentity();
+            try {
+                mWifiPermissionsUtil.enforceCanAccessScanResults(packageName, callingUid);
+            } catch (SecurityException e) {
+                Slog.e(TAG, "Permission violation - getConfiguredNetworks not allowed for uid="
+                        + callingUid + ", packageName=" + packageName + ", reason=" + e);
+                return new ParceledListSlice<>(new ArrayList<>());
+            } finally {
+                Binder.restoreCallingIdentity(ident);
+            }
         }
-        if (!isTargetSdkLessThanQOrPrivileged(
-                packageName, Binder.getCallingPid(), Binder.getCallingUid())) {
+        boolean isTargetSdkLessThanQOrPrivileged = isTargetSdkLessThanQOrPrivileged(
+                packageName, Binder.getCallingPid(), callingUid);
+        boolean isCarrierApp =
+                mWifiInjector.makeTelephonyManager().checkCarrierPrivilegesForPackage(packageName)
+                        == TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS;
+        if (!isTargetSdkLessThanQOrPrivileged && !isCarrierApp) {
             mLog.info("getConfiguredNetworks not allowed for uid=%")
-                    .c(Binder.getCallingUid()).flush();
+                    .c(callingUid).flush();
             return new ParceledListSlice<>(new ArrayList<>());
         }
         if (mVerboseLoggingEnabled) {
-            mLog.info("getConfiguredNetworks uid=%").c(Binder.getCallingUid()).flush();
+            mLog.info("getConfiguredNetworks uid=%").c(callingUid).flush();
         }
+
+        int targetConfigUid = Process.INVALID_UID; // don't expose any MAC addresses
+        if (isPrivileged(getCallingPid(), callingUid) || isDeviceOrProfileOwner(callingUid)) {
+            targetConfigUid = Process.WIFI_UID; // expose all MAC addresses
+        } else if (isCarrierApp) {
+            targetConfigUid = callingUid; // expose only those configs created by the Carrier App
+        }
+
         if (mClientModeImplChannel != null) {
             List<WifiConfiguration> configs = mClientModeImpl.syncGetConfiguredNetworks(
-                    Binder.getCallingUid(), mClientModeImplChannel);
+                    callingUid, mClientModeImplChannel, targetConfigUid);
             if (configs != null) {
-                return new ParceledListSlice<WifiConfiguration>(configs);
+                if (isTargetSdkLessThanQOrPrivileged) {
+                    return new ParceledListSlice<WifiConfiguration>(configs);
+                } else { // Carrier app: should only get its own configs
+                    List<WifiConfiguration> creatorConfigs = new ArrayList<>();
+                    for (WifiConfiguration config : configs) {
+                        if (config.creatorUid == callingUid) {
+                            creatorConfigs.add(config);
+                        }
+                    }
+                    return new ParceledListSlice<WifiConfiguration>(creatorConfigs);
+                }
             }
         } else {
             Slog.e(TAG, "mClientModeImplChannel is not initialized");
@@ -1926,14 +1983,28 @@ public class WifiServiceImpl extends AbstractWifiService {
 
     /**
      * see {@link android.net.wifi.WifiManager#getPrivilegedConfiguredNetworks()}
+     *
+     * @param packageName String name of the calling package
      * @return the list of configured networks with real preSharedKey
      */
     @Override
-    public ParceledListSlice<WifiConfiguration> getPrivilegedConfiguredNetworks() {
+    public ParceledListSlice<WifiConfiguration>
+            getPrivilegedConfiguredNetworks(String packageName) {
         enforceReadCredentialPermission();
         enforceAccessPermission();
+        int callingUid = Binder.getCallingUid();
+        long ident = Binder.clearCallingIdentity();
+        try {
+            mWifiPermissionsUtil.enforceCanAccessScanResults(packageName, callingUid);
+        } catch (SecurityException e) {
+            Slog.e(TAG, "Permission violation - getPrivilegedConfiguredNetworks not allowed for"
+                    + " uid=" + callingUid + ", packageName=" + packageName + ", reason=" + e);
+            return null;
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
         if (mVerboseLoggingEnabled) {
-            mLog.info("getPrivilegedConfiguredNetworks uid=%").c(Binder.getCallingUid()).flush();
+            mLog.info("getPrivilegedConfiguredNetworks uid=%").c(callingUid).flush();
         }
         if (mClientModeImplChannel != null) {
             List<WifiConfiguration> configs =
@@ -1948,17 +2019,25 @@ public class WifiServiceImpl extends AbstractWifiService {
     }
 
     /**
-     * Return the list of all matching Wifi configurations for a given list of ScanResult.
+     * Returns the list of FQDN (Fully Qualified Domain Name) to installed Passpoint configurations.
      *
-     * An empty list will be returned when no configurations are installed or if no configurations
-     * match the list of ScanResult.
+     * Return the map of all matching configurations with corresponding scanResults (or an empty map
+     * if none).
      *
-     * @param scanResults a list of ScanResult that represents the BSSID
-     * @return A list of {@link WifiConfiguration} that can have duplicate entries.
+     * @param scanResults The list of scan results
+     * @return Map that consists of FQDN (Fully Qualified Domain Name) and corresponding
+     * scanResults per network type({@link WifiManager#PASSPOINT_HOME_NETWORK} and {@link
+     * WifiManager#PASSPOINT_ROAMING_NETWORK}).
      */
     @Override
-    public List<WifiConfiguration> getAllMatchingWifiConfigs(List<ScanResult> scanResults) {
-        enforceNetworkSettingsPermission();
+    public Map<String, Map<Integer, List<ScanResult>>> getAllMatchingFqdnsForScanResults(
+            List<ScanResult> scanResults) {
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getMatchingPasspointConfigurations uid=%").c(Binder.getCallingUid()).flush();
         }
@@ -1966,18 +2045,25 @@ public class WifiServiceImpl extends AbstractWifiService {
                 PackageManager.FEATURE_WIFI_PASSPOINT)) {
             throw new UnsupportedOperationException("Passpoint not enabled");
         }
-        return mClientModeImpl.getAllMatchingWifiConfigs(scanResults, mClientModeImplChannel);
+        return mClientModeImpl.syncGetAllMatchingFqdnsForScanResults(scanResults,
+                mClientModeImplChannel);
     }
 
     /**
      * Returns list of OSU (Online Sign-Up) providers associated with the given list of ScanResult.
      *
      * @param scanResults a list of ScanResult that has Passpoint APs.
-     * @return List of {@link OsuProvider}
+     * @return Map that consists of {@link OsuProvider} and a matching list of {@link ScanResult}.
      */
     @Override
-    public List<OsuProvider> getMatchingOsuProviders(List<ScanResult> scanResults) {
-        enforceNetworkSettingsPermission();
+    public Map<OsuProvider, List<ScanResult>> getMatchingOsuProviders(
+            List<ScanResult> scanResults) {
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getMatchingOsuProviders uid=%").c(Binder.getCallingUid()).flush();
         }
@@ -1997,7 +2083,12 @@ public class WifiServiceImpl extends AbstractWifiService {
     @Override
     public Map<OsuProvider, PasspointConfiguration> getMatchingPasspointConfigsForOsuProviders(
             List<OsuProvider> osuProviders) {
-        enforceNetworkSettingsPermission();
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getMatchingPasspointConfigsForOsuProviders uid=%").c(
                     Binder.getCallingUid()).flush();
@@ -2011,6 +2102,39 @@ public class WifiServiceImpl extends AbstractWifiService {
             return new HashMap<>();
         }
         return mClientModeImpl.syncGetMatchingPasspointConfigsForOsuProviders(osuProviders,
+                mClientModeImplChannel);
+    }
+
+    /**
+     * Returns the corresponding wifi configurations for given FQDN (Fully Qualified Domain Name)
+     * list.
+     *
+     * An empty list will be returned when no match is found.
+     *
+     * @param fqdnList a list of FQDN
+     * @return List of {@link WifiConfiguration} converted from {@link PasspointProvider}
+     */
+    @Override
+    public List<WifiConfiguration> getWifiConfigsForPasspointProfiles(List<String> fqdnList) {
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
+        if (mVerboseLoggingEnabled) {
+            mLog.info("getWifiConfigsForPasspointProfiles uid=%").c(
+                    Binder.getCallingUid()).flush();
+        }
+        if (!mContext.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            throw new UnsupportedOperationException("Passpoint not enabled");
+        }
+        if (fqdnList == null) {
+            Log.e(TAG, "Attempt to retrieve WifiConfiguration with null fqdn List");
+            return new ArrayList<>();
+        }
+        return mClientModeImpl.syncGetWifiConfigsForPasspointProfiles(fqdnList,
                 mClientModeImplChannel);
     }
 
@@ -2041,9 +2165,14 @@ public class WifiServiceImpl extends AbstractWifiService {
                 Slog.e(TAG, "Missing credential for Passpoint profile");
                 return -1;
             }
+
             // Copy over certificates and keys.
-            passpointConfig.getCredential().setCaCertificate(
-                    config.enterpriseConfig.getCaCertificate());
+            X509Certificate[] x509Certificates = null;
+            if (config.enterpriseConfig.getCaCertificate() != null) {
+                x509Certificates =
+                        new X509Certificate[]{config.enterpriseConfig.getCaCertificate()};
+            }
+            passpointConfig.getCredential().setCaCertificates(x509Certificates);
             passpointConfig.getCredential().setClientCertificateChain(
                     config.enterpriseConfig.getClientCertificateChain());
             passpointConfig.getCredential().setClientPrivateKey(
@@ -2284,8 +2413,11 @@ public class WifiServiceImpl extends AbstractWifiService {
      */
     @Override
     public boolean removePasspointConfiguration(String fqdn, String packageName) {
-        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
-            return false;
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
         }
         mLog.info("removePasspointConfiguration uid=%").c(Binder.getCallingUid()).flush();
         if (!mContext.getPackageManager().hasSystemFeature(
@@ -2304,7 +2436,12 @@ public class WifiServiceImpl extends AbstractWifiService {
      */
     @Override
     public List<PasspointConfiguration> getPasspointConfigurations() {
-        enforceAccessPermission();
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getPasspointConfigurations uid=%").c(Binder.getCallingUid()).flush();
         }
@@ -2871,7 +3008,7 @@ public class WifiServiceImpl extends AbstractWifiService {
             if (mClientModeImplChannel != null) {
                 // Delete all Wifi SSIDs
                 List<WifiConfiguration> networks = mClientModeImpl.syncGetConfiguredNetworks(
-                        Binder.getCallingUid(), mClientModeImplChannel);
+                        Binder.getCallingUid(), mClientModeImplChannel, Process.WIFI_UID);
                 if (networks != null) {
                     for (WifiConfiguration config : networks) {
                         removeNetwork(config.networkId, packageName);
@@ -3024,10 +3161,10 @@ public class WifiServiceImpl extends AbstractWifiService {
     }
 
     /**
-     * Starts subscription provisioning with a provider
+     * Starts subscription provisioning with a provider.
      *
      * @param provider {@link OsuProvider} the provider to provision with
-     * @param callback {@link IProvisoningCallback} the callback object to inform status
+     * @param callback {@link IProvisioningCallback} the callback object to inform status
      */
     @Override
     public void startSubscriptionProvisioning(OsuProvider provider,
@@ -3038,7 +3175,12 @@ public class WifiServiceImpl extends AbstractWifiService {
         if (callback == null) {
             throw new IllegalArgumentException("Callback must not be null");
         }
-        enforceNetworkSettingsPermission();
+        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED)
+                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
+                != PERMISSION_GRANTED)) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
         if (!mContext.getPackageManager().hasSystemFeature(
                 PackageManager.FEATURE_WIFI_PASSPOINT)) {
             throw new UnsupportedOperationException("Passpoint not enabled");
@@ -3109,7 +3251,7 @@ public class WifiServiceImpl extends AbstractWifiService {
         return (getSupportedFeaturesInternal() & WIFI_FEATURE_INFRA_5G) == WIFI_FEATURE_INFRA_5G;
     }
 
-    private int getSupportedFeaturesInternal() {
+    private long getSupportedFeaturesInternal() {
         final AsyncChannel channel = mClientModeImplChannel;
         if (channel != null) {
             return mClientModeImpl.syncGetSupportedFeatures(channel);

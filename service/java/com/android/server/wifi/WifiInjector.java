@@ -62,6 +62,8 @@ import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 
+import java.util.Random;
+
 /**
  *  WiFi dependency injector. To be used for accessing various WiFi class instances and as a
  *  handle for mock injection.
@@ -124,6 +126,7 @@ public class WifiInjector {
     private final NetworkSuggestionEvaluator mNetworkSuggestionEvaluator;
     private final PasspointNetworkEvaluator mPasspointNetworkEvaluator;
     private final ScoredNetworkEvaluator mScoredNetworkEvaluator;
+    private final CarrierNetworkEvaluator mCarrierNetworkEvaluator;
     private final WifiNetworkScoreCache mWifiNetworkScoreCache;
     private final NetworkScoreManager mNetworkScoreManager;
     private WifiScanner mWifiScanner;
@@ -195,16 +198,19 @@ public class WifiInjector {
         mSupplicantStaIfaceHal =
                 new SupplicantStaIfaceHal(mContext, mWifiMonitor, mPropertyService);
         mHostapdHal = new HostapdHal(mContext);
-        mWificondControl = new WificondControl(this, mWifiMonitor, mCarrierNetworkConfig);
+        mWificondControl = new WificondControl(this, mWifiMonitor, mCarrierNetworkConfig,
+                (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE),
+                clientModeImplLooper, mClock);
         mNwManagementService = INetworkManagementService.Stub.asInterface(
                 ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE));
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWificondControl,
                 mWifiMonitor, mNwManagementService, mPropertyService, mWifiMetrics,
-                new Handler(mWifiCoreHandlerThread.getLooper()));
+                new Handler(mWifiCoreHandlerThread.getLooper()), new Random());
         mWifiP2pMonitor = new WifiP2pMonitor(this);
         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
-        mWifiP2pNative = new WifiP2pNative(mSupplicantP2pIfaceHal, mHalDeviceManager);
+        mWifiP2pNative = new WifiP2pNative(mSupplicantP2pIfaceHal, mHalDeviceManager,
+                mPropertyService);
 
         // Now get instances of all the objects that depend on the HandlerThreads
         mWifiTrafficPoller = new WifiTrafficPoller(clientModeImplLooper);
@@ -258,6 +264,8 @@ public class WifiInjector {
         mScoredNetworkEvaluator = new ScoredNetworkEvaluator(context, clientModeImplLooper,
                 mFrameworkFacade, mNetworkScoreManager, mWifiConfigManager, mConnectivityLocalLog,
                 mWifiNetworkScoreCache, mWifiPermissionsUtil);
+        mCarrierNetworkEvaluator = new CarrierNetworkEvaluator(mWifiConfigManager,
+                mCarrierNetworkConfig, mConnectivityLocalLog);
         mSimAccessor = new SIMAccessor(mContext);
         mPasspointManager = new PasspointManager(mContext, mWifiNative, mWifiKeyStore, mClock,
                 mSimAccessor, new PasspointObjectFactory(), mWifiConfigManager, mWifiConfigStore,
@@ -302,7 +310,7 @@ public class WifiInjector {
         if (mClientModeImpl != null)
             mClientModeImpl.setWifiDiagnostics(mWifiDiagnostics);
         mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService(),
-                mClientModeImpl, mFrameworkFacade);
+                mClientModeImpl, mFrameworkFacade, clientModeImplLooper);
         mWifiController = new WifiController(mContext, mClientModeImpl, clientModeImplLooper,
                 mSettingsStore, mWifiServiceHandlerThread.getLooper(), mFrameworkFacade,
                 mActiveModeWarden);
@@ -573,7 +581,7 @@ public class WifiInjector {
                 mCarrierNetworkConfig, mWifiMetrics, mWifiCoreHandlerThread.getLooper(),
                 mClock, mConnectivityLocalLog,
                 mSavedNetworkEvaluator, mScoredNetworkEvaluator, mPasspointNetworkEvaluator,
-                mNetworkSuggestionEvaluator);
+                mNetworkSuggestionEvaluator, mCarrierNetworkEvaluator);
     }
 
     /**

@@ -16,7 +16,7 @@
 
 package com.android.server.wifi;
 
-import static android.net.wifi.WifiManager.DPP_NETWORK_ROLE_AP;
+import static android.net.wifi.WifiManager.EASY_CONNECT_NETWORK_ROLE_AP;
 
 import android.content.Context;
 import android.hardware.wifi.supplicant.V1_2.DppAkm;
@@ -24,7 +24,7 @@ import android.hardware.wifi.supplicant.V1_2.DppFailureCode;
 import android.hardware.wifi.supplicant.V1_2.DppNetRole;
 import android.hardware.wifi.supplicant.V1_2.DppProgressCode;
 import android.hardware.wifi.supplicant.V1_2.DppSuccessCode;
-import android.net.wifi.DppStatusCallback;
+import android.net.wifi.EasyConnectStatusCallback;
 import android.net.wifi.IDppCallback;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
@@ -56,7 +56,7 @@ public class DppManager {
     public WakeupMessage mDppTimeoutMessage = null;
     private final Clock mClock;
     private static final String DPP_TIMEOUT_TAG = TAG + " Request Timeout";
-    private static final int DPP_TIMEOUT_MS = 30_000; // 30 seconds
+    private static final int DPP_TIMEOUT_MS = 40_000; // 40 seconds
 
     private final DppEventCallback mDppEventCallback = new DppEventCallback() {
         @Override
@@ -121,6 +121,18 @@ public class DppManager {
     }
 
     private void timeoutDppRequest() {
+        logd("DPP timeout");
+
+        if (mDppRequestInfo == null) {
+            Log.e(TAG, "DPP timeout with no request info");
+            return;
+        }
+
+        // Clean up supplicant resources
+        if (!mWifiNative.stopDppInitiator(mClientIfaceName)) {
+            Log.e(TAG, "Failed to stop DPP Initiator");
+        }
+
         // Clean up resources and let the caller know about the timeout
         onFailure(DppFailureCode.TIMEOUT);
     }
@@ -129,16 +141,16 @@ public class DppManager {
      * Start DPP request in Configurator-Initiator mode. The goal of this call is to send the
      * selected Wi-Fi configuration to a remote peer so it could join that network.
      *
-     * @param uid User ID
-     * @param binder Binder object
-     * @param enrolleeUri The Enrollee URI, scanned externally (e.g. via QR code)
-     * @param selectedNetworkId The selected Wi-Fi network ID to be sent
+     * @param uid                 User ID
+     * @param binder              Binder object
+     * @param enrolleeUri         The Enrollee URI, scanned externally (e.g. via QR code)
+     * @param selectedNetworkId   The selected Wi-Fi network ID to be sent
      * @param enrolleeNetworkRole Network role of remote enrollee: STA or AP
-     * @param callback DPP Callback object
+     * @param callback            DPP Callback object
      */
     public void startDppAsConfiguratorInitiator(int uid, IBinder binder,
             String enrolleeUri, int selectedNetworkId,
-            @WifiManager.DppNetworkRole int enrolleeNetworkRole, IDppCallback callback) {
+            @WifiManager.EasyConnectNetworkRole int enrolleeNetworkRole, IDppCallback callback) {
         if (mDppRequestInfo != null) {
             try {
                 Log.e(TAG, "DPP request already in progress");
@@ -146,7 +158,7 @@ public class DppManager {
                         + uid);
 
                 // On going DPP. Call the failure callback directly
-                callback.onFailure(DppStatusCallback.DPP_EVENT_FAILURE_BUSY);
+                callback.onFailure(EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_BUSY);
             } catch (RemoteException e) {
                 // Empty
             }
@@ -158,7 +170,7 @@ public class DppManager {
             try {
                 Log.e(TAG, "Wi-Fi client interface does not exist");
                 // On going DPP. Call the failure callback directly
-                callback.onFailure(DppStatusCallback.DPP_EVENT_FAILURE);
+                callback.onFailure(EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_GENERIC);
             } catch (RemoteException e) {
                 // Empty
             }
@@ -172,7 +184,7 @@ public class DppManager {
             try {
                 Log.e(TAG, "Selected network is null");
                 // On going DPP. Call the failure callback directly
-                callback.onFailure(DppStatusCallback.DPP_EVENT_FAILURE);
+                callback.onFailure(EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_GENERIC);
             } catch (RemoteException e) {
                 // Empty
             }
@@ -201,7 +213,8 @@ public class DppManager {
             try {
                 // Key management must be either PSK or SAE
                 Log.e(TAG, "Key management must be either PSK or SAE");
-                callback.onFailure(DppStatusCallback.DPP_EVENT_FAILURE_INVALID_NETWORK);
+                callback.onFailure(
+                        EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_INVALID_NETWORK);
             } catch (RemoteException e) {
                 // Empty
             }
@@ -215,7 +228,7 @@ public class DppManager {
 
         if (!linkToDeath(mDppRequestInfo)) {
             // Notify failure and clean up
-            onFailure(DppStatusCallback.DPP_EVENT_FAILURE);
+            onFailure(EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_GENERIC);
             return;
         }
 
@@ -248,7 +261,8 @@ public class DppManager {
 
         if (!mWifiNative.startDppConfiguratorInitiator(mClientIfaceName,
                 mDppRequestInfo.peerId, 0, ssidEncoded, passwordEncoded, psk,
-                enrolleeNetworkRole == DPP_NETWORK_ROLE_AP ? DppNetRole.AP : DppNetRole.STA,
+                enrolleeNetworkRole == EASY_CONNECT_NETWORK_ROLE_AP ? DppNetRole.AP
+                        : DppNetRole.STA,
                 securityAkm)) {
             Log.e(TAG, "DPP Start Configurator Initiator failure");
 
@@ -265,10 +279,10 @@ public class DppManager {
      * Start DPP request in Enrollee-Initiator mode. The goal of this call is to receive a
      * Wi-Fi configuration object from the peer configurator in order to join a network.
      *
-     * @param uid User ID
-     * @param binder Binder object
+     * @param uid             User ID
+     * @param binder          Binder object
      * @param configuratorUri The Configurator URI, scanned externally (e.g. via QR code)
-     * @param callback DPP Callback object
+     * @param callback        DPP Callback object
      */
     public void startDppAsEnrolleeInitiator(int uid, IBinder binder,
             String configuratorUri, IDppCallback callback) {
@@ -279,7 +293,7 @@ public class DppManager {
                         + uid);
 
                 // On going DPP. Call the failure callback directly
-                callback.onFailure(DppStatusCallback.DPP_EVENT_FAILURE_BUSY);
+                callback.onFailure(EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_BUSY);
             } catch (RemoteException e) {
                 // Empty
             }
@@ -330,6 +344,7 @@ public class DppManager {
 
     /**
      * Stop a current DPP session
+     *
      * @param uid User ID
      */
     public void stopDppSession(int uid) {
@@ -355,6 +370,7 @@ public class DppManager {
     }
 
     private void cleanupDppResources() {
+        logd("DPP clean up resources");
         if (mDppRequestInfo == null) {
             return;
         }
@@ -390,6 +406,7 @@ public class DppManager {
 
     /**
      * Enable vervose logging from DppManager
+     *
      * @param verbose 0 to disable verbose logging, or any other value to enable.
      */
     public void enableVerboseLogging(int verbose) {
@@ -398,6 +415,8 @@ public class DppManager {
 
     private void onSuccessConfigReceived(WifiConfiguration newWifiConfiguration) {
         try {
+            logd("onSuccessConfigReceived");
+
             if (mDppRequestInfo != null) {
                 NetworkUpdateResult networkUpdateResult = mWifiConfigManager
                         .addOrUpdateNetwork(newWifiConfiguration, mDppRequestInfo.uid);
@@ -406,13 +425,13 @@ public class DppManager {
                     mDppRequestInfo.callback.onSuccessConfigReceived(
                             networkUpdateResult.getNetworkId());
                 } else {
-                    mDppRequestInfo.callback.onFailure(DppStatusCallback
-                            .DPP_EVENT_FAILURE_CONFIGURATION);
+                    mDppRequestInfo.callback.onFailure(EasyConnectStatusCallback
+                            .EASY_CONNECT_EVENT_FAILURE_CONFIGURATION);
                 }
             } else {
                 Log.e(TAG, "Unexpected null Wi-Fi configuration object");
-                mDppRequestInfo.callback.onFailure(DppStatusCallback
-                        .DPP_EVENT_FAILURE_CONFIGURATION);
+                mDppRequestInfo.callback.onFailure(EasyConnectStatusCallback
+                        .EASY_CONNECT_EVENT_FAILURE_CONFIGURATION);
             }
         } catch (RemoteException e) {
             Log.e(TAG, "Callback failure");
@@ -429,18 +448,21 @@ public class DppManager {
                 return;
             }
 
+            logd("onSuccess: " + dppStatusCode);
+
             int dppSuccessCode;
 
             // Convert from HAL codes to WifiManager/user codes
             switch (dppStatusCode) {
                 case DppSuccessCode.CONFIGURATION_SENT:
-                    dppSuccessCode = DppStatusCallback
-                            .DPP_EVENT_SUCCESS_CONFIGURATION_SENT;
+                    dppSuccessCode = EasyConnectStatusCallback
+                            .EASY_CONNECT_EVENT_SUCCESS_CONFIGURATION_SENT;
                     break;
 
                 default:
                     Log.e(TAG, "onProgress: unknown code " + dppStatusCode);
-                    mDppRequestInfo.callback.onFailure(DppStatusCallback.DPP_EVENT_FAILURE);
+                    mDppRequestInfo.callback.onFailure(
+                            EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_GENERIC);
                     cleanupDppResources();
                     return;
             }
@@ -462,18 +484,20 @@ public class DppManager {
                 return;
             }
 
+            logd("onProgress: " + dppStatusCode);
+
             int dppProgressCode;
 
             // Convert from HAL codes to WifiManager/user codes
             switch (dppStatusCode) {
                 case DppProgressCode.AUTHENTICATION_SUCCESS:
-                    dppProgressCode = DppStatusCallback
-                            .DPP_EVENT_PROGRESS_AUTHENTICATION_SUCCESS;
+                    dppProgressCode = EasyConnectStatusCallback
+                            .EASY_CONNECT_EVENT_PROGRESS_AUTHENTICATION_SUCCESS;
                     break;
 
                 case DppProgressCode.RESPONSE_PENDING:
-                    dppProgressCode = DppStatusCallback
-                            .DPP_EVENT_PROGRESS_RESPONSE_PENDING;
+                    dppProgressCode = EasyConnectStatusCallback
+                            .EASY_CONNECT_EVENT_PROGRESS_RESPONSE_PENDING;
                     break;
 
                 default:
@@ -495,37 +519,48 @@ public class DppManager {
                 return;
             }
 
+            logd("OnFailure: " + dppStatusCode);
+
             int dppFailureCode;
 
             // Convert from HAL codes to WifiManager/user codes
             switch (dppStatusCode) {
                 case DppFailureCode.INVALID_URI:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE_INVALID_URI;
+                    dppFailureCode =
+                            EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_INVALID_URI;
                     break;
 
                 case DppFailureCode.AUTHENTICATION:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE_AUTHENTICATION;
+                    dppFailureCode =
+                            EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_AUTHENTICATION;
                     break;
 
                 case DppFailureCode.NOT_COMPATIBLE:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE_NOT_COMPATIBLE;
+                    dppFailureCode =
+                            EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_NOT_COMPATIBLE;
                     break;
 
                 case DppFailureCode.CONFIGURATION:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE_CONFIGURATION;
+                    dppFailureCode =
+                            EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_CONFIGURATION;
                     break;
 
                 case DppFailureCode.BUSY:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE_BUSY;
+                    dppFailureCode = EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_BUSY;
                     break;
 
                 case DppFailureCode.TIMEOUT:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE_TIMEOUT;
+                    dppFailureCode = EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_TIMEOUT;
+                    break;
+
+                case DppFailureCode.NOT_SUPPORTED:
+                    dppFailureCode =
+                            EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_NOT_SUPPORTED;
                     break;
 
                 case DppFailureCode.FAILURE:
                 default:
-                    dppFailureCode = DppStatusCallback.DPP_EVENT_FAILURE;
+                    dppFailureCode = EasyConnectStatusCallback.EASY_CONNECT_EVENT_FAILURE_GENERIC;
                     break;
             }
 

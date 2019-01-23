@@ -22,12 +22,15 @@ import static android.net.wifi.WifiInfo.INVALID_RSSI;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.net.MacAddress;
+import android.net.wifi.SupplicantState;
+import android.net.wifi.WifiSsid;
 import android.util.ArrayMap;
 import android.util.Base64;
 import android.util.Log;
 import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.util.Preconditions;
 import com.android.server.wifi.WifiScoreCardProto.AccessPoint;
 import com.android.server.wifi.WifiScoreCardProto.Event;
 import com.android.server.wifi.WifiScoreCardProto.Network;
@@ -37,9 +40,11 @@ import com.android.server.wifi.WifiScoreCardProto.UnivariateStatistic;
 import com.android.server.wifi.util.NativeUtil;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
@@ -56,9 +61,51 @@ public class WifiScoreCard {
     public static final String DUMP_ARG = "WifiScoreCard";
 
     private static final String TAG = "WifiScoreCard";
+    private static final boolean DBG = false;
 
     private final Clock mClock;
     private final String mL2KeySeed;
+    private MemoryStore mMemoryStore;
+
+    /** Our view of the memory store */
+    public interface MemoryStore {
+        /** Requests a read, with asynchronous reply */
+        void read(String key, BlobListener blobListener);
+        /** Requests a write, does not wait for completion */
+        void write(String key, byte[] value);
+    }
+    /** Asynchronous response to a read request */
+    public interface BlobListener {
+        /** Provides the previously stored value, or null if none */
+        void onBlobRetrieved(@Nullable byte[] value);
+    }
+
+    /**
+     * Installs a memory store.
+     *
+     * Normally this happens just once, shortly after we start. But wifi can
+     * come up before the disk is ready, and we might not yet have a valid wall
+     * clock when we start up, so we need to be prepared to begin recording data
+     * even if the MemoryStore is not yet available.
+     *
+     * When the store is installed for the first time, we want to merge any
+     * recently recorded data together with data already in the store. But if
+     * the store restarts and has to be reinstalled, we don't want to do
+     * this merge, because that would risk double-counting the old data.
+     *
+     */
+    public void installMemoryStore(@NonNull MemoryStore memoryStore) {
+        Preconditions.checkNotNull(memoryStore);
+        if (mMemoryStore == null) {
+            mMemoryStore = memoryStore;
+            Log.i(TAG, "Installing MemoryStore");
+            requestReadForAllChanged();
+        } else {
+            mMemoryStore = memoryStore;
+            Log.e(TAG, "Reinstalling MemoryStore");
+            // Our caller will call doWrites() eventually, so nothing more to do here.
+        }
+    }
 
     /**
      * Timestamp of the start of the most recent connection attempt.
@@ -72,9 +119,19 @@ public class WifiScoreCard {
     private static final long TS_NONE = -1;
 
     /**
+     * Timestamp captured when we find out about a firmware roam
+     */
+    private long mTsRoam = TS_NONE;
+
+    /**
      * Becomes true the first time we see a poll with a valid RSSI in a connection
      */
     private boolean mPolled = false;
+
+    /**
+     * A note to ourself that we are attempting a network switch
+     */
+    private boolean mAttemptingSwitch = false;
 
     /**
      * @param clock is the time source
@@ -86,8 +143,28 @@ public class WifiScoreCard {
         mDummyPerBssid = new PerBssid("", MacAddress.fromString(DEFAULT_MAC_ADDRESS));
     }
 
-    private void resetConnectionState() {
-        mTsConnectionAttemptStart = TS_NONE;
+    /**
+     * Resets the connection state
+     */
+    public void resetConnectionState() {
+        if (DBG && mTsConnectionAttemptStart > TS_NONE && !mAttemptingSwitch) {
+            Log.v(TAG, "resetConnectionState", new Exception());
+        }
+        resetConnectionStateInternal(true);
+    }
+
+    /**
+     * @param calledFromResetConnectionState says the call is from outside the class,
+     *        indicating that we need to resepect the value of mAttemptingSwitch.
+     */
+    private void resetConnectionStateInternal(boolean calledFromResetConnectionState) {
+        if (!calledFromResetConnectionState) {
+            mAttemptingSwitch = false;
+        }
+        if (!mAttemptingSwitch) {
+            mTsConnectionAttemptStart = TS_NONE;
+        }
+        mTsRoam = TS_NONE;
         mPolled = false;
     }
 
@@ -102,6 +179,8 @@ public class WifiScoreCard {
                 wifiInfo.getFrequency(),
                 wifiInfo.getRssi(),
                 wifiInfo.getLinkSpeed());
+
+        if (DBG) Log.d(TAG, event.toString() + " ID: " + perBssid.id + " " + wifiInfo);
     }
 
     /**
@@ -110,13 +189,21 @@ public class WifiScoreCard {
      * @param wifiInfo object holding relevant values
      */
     public void noteSignalPoll(ExtendedWifiInfo wifiInfo) {
-        update(Event.SIGNAL_POLL, wifiInfo);
         if (!mPolled && wifiInfo.getRssi() != INVALID_RSSI) {
             update(Event.FIRST_POLL_AFTER_CONNECTION, wifiInfo);
             mPolled = true;
         }
-        // TODO(b/112196799) capture state for LAST_POLL_BEFORE_ROAM
+        update(Event.SIGNAL_POLL, wifiInfo);
+        if (mTsRoam > TS_NONE && wifiInfo.getRssi() != INVALID_RSSI) {
+            long duration = mClock.getElapsedSinceBootMillis() - mTsRoam;
+            if (duration >= SUCCESS_MILLIS_SINCE_ROAM) {
+                update(Event.ROAM_SUCCESS, wifiInfo);
+                mTsRoam = TS_NONE;
+            }
+        }
     }
+    /** Wait a few seconds before considering the roam successful */
+    private static final long SUCCESS_MILLIS_SINCE_ROAM = 4_000;
 
     /**
      * Updates the score card after IP configuration
@@ -125,6 +212,7 @@ public class WifiScoreCard {
      */
     public void noteIpConfiguration(ExtendedWifiInfo wifiInfo) {
         update(Event.IP_CONFIGURATION_SUCCESS, wifiInfo);
+        mAttemptingSwitch = false;
     }
 
     /**
@@ -134,9 +222,17 @@ public class WifiScoreCard {
      */
     public void noteConnectionAttempt(ExtendedWifiInfo wifiInfo) {
         // We may or may not be currently connected. If not, simply record the start.
-        // But if we are connected, wrap up the old one first TODO(b/112196799)
+        // But if we are connected, wrap up the old one first.
+        if (mTsConnectionAttemptStart > TS_NONE) {
+            if (mPolled) {
+                update(Event.LAST_POLL_BEFORE_SWITCH, wifiInfo);
+            }
+            mAttemptingSwitch = true;
+        }
         mTsConnectionAttemptStart = mClock.getElapsedSinceBootMillis();
         mPolled = false;
+
+        if (DBG) Log.d(TAG, "CONNECTION_ATTEMPT" + (mAttemptingSwitch ? " X " : " ") + wifiInfo);
     }
 
     /**
@@ -144,9 +240,16 @@ public class WifiScoreCard {
      *
      * @param wifiInfo object holding relevant values
      */
-    public void noteConnectionFailure(ExtendedWifiInfo wifiInfo) {
+    public void noteConnectionFailure(ExtendedWifiInfo wifiInfo,
+                int codeMetrics, int codeMetricsProto) {
+        if (DBG) {
+            Log.d(TAG, "noteConnectionFailure(..., " + codeMetrics + ", " + codeMetricsProto + ")");
+        }
+        // TODO(b/112196799) Need to sort out the reasons better. Also, we get here
+        // when we disconnect from below, so it should sometimes get counted as a
+        // disconnection rather than a connection failure.
         update(Event.CONNECTION_FAILURE, wifiInfo);
-        resetConnectionState();
+        resetConnectionStateInternal(false);
     }
 
     /**
@@ -156,18 +259,47 @@ public class WifiScoreCard {
      */
     public void noteIpReachabilityLost(ExtendedWifiInfo wifiInfo) {
         update(Event.IP_REACHABILITY_LOST, wifiInfo);
-        // TODO(b/112196799) Check for roam failure here
-        resetConnectionState();
+        if (mTsRoam > TS_NONE) {
+            mTsConnectionAttemptStart = mTsRoam; // just to update elapsed
+            update(Event.ROAM_FAILURE, wifiInfo);
+        }
+        resetConnectionStateInternal(false);
     }
 
     /**
-     * Updates the score card after a roam
+     * Updates the score card before a roam
+     *
+     * We may have already done a firmware roam, but wifiInfo has not yet
+     * been updated, so we still have the old state.
      *
      * @param wifiInfo object holding relevant values
      */
     public void noteRoam(ExtendedWifiInfo wifiInfo) {
-        // TODO(b/112196799) Defer recording success until we believe it works
-        update(Event.ROAM_SUCCESS, wifiInfo);
+        update(Event.LAST_POLL_BEFORE_ROAM, wifiInfo);
+        mTsRoam = mClock.getElapsedSinceBootMillis();
+    }
+
+    /**
+     * Called when the supplicant state is about to change, before wifiInfo is updated
+     *
+     * @param wifiInfo object holding old values
+     * @param state the new supplicant state
+     */
+    public void noteSupplicantStateChanging(ExtendedWifiInfo wifiInfo, SupplicantState state) {
+        if (DBG) {
+            Log.d(TAG, "Changing state to " + state + " " + wifiInfo);
+        }
+    }
+
+    /**
+     * Called after the supplicant state changed
+     *
+     * @param wifiInfo object holding old values
+     */
+    public void noteSupplicantStateChanged(ExtendedWifiInfo wifiInfo) {
+        if (DBG) {
+            Log.d(TAG, "STATE " + wifiInfo);
+        }
     }
 
     /**
@@ -177,7 +309,7 @@ public class WifiScoreCard {
      */
     public void noteWifiDisabled(ExtendedWifiInfo wifiInfo) {
         update(Event.WIFI_DISABLED, wifiInfo);
-        resetConnectionState();
+        resetConnectionStateInternal(false);
     }
 
     final class PerBssid {
@@ -185,6 +317,7 @@ public class WifiScoreCard {
         public final UUID l2Key;
         public final String ssid;
         public final MacAddress bssid;
+        public boolean changed;
         private final Map<Pair<Event, Integer>, PerSignal>
                 mSignalForEventAndFrequency = new ArrayMap<>();
         PerBssid(String ssid, MacAddress bssid) {
@@ -192,20 +325,7 @@ public class WifiScoreCard {
             this.bssid = bssid;
             this.l2Key = computeHashedL2Key(ssid, bssid);
             this.id = (int) l2Key.getLeastSignificantBits() & 0x7fffffff;
-        }
-        PerBssid(String ssid, MacAddress bssid, AccessPoint ap) { // TODO make a method instead
-            this.ssid = ssid;
-            this.bssid = bssid;
-            this.l2Key = computeHashedL2Key(ssid, bssid);
-            this.id = (int) l2Key.getLeastSignificantBits() & 0x7fffffff;
-            if (ap.hasId()) {
-                this.id = ap.getId();
-            }
-            for (Signal signal: ap.getEventStatsList()) {
-                PerSignal perSignal = new PerSignal(signal);
-                Pair<Event, Integer> key = new Pair<>(perSignal.event, perSignal.frequency);
-                mSignalForEventAndFrequency.put(key, perSignal);
-            }
+            this.changed = false;
         }
         void updateEventStats(Event event, int frequency, int rssi, int linkspeed) {
             PerSignal perSignal = lookupSignal(event, frequency);
@@ -221,8 +341,10 @@ public class WifiScoreCard {
                     perSignal.elapsedMs.update(millis);
                 }
             }
+            changed = true;
         }
         PerSignal lookupSignal(Event event, int frequency) {
+            finishPendingRead();
             Pair<Event, Integer> key = new Pair<>(event, frequency);
             PerSignal ans = mSignalForEventAndFrequency.get(key);
             if (ans == null) {
@@ -235,6 +357,7 @@ public class WifiScoreCard {
             return toAccessPoint(false);
         }
         AccessPoint toAccessPoint(boolean obfuscate) {
+            finishPendingRead();
             AccessPoint.Builder builder = AccessPoint.newBuilder();
             builder.setId(id);
             if (!obfuscate) {
@@ -245,9 +368,57 @@ public class WifiScoreCard {
             }
             return builder.build();
         }
+        PerBssid merge(AccessPoint ap) {
+            if (ap.hasId() && this.id != ap.getId()) {
+                return this;
+            }
+            for (Signal signal: ap.getEventStatsList()) {
+                Pair<Event, Integer> key = new Pair<>(signal.getEvent(), signal.getFrequency());
+                PerSignal perSignal = mSignalForEventAndFrequency.get(key);
+                if (perSignal == null) {
+                    mSignalForEventAndFrequency.put(key, new PerSignal(signal));
+                    // No need to set changed for this, since we are in sync with what's stored
+                } else {
+                    perSignal.merge(signal);
+                    changed = true;
+                }
+            }
+            return this;
+        }
         String getL2Key() {
             return l2Key.toString();
         }
+        /**
+         * Called when the (asynchronous) answer to a read request comes back.
+         */
+        void lazyMerge(byte[] serialized) {
+            if (serialized == null) return;
+            byte[] old = mPendingReadFromStore.getAndSet(serialized);
+            if (old != null) {
+                Log.e(TAG, "More answers than we expected!");
+            }
+        }
+        /**
+         * Handles (when convenient) the arrival of previously stored data.
+         *
+         * The response from IpMemoryStore arrives on a different thread, so we
+         * defer handling it until here, when we're on our favorite thread and
+         * in a good position to deal with it. We may have already collected some
+         * data before now, so we need to be prepared to merge the new and old together.
+         */
+        void finishPendingRead() {
+            final byte[] serialized = mPendingReadFromStore.getAndSet(null);
+            if (serialized == null) return;
+            AccessPoint ap;
+            try {
+                ap = AccessPoint.parseFrom(serialized);
+            } catch (InvalidProtocolBufferException e) {
+                Log.e(TAG, "Failed to deserialize", e);
+                return;
+            }
+            merge(ap);
+        }
+        private final AtomicReference<byte[]> mPendingReadFromStore = new AtomicReference<>();
     }
 
     // Returned by lookupBssid when the BSSID is not available,
@@ -258,7 +429,7 @@ public class WifiScoreCard {
 
     private @NonNull PerBssid lookupBssid(String ssid, String bssid) {
         MacAddress mac;
-        if (ssid == null || bssid == null) {
+        if (ssid == null || WifiSsid.NONE.equals(ssid) || bssid == null) {
             return mDummyPerBssid;
         }
         try {
@@ -268,15 +439,52 @@ public class WifiScoreCard {
         }
         PerBssid ans = mApForBssid.get(mac);
         if (ans == null || !ans.ssid.equals(ssid)) {
-            UUID l2Key = computeHashedL2Key(ssid, mac);
-            // TODO try to read serialized blob from IpMemoryStore
             ans = new PerBssid(ssid, mac);
             PerBssid old = mApForBssid.put(mac, ans);
             if (old != null) {
                 Log.i(TAG, "Discarding stats for score card (ssid changed) ID: " + old.id);
             }
+            requestReadForPerBssid(ans);
         }
         return ans;
+    }
+
+    private void requestReadForPerBssid(final PerBssid perBssid) {
+        if (mMemoryStore != null) {
+            mMemoryStore.read(perBssid.getL2Key(), (value) -> perBssid.lazyMerge(value));
+        }
+    }
+
+    private void requestReadForAllChanged() {
+        for (PerBssid perBssid : mApForBssid.values()) {
+            if (perBssid.changed) {
+                requestReadForPerBssid(perBssid);
+            }
+        }
+    }
+
+    /**
+     * Issues write requests for all changed entries
+     *
+     * This should be called from time to time to save the state to persistent
+     * storage. Since we always check internal state first, this does not need
+     * to be called very often, but it should be called before shutdown.
+     *
+     * @returns number of writes issued.
+     */
+    public int doWrites() {
+        if (mMemoryStore == null) return 0;
+        int count = 0;
+        for (PerBssid perBssid : mApForBssid.values()) {
+            if (perBssid.changed) {
+                perBssid.finishPendingRead();
+                byte[] serialized = perBssid.toAccessPoint(/* No BSSID */ true).toByteArray();
+                mMemoryStore.write(perBssid.getL2Key(), serialized);
+                perBssid.changed = false;
+                count++;
+            }
+        }
+        return count;
     }
 
     private UUID computeHashedL2Key(String ssid, MacAddress mac) {
@@ -314,7 +522,7 @@ public class WifiScoreCard {
     @VisibleForTesting
     PerBssid perBssidFromAccessPoint(String ssid, AccessPoint ap) {
         MacAddress bssid = MacAddress.fromBytes(ap.getBssid().toByteArray());
-        return new PerBssid(ssid, bssid, ap);
+        return new PerBssid(ssid, bssid).merge(ap);
     }
 
     final class PerSignal {
@@ -333,6 +541,7 @@ public class WifiScoreCard {
                 case IP_CONFIGURATION_SUCCESS:
                 case CONNECTION_FAILURE:
                 case WIFI_DISABLED:
+                case ROAM_FAILURE:
                     this.elapsedMs = new PerUnivariateStatistic();
                     break;
                 default:
@@ -349,6 +558,15 @@ public class WifiScoreCard {
                 this.elapsedMs = new PerUnivariateStatistic(signal.getElapsedMs());
             } else {
                 this.elapsedMs = null;
+            }
+        }
+        void merge(Signal signal) {
+            Preconditions.checkArgument(event == signal.getEvent());
+            Preconditions.checkArgument(frequency == signal.getFrequency());
+            rssi.merge(signal.getRssi());
+            linkspeed.merge(signal.getLinkspeed());
+            if (signal.hasElapsedMs()) {
+                elapsedMs.merge(signal.getElapsedMs());
             }
         }
         Signal toSignal() {
@@ -401,6 +619,36 @@ public class WifiScoreCard {
         }
         void age() {
             //TODO  Fold the current stats into the historical stats
+        }
+        void merge(UnivariateStatistic stats) {
+            if (stats.hasCount()) {
+                count += stats.getCount();
+                sum += stats.getSum();
+                sumOfSquares += stats.getSumOfSquares();
+            }
+            if (stats.hasMinValue()) {
+                minValue = Math.min(minValue, stats.getMinValue());
+            }
+            if (stats.hasMaxValue()) {
+                maxValue = Math.max(maxValue, stats.getMaxValue());
+            }
+            if (stats.hasHistoricalVariance()) {
+                if (historicalVariance < Double.POSITIVE_INFINITY) {
+                    // Combine the estimates; c.f.
+                    // Maybeck, Stochasic Models, Estimation, and Control, Vol. 1
+                    // equations (1-3) and (1-4)
+                    double numer1 = stats.getHistoricalVariance();
+                    double numer2 = historicalVariance;
+                    double denom = numer1 + numer2;
+                    historicalMean = (numer1 * historicalMean
+                                    + numer2 * stats.getHistoricalMean())
+                                    / denom;
+                    historicalVariance = numer1 * numer2 / denom;
+                } else {
+                    historicalMean = stats.getHistoricalMean();
+                    historicalVariance = stats.getHistoricalVariance();
+                }
+            }
         }
         UnivariateStatistic toUnivariateStatistic() {
             UnivariateStatistic.Builder builder = UnivariateStatistic.newBuilder();

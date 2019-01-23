@@ -223,7 +223,7 @@ public class WifiConfigManager {
     @VisibleForTesting
     public static final long MAX_PNO_SCAN_FREQUENCY_AGE_MS = (long) 1000 * 3600 * 24 * 30;
 
-    private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 0; // 0 = disabled
+    private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 1; // 0 = disabled
     private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 0; // 0 = disabled:
 
     /**
@@ -506,15 +506,20 @@ public class WifiConfigManager {
      *
      * @param configuration provided WifiConfiguration object.
      * @param maskPasswords Mask passwords or not.
+     * @param targetUid Target UID for MAC address reading: -1 = mask all, 0 = mask none, >0 =
+     *                  mask all but the targetUid (carrier app).
      * @return Copy of the WifiConfiguration object.
      */
     private WifiConfiguration createExternalWifiConfiguration(
-            WifiConfiguration configuration, boolean maskPasswords) {
+            WifiConfiguration configuration, boolean maskPasswords, int targetUid) {
         WifiConfiguration network = new WifiConfiguration(configuration);
         if (maskPasswords) {
             maskPasswordsInWifiConfiguration(network);
         }
-        maskRandomizedMacAddressInWifiConfiguration(network);
+        if (targetUid != Process.WIFI_UID && targetUid != Process.SYSTEM_UID
+                && targetUid != configuration.creatorUid) {
+            maskRandomizedMacAddressInWifiConfiguration(network);
+        }
         return network;
     }
 
@@ -526,16 +531,19 @@ public class WifiConfigManager {
      *
      * @param savedOnly     Retrieve only saved networks.
      * @param maskPasswords Mask passwords or not.
+     * @param targetUid Target UID for MAC address reading: -1 (Invalid UID) = mask all,
+     *                  WIFI||SYSTEM = mask none, <other> = mask all but the targetUid (carrier
+     *                  app).
      * @return List of WifiConfiguration objects representing the networks.
      */
     private List<WifiConfiguration> getConfiguredNetworks(
-            boolean savedOnly, boolean maskPasswords) {
+            boolean savedOnly, boolean maskPasswords, int targetUid) {
         List<WifiConfiguration> networks = new ArrayList<>();
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
             if (savedOnly && config.ephemeral) {
                 continue;
             }
-            networks.add(createExternalWifiConfiguration(config, maskPasswords));
+            networks.add(createExternalWifiConfiguration(config, maskPasswords, targetUid));
         }
         return networks;
     }
@@ -546,7 +554,7 @@ public class WifiConfigManager {
      * @return List of WifiConfiguration objects representing the networks.
      */
     public List<WifiConfiguration> getConfiguredNetworks() {
-        return getConfiguredNetworks(false, true);
+        return getConfiguredNetworks(false, true, Process.WIFI_UID);
     }
 
     /**
@@ -559,7 +567,7 @@ public class WifiConfigManager {
      * @return List of WifiConfiguration objects representing the networks.
      */
     public List<WifiConfiguration> getConfiguredNetworksWithPasswords() {
-        return getConfiguredNetworks(false, false);
+        return getConfiguredNetworks(false, false, Process.WIFI_UID);
     }
 
     /**
@@ -567,8 +575,8 @@ public class WifiConfigManager {
      *
      * @return List of WifiConfiguration objects representing the networks.
      */
-    public List<WifiConfiguration> getSavedNetworks() {
-        return getConfiguredNetworks(true, true);
+    public List<WifiConfiguration> getSavedNetworks(int targetUid) {
+        return getConfiguredNetworks(true, true, targetUid);
     }
 
     /**
@@ -585,7 +593,7 @@ public class WifiConfigManager {
         }
         // Create a new configuration object with the passwords masked to send out to the external
         // world.
-        return createExternalWifiConfiguration(config, true);
+        return createExternalWifiConfiguration(config, true, Process.WIFI_UID);
     }
 
     /**
@@ -602,7 +610,7 @@ public class WifiConfigManager {
         }
         // Create a new configuration object with the passwords masked to send out to the external
         // world.
-        return createExternalWifiConfiguration(config, true);
+        return createExternalWifiConfiguration(config, true, Process.WIFI_UID);
     }
 
     /**
@@ -622,7 +630,7 @@ public class WifiConfigManager {
         }
         // Create a new configuration object without the passwords masked to send out to the
         // external world.
-        return createExternalWifiConfiguration(config, false);
+        return createExternalWifiConfiguration(config, false, Process.WIFI_UID);
     }
 
     /**
@@ -898,10 +906,10 @@ public class WifiConfigManager {
             internalConfig.allowedGroupCiphers =
                     (BitSet) externalConfig.allowedGroupCiphers.clone();
         }
-        if (externalConfig.allowedGroupMgmtCiphers != null
-                && !externalConfig.allowedGroupMgmtCiphers.isEmpty()) {
-            internalConfig.allowedGroupMgmtCiphers =
-                    (BitSet) externalConfig.allowedGroupMgmtCiphers.clone();
+        if (externalConfig.allowedGroupManagementCiphers != null
+                && !externalConfig.allowedGroupManagementCiphers.isEmpty()) {
+            internalConfig.allowedGroupManagementCiphers =
+                    (BitSet) externalConfig.allowedGroupManagementCiphers.clone();
         }
         if (externalConfig.allowedSuiteBCiphers != null
                 && !externalConfig.allowedSuiteBCiphers.isEmpty()) {
@@ -986,7 +994,7 @@ public class WifiConfigManager {
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP40);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP104);
 
-        configuration.allowedGroupMgmtCiphers.set(WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256);
+        configuration.allowedGroupCiphers.set(WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256);
 
         configuration.allowedSuiteBCiphers.set(WifiConfiguration.SuiteBCipher.ECDHE_ECDSA);
 
@@ -1031,6 +1039,7 @@ public class WifiConfigManager {
         newInternalConfig.trusted = externalConfig.trusted;
         newInternalConfig.useExternalScores = externalConfig.useExternalScores;
         newInternalConfig.shared = externalConfig.shared;
+        newInternalConfig.updateIdentifier = externalConfig.updateIdentifier;
 
         // Add debug information for network addition.
         newInternalConfig.creatorUid = newInternalConfig.lastUpdateUid = uid;
@@ -1303,6 +1312,17 @@ public class WifiConfigManager {
         return true;
     }
 
+    private String getCreatorPackageName(WifiConfiguration config) {
+        String creatorName = config.creatorName;
+        // getNameForUid (Stored in WifiConfiguration.creatorName) returns a concatenation of name
+        // and uid for shared UIDs ("name:uid").
+        if (!creatorName.contains(":")) {
+            return creatorName; // regular app not using shared UID.
+        }
+        // Separate the package name from the string for app using shared UID.
+        return creatorName.substring(0, creatorName.indexOf(":"));
+    }
+
     /**
      * Remove all networks associated with an application.
      *
@@ -1319,7 +1339,8 @@ public class WifiConfigManager {
         WifiConfiguration[] copiedConfigs =
                 mConfiguredNetworks.valuesForAllUsers().toArray(new WifiConfiguration[0]);
         for (WifiConfiguration config : copiedConfigs) {
-            if (app.uid != config.creatorUid || !app.packageName.equals(config.creatorName)) {
+            if (app.uid != config.creatorUid
+                    || !app.packageName.equals(getCreatorPackageName(config))) {
                 continue;
             }
             localLog("Removing network " + config.SSID
@@ -1381,6 +1402,25 @@ public class WifiConfigManager {
             }
         }
         return didRemove;
+    }
+
+    /**
+     * Removes the passpoint network configuration matched with {@code fqdn} provided.
+     *
+     * @param fqdn Fully Qualified Domain Name to remove.
+     * @return true if a network was removed, false otherwise.
+     */
+    public boolean removePasspointConfiguredNetwork(String fqdn) {
+        WifiConfiguration[] copiedConfigs =
+                mConfiguredNetworks.valuesForAllUsers().toArray(new WifiConfiguration[0]);
+        for (WifiConfiguration config : copiedConfigs) {
+            if (config.isPasspoint() && TextUtils.equals(fqdn, config.FQDN)) {
+                Log.d(TAG, "Removing passpoint network config " + config.configKey());
+                removeNetwork(config.networkId, mSystemUiUid);
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1827,6 +1867,7 @@ public class WifiConfigManager {
         }
         WifiConfiguration config = getInternalConfiguredNetwork(networkId);
         if (config == null) {
+            Log.e(TAG, "Cannot find network for " + networkId);
             return false;
         }
         config.getNetworkSelectionStatus().setCandidate(scanResult);
@@ -2135,7 +2176,7 @@ public class WifiConfigManager {
                 && scanDetail.getNetworkDetail().getDtimInterval() > 0) {
             network.dtimInterval = scanDetail.getNetworkDetail().getDtimInterval();
         }
-        return createExternalWifiConfiguration(network, true);
+        return createExternalWifiConfiguration(network, true, Process.WIFI_UID);
     }
 
     /**
@@ -3130,13 +3171,17 @@ public class WifiConfigManager {
                 DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
         final boolean hasNetworkSettingsPermission =
                 mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
+        final boolean hasNetworkSetupWizardPermission =
+                mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid);
         // If |uid| corresponds to the device owner, allow all modifications.
-        if (isUidDeviceOwner || isUidProfileOwner || hasNetworkSettingsPermission) {
+        if (isUidDeviceOwner || isUidProfileOwner || hasNetworkSettingsPermission
+                || hasNetworkSetupWizardPermission) {
             return true;
         }
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "UID: " + uid + " cannot modify WifiConfiguration proxy settings."
-                    + " ConfigOverride=" + hasNetworkSettingsPermission
+                    + " hasNetworkSettings=" + hasNetworkSettingsPermission
+                    + " hasNetworkSetupWizard=" + hasNetworkSetupWizardPermission
                     + " DeviceOwner=" + isUidDeviceOwner
                     + " ProfileOwner=" + isUidProfileOwner);
         }

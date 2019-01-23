@@ -737,6 +737,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 });
         private final WifiP2pInfo mWifiP2pInfo = new WifiP2pInfo();
         private WifiP2pGroup mGroup;
+        // Is the HAL (HIDL) interface available for use.
+        private boolean mIsHalInterfaceAvailable = false;
         private boolean mIsBTCoexDisabled = false;
         // Is the P2P interface available for use.
         private boolean mIsInterfaceAvailable = false;
@@ -837,7 +839,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 }, new IntentFilter(LocationManager.MODE_CHANGED_ACTION));
                 // Register for interface availability from HalDeviceManager
                 mWifiNative.registerInterfaceAvailableListener((boolean isAvailable) -> {
-                    mIsInterfaceAvailable = isAvailable;
+                    mIsHalInterfaceAvailable = isAvailable;
                     if (isAvailable) {
                         checkAndReEnableP2p();
                     }
@@ -1049,7 +1051,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         break;
                     case WifiP2pManager.REQUEST_P2P_STATE:
                         replyToMessage(message, WifiP2pManager.RESPONSE_P2P_STATE,
-                                (mIsWifiEnabled && mIsInterfaceAvailable && isLocationModeEnabled())
+                                (mIsWifiEnabled && isHalInterfaceAvailable()
+                                && isLocationModeEnabled())
                                 ? WifiP2pManager.WIFI_P2P_STATE_ENABLED
                                 : WifiP2pManager.WIFI_P2P_STATE_DISABLED);
                         break;
@@ -1652,6 +1655,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         mWifiNative.setMiracastMode(message.arg1);
                         break;
                     case WifiP2pManager.START_LISTEN:
+                        if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(
+                                message.sendingUid)) {
+                            loge("Permission violation - no NETWORK_SETTING permission,"
+                                    + " uid = " + message.sendingUid);
+                            replyToMessage(message, WifiP2pManager.START_LISTEN_FAILED);
+                            break;
+                        }
                         if (DBG) logd(getName() + " start listen mode");
                         mWifiNative.p2pFlush();
                         if (mWifiNative.p2pExtListen(true, 500, 500)) {
@@ -1661,6 +1671,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         }
                         break;
                     case WifiP2pManager.STOP_LISTEN:
+                        if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(
+                                message.sendingUid)) {
+                            loge("Permission violation - no NETWORK_SETTING permission,"
+                                    + " uid = " + message.sendingUid);
+                            replyToMessage(message, WifiP2pManager.STOP_LISTEN_FAILED);
+                            break;
+                        }
                         if (DBG) logd(getName() + " stop listen mode");
                         if (mWifiNative.p2pExtListen(false, 0, 0)) {
                             replyToMessage(message, WifiP2pManager.STOP_LISTEN_SUCCEEDED);
@@ -1925,6 +1942,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         }
                         break;
                     case WifiP2pManager.START_LISTEN:
+                        if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(
+                                message.sendingUid)) {
+                            loge("Permission violation - no NETWORK_SETTING permission,"
+                                    + " uid = " + message.sendingUid);
+                            replyToMessage(message, WifiP2pManager.START_LISTEN_FAILED);
+                            break;
+                        }
                         if (DBG) logd(getName() + " start listen mode");
                         mWifiNative.p2pFlush();
                         if (mWifiNative.p2pExtListen(true, 500, 500)) {
@@ -1934,6 +1958,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         }
                         break;
                     case WifiP2pManager.STOP_LISTEN:
+                        if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(
+                                message.sendingUid)) {
+                            loge("Permission violation - no NETWORK_SETTING permission,"
+                                    + " uid = " + message.sendingUid);
+                            replyToMessage(message, WifiP2pManager.STOP_LISTEN_FAILED);
+                            break;
+                        }
                         if (DBG) logd(getName() + " stop listen mode");
                         if (mWifiNative.p2pExtListen(false, 0, 0)) {
                             replyToMessage(message, WifiP2pManager.STOP_LISTEN_SUCCEEDED);
@@ -2829,34 +2860,36 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         // Check & re-enable P2P if needed.
         // P2P interface will be created if all of the below are true:
         // a) Wifi is enabled.
-        // b) P2P interface is available.
+        // b) HAL (HIDL) interface is available.
         // c) There is atleast 1 client app which invoked initialize().
         // d) Location is enabled.
         private void checkAndReEnableP2p() {
             boolean isLocationEnabled = isLocationModeEnabled();
+            boolean isHalInterfaceAvailable = isHalInterfaceAvailable();
             Log.d(TAG, "Wifi enabled=" + mIsWifiEnabled + ", P2P Interface availability="
-                    + mIsInterfaceAvailable + ", Number of clients=" + mDeathDataByBinder.size()
-                    + ", Location enabled=" + isLocationEnabled);
-            if (mIsWifiEnabled && mIsInterfaceAvailable
+                    + isHalInterfaceAvailable + ", Number of clients="
+                    + mDeathDataByBinder.size() + ", Location enabled=" + isLocationEnabled);
+            if (mIsWifiEnabled && isHalInterfaceAvailable
                     && isLocationEnabled && !mDeathDataByBinder.isEmpty()) {
                 sendMessage(ENABLE_P2P);
             }
         }
 
         private boolean isLocationModeEnabled() {
-            if (mLocationManager == null) {
-                mLocationManager =
-                        (LocationManager) mContext.getSystemService(
-                        Context.LOCATION_SERVICE);
-            }
-            return mLocationManager.isLocationEnabled();
+            return mWifiPermissionsUtil.isLocationModeEnabled();
+        }
+
+        // Ignore judgement if the device do not support HAL (HIDL) interface
+        private boolean isHalInterfaceAvailable() {
+            return mWifiNative.isHalInterfaceSupported() ? mIsHalInterfaceAvailable : true;
         }
 
         private void checkAndSendP2pStateChangedBroadcast() {
             boolean isLocationEnabled = isLocationModeEnabled();
+            boolean isHalInterfaceAvailable = isHalInterfaceAvailable();
             Log.d(TAG, "Wifi enabled=" + mIsWifiEnabled + ", P2P Interface availability="
-                    + mIsInterfaceAvailable + ", Location enabled=" + isLocationEnabled);
-            sendP2pStateChangedBroadcast(mIsWifiEnabled && mIsInterfaceAvailable
+                    + isHalInterfaceAvailable + ", Location enabled=" + isLocationEnabled);
+            sendP2pStateChangedBroadcast(mIsWifiEnabled && isHalInterfaceAvailable
                     && isLocationEnabled);
         }
 

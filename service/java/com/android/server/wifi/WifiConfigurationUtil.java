@@ -322,8 +322,8 @@ public class WifiConfigurationUtil {
                 newConfig.allowedGroupCiphers)) {
             return true;
         }
-        if (!Objects.equals(existingConfig.allowedGroupMgmtCiphers,
-                newConfig.allowedGroupMgmtCiphers)) {
+        if (!Objects.equals(existingConfig.allowedGroupManagementCiphers,
+                newConfig.allowedGroupManagementCiphers)) {
             return true;
         }
         if (!Objects.equals(existingConfig.allowedSuiteBCiphers,

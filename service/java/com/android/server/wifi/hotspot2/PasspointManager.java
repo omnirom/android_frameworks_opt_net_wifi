@@ -33,6 +33,7 @@ import android.graphics.drawable.Icon;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
+import android.net.wifi.WifiManager;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
@@ -54,10 +55,11 @@ import com.android.server.wifi.hotspot2.anqp.Constants;
 import com.android.server.wifi.hotspot2.anqp.HSOsuProvidersElement;
 import com.android.server.wifi.hotspot2.anqp.OsuProviderInfo;
 import com.android.server.wifi.util.InformationElementUtil;
-import com.android.server.wifi.util.ScanResultUtil;
 
 import java.io.PrintWriter;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -273,10 +275,12 @@ public class PasspointManager {
         // for Release 1 is not standardized nor trusted,  this is a reasonable restriction
         // to improve security.  The presence of UpdateIdentifier is used to differentiate
         // between R1 and R2 configuration.
-        if (config.getUpdateIdentifier() == Integer.MIN_VALUE
-                && config.getCredential().getCaCertificate() != null) {
+        X509Certificate[] x509Certificates = config.getCredential().getCaCertificates();
+        if (config.getUpdateIdentifier() == Integer.MIN_VALUE && x509Certificates != null) {
             try {
-                mCertVerifier.verifyCaCert(config.getCredential().getCaCertificate());
+                for (X509Certificate certificate : x509Certificates) {
+                    mCertVerifier.verifyCaCert(certificate);
+                }
             } catch (Exception e) {
                 Log.e(TAG, "Failed to verify CA certificate: " + e.getMessage());
                 return false;
@@ -322,6 +326,7 @@ public class PasspointManager {
 
         mProviders.get(fqdn).uninstallCertsAndKeys();
         mProviders.remove(fqdn);
+
         mWifiConfigManager.saveToStore(true /* forceWrite */);
         Log.d(TAG, "Removed Passpoint configuration: " + fqdn);
         mWifiMetrics.incrementNumPasspointProviderUninstallSuccess();
@@ -540,30 +545,45 @@ public class PasspointManager {
     }
 
     /**
-     * Match the given WiFi APs to all installed Passpoint configurations. Return the list of all
-     * matching configurations (or an empty list if none).
+     * Returns a list of FQDN (Fully Qualified Domain Name) for installed Passpoint configurations.
+     *
+     * Return the map of all matching configurations with corresponding scanResults (or an empty
+     * map if none).
      *
      * @param scanResults The list of scan results
-     * @return List of {@link WifiConfiguration} that might have duplicate entries.
+     * @return Map that consists of FQDN (Fully Qualified Domain Name) and corresponding
+     * scanResults per network type({@link WifiManager#PASSPOINT_HOME_NETWORK} and {@link
+     * WifiManager#PASSPOINT_ROAMING_NETWORK}).
      */
-    public List<WifiConfiguration> getAllMatchingWifiConfigs(List<ScanResult> scanResults) {
+    public Map<String, Map<Integer, List<ScanResult>>> getAllMatchingFqdnsForScanResults(
+            List<ScanResult> scanResults) {
         if (scanResults == null) {
             Log.e(TAG, "Attempt to get matching config for a null ScanResults");
-            return new ArrayList<>();
+            return new HashMap<>();
         }
+        Map<String, Map<Integer, List<ScanResult>>> configs = new HashMap<>();
 
-        List<WifiConfiguration> configs = new ArrayList<>();
         for (ScanResult scanResult : scanResults) {
             if (!scanResult.isPasspointNetwork()) continue;
             List<Pair<PasspointProvider, PasspointMatch>> matchedProviders = getAllMatchedProviders(
                     scanResult);
             for (Pair<PasspointProvider, PasspointMatch> matchedProvider : matchedProviders) {
                 WifiConfiguration config = matchedProvider.first.getWifiConfig();
-                config.SSID = ScanResultUtil.createQuotedSSID(scanResult.SSID);
-                if (matchedProvider.second == PasspointMatch.HomeProvider) {
-                    config.isHomeProviderNetwork = true;
+                int type = WifiManager.PASSPOINT_HOME_NETWORK;
+                if (!config.isHomeProviderNetwork) {
+                    type = WifiManager.PASSPOINT_ROAMING_NETWORK;
                 }
-                configs.add(config);
+                Map<Integer, List<ScanResult>> scanResultsPerNetworkType = configs.get(config.FQDN);
+                if (scanResultsPerNetworkType == null) {
+                    scanResultsPerNetworkType = new HashMap<>();
+                    configs.put(config.FQDN, scanResultsPerNetworkType);
+                }
+                List<ScanResult> matchingScanResults = scanResultsPerNetworkType.get(type);
+                if (matchingScanResults == null) {
+                    matchingScanResults = new ArrayList<>();
+                    scanResultsPerNetworkType.put(type, matchingScanResults);
+                }
+                matchingScanResults.add(scanResult);
             }
         }
 
@@ -571,21 +591,22 @@ public class PasspointManager {
     }
 
     /**
-     * Return the set of Hotspot 2.0 OSU (Online Sign-Up) providers associated with the given list
+     * Returns the list of Hotspot 2.0 OSU (Online Sign-Up) providers associated with the given list
      * of ScanResult.
      *
-     * An empty set will be returned when an invalid scanResults are provided or no match is found.
+     * An empty map will be returned when an invalid scanResults are provided or no match is found.
      *
      * @param scanResults a list of ScanResult that has Passpoint APs.
-     * @return Set of {@link OsuProvider}
+     * @return Map that consists of {@link OsuProvider} and a matching list of {@link ScanResult}
      */
-    public Set<OsuProvider> getMatchingOsuProviders(List<ScanResult> scanResults) {
+    public Map<OsuProvider, List<ScanResult>> getMatchingOsuProviders(
+            List<ScanResult> scanResults) {
         if (scanResults == null) {
             Log.e(TAG, "Attempt to retrieve OSU providers for a null ScanResult");
-            return new HashSet<>();
+            return new HashMap();
         }
 
-        Set<OsuProvider> osuProviders = new HashSet<>();
+        Map<OsuProvider, List<ScanResult>> osuProviders = new HashMap<>();
         for (ScanResult scanResult : scanResults) {
             if (!scanResult.isPasspointNetwork()) continue;
 
@@ -604,7 +625,12 @@ public class PasspointManager {
                 OsuProvider provider = new OsuProvider(null, info.getFriendlyNames(),
                         info.getServiceDescription(), info.getServerUri(),
                         info.getNetworkAccessIdentifier(), info.getMethodList(), null);
-                osuProviders.add(provider);
+                List<ScanResult> matchingScanResults = osuProviders.get(provider);
+                if (matchingScanResults == null) {
+                    matchingScanResults = new ArrayList<>();
+                    osuProviders.put(provider, matchingScanResults);
+                }
+                matchingScanResults.add(scanResult);
             }
         }
         return osuProviders;
@@ -646,6 +672,29 @@ public class PasspointManager {
             }
         }
         return matchingPasspointConfigs;
+    }
+
+    /**
+     * Returns the corresponding wifi configurations for given FQDN (Fully Qualified Domain Name)
+     * list.
+     *
+     * An empty list will be returned when no match is found.
+     *
+     * @param fqdnList a list of FQDN
+     * @return List of {@link WifiConfiguration} converted from {@link PasspointProvider}
+     */
+    public List<WifiConfiguration> getWifiConfigsForPasspointProfiles(List<String> fqdnList) {
+        Set<String> fqdnSet = new HashSet<>();
+        fqdnSet.addAll(fqdnList);
+        List<WifiConfiguration> configs = new ArrayList<>();
+
+        for (String fqdn: fqdnSet) {
+            PasspointProvider provider = mProviders.get(fqdn);
+            if (provider != null) {
+                configs.add(provider.getWifiConfig());
+            }
+        }
+        return configs;
     }
 
     /**
@@ -742,7 +791,7 @@ public class PasspointManager {
         // alias for the client certificate.
         PasspointProvider provider = new PasspointProvider(passpointConfig, mKeyStore,
                 mSimAccessor, mProviderIndex++, wifiConfig.creatorUid,
-                enterpriseConfig.getCaCertificateAlias(),
+                Arrays.asList(enterpriseConfig.getCaCertificateAlias()),
                 enterpriseConfig.getClientCertificateAlias(),
                 enterpriseConfig.getClientCertificateAlias(), false, false);
         mProviders.put(passpointConfig.getHomeSp().getFqdn(), provider);
