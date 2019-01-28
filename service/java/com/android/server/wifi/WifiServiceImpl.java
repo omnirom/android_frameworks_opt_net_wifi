@@ -2041,9 +2041,8 @@ public class WifiServiceImpl extends BaseWifiService {
         if (mVerboseLoggingEnabled) {
             mLog.info("getMatchingPasspointConfigurations uid=%").c(Binder.getCallingUid()).flush();
         }
-        if (!mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+        if (!mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            return new HashMap<>();
         }
         return mClientModeImpl.syncGetAllMatchingFqdnsForScanResults(scanResults,
                 mClientModeImplChannel);
@@ -2067,9 +2066,8 @@ public class WifiServiceImpl extends BaseWifiService {
         if (mVerboseLoggingEnabled) {
             mLog.info("getMatchingOsuProviders uid=%").c(Binder.getCallingUid()).flush();
         }
-        if (!mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+        if (!mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            return new HashMap<>();
         }
         return mClientModeImpl.syncGetMatchingOsuProviders(scanResults, mClientModeImplChannel);
     }
@@ -2093,9 +2091,8 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("getMatchingPasspointConfigsForOsuProviders uid=%").c(
                     Binder.getCallingUid()).flush();
         }
-        if (!mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+        if (!mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            return new HashMap<>();
         }
         if (osuProviders == null) {
             Log.e(TAG, "Attempt to retrieve Passpoint configuration with null osuProviders");
@@ -2126,9 +2123,8 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("getWifiConfigsForPasspointProfiles uid=%").c(
                     Binder.getCallingUid()).flush();
         }
-        if (!mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+        if (!mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            return new ArrayList<>();
         }
         if (fqdnList == null) {
             Log.e(TAG, "Attempt to retrieve WifiConfiguration with null fqdn List");
@@ -2399,7 +2395,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("addorUpdatePasspointConfiguration uid=%").c(Binder.getCallingUid()).flush();
         if (!mContext.getPackageManager().hasSystemFeature(
                 PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+            return false;
         }
         return mClientModeImpl.syncAddOrUpdatePasspointConfig(mClientModeImplChannel, config,
                 Binder.getCallingUid());
@@ -2420,9 +2416,8 @@ public class WifiServiceImpl extends BaseWifiService {
             throw new SecurityException(TAG + ": Permission denied");
         }
         mLog.info("removePasspointConfiguration uid=%").c(Binder.getCallingUid()).flush();
-        if (!mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+        if (!mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            return false;
         }
         return mClientModeImpl.syncRemovePasspointConfig(mClientModeImplChannel, fqdn);
     }
@@ -2447,7 +2442,7 @@ public class WifiServiceImpl extends BaseWifiService {
         }
         if (!mContext.getPackageManager().hasSystemFeature(
                 PackageManager.FEATURE_WIFI_PASSPOINT)) {
-            throw new UnsupportedOperationException("Passpoint not enabled");
+            return new ArrayList<>();
         }
         return mClientModeImpl.syncGetPasspointConfigs(mClientModeImplChannel);
     }
