@@ -58,7 +58,12 @@ public class WifiSettingsStore {
     public synchronized boolean isWifiToggleEnabled() {
         if (!mCheckSavedStateAtBoot) {
             mCheckSavedStateAtBoot = true;
-            if (testAndClearWifiSavedState()) return true;
+            if (testAndClearWifiSavedState()) {
+                // Retain Wifi On state if Wifi was On before airplane mode toggle.
+                if (mAirplaneModeOn)
+                    setWifiSavedState(WIFI_ENABLED);
+                return true;
+            }
         }
 
         if (mAirplaneModeOn) {
