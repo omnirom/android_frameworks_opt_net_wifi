@@ -42,11 +42,15 @@ import java.io.PrintWriter;
 public class WifiShellCommand extends ShellCommand {
     private final ClientModeImpl mClientModeImpl;
     private final WifiLockManager mWifiLockManager;
+    private final WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
+    private final WifiConfigManager mWifiConfigManager;
     private final IPackageManager mPM;
 
-    WifiShellCommand(ClientModeImpl stateMachine, WifiLockManager wifiLockManager) {
-        mClientModeImpl = stateMachine;
-        mWifiLockManager = wifiLockManager;
+    WifiShellCommand(WifiInjector wifiInjector) {
+        mClientModeImpl = wifiInjector.getClientModeImpl();
+        mWifiLockManager = wifiInjector.getWifiLockManager();
+        mWifiNetworkSuggestionsManager = wifiInjector.getWifiNetworkSuggestionsManager();
+        mWifiConfigManager = wifiInjector.getWifiConfigManager();
         mPM = AppGlobals.getPackageManager();
     }
 
@@ -137,6 +141,39 @@ public class WifiShellCommand extends ShellCommand {
                     }
                     return 0;
                 }
+                case "network-suggestions-set-user-approved": {
+                    String packageName = getNextArgRequired();
+                    boolean approved;
+                    String nextArg = getNextArgRequired();
+                    if ("yes".equals(nextArg)) {
+                        approved = true;
+                    } else if ("no".equals(nextArg)) {
+                        approved = false;
+                    } else {
+                        pw.println(
+                                "Invalid argument to 'network-suggestions-set-user-approved' "
+                                        + "- must be 'yes' or 'no'");
+                        return -1;
+                    }
+                    mWifiNetworkSuggestionsManager.setHasUserApprovedForApp(approved, packageName);
+                    return 0;
+                }
+                case "network-suggestions-has-user-approved": {
+                    String packageName = getNextArgRequired();
+                    boolean hasUserApproved =
+                            mWifiNetworkSuggestionsManager.hasUserApprovedForApp(packageName);
+                    pw.println(hasUserApproved ? "yes" : "no");
+                    return 0;
+                }
+                case "network-requests-remove-user-approved-access-points": {
+                    String packageName = getNextArgRequired();
+                    mClientModeImpl.removeNetworkRequestUserApprovedAccessPointsForApp(packageName);
+                    return 0;
+                }
+                case "clear-deleted-ephemeral-networks": {
+                    mWifiConfigManager.clearDeletedEphemeralNetworks();
+                    return 0;
+                }
                 default:
                     return handleDefaultCommands(cmd);
             }
@@ -174,6 +211,14 @@ public class WifiShellCommand extends ShellCommand {
         pw.println("    Sets whether hi-perf mode is forced or left for normal operation.");
         pw.println("  force-low-latency-mode enabled|disabled");
         pw.println("    Sets whether low latency mode is forced or left for normal operation.");
+        pw.println("  network-suggestions-set-user-approved <package name> yes|no");
+        pw.println("    Sets whether network suggestions from the app is approved or not.");
+        pw.println("  network-suggestions-has-user-approved <package name>");
+        pw.println("    Queries whether network suggestions from the app is approved or not.");
+        pw.println("  network-requests-remove-user-approved-access-points <package name>");
+        pw.println("    Removes all user approved network requests for the app.");
+        pw.println("  clear-deleted-ephemeral-networks");
+        pw.println("    Clears the deleted ephemeral networks list.");
         pw.println();
     }
 }

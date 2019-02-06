@@ -16,6 +16,7 @@
 
 package com.android.server.wifi;
 
+import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.admin.DeviceAdminInfo;
 import android.app.admin.DevicePolicyManagerInternal;
@@ -130,7 +131,8 @@ public class WifiConfigManager {
             1,  //  threshold for DISABLED_NO_INTERNET_PERMANENT
             1,  //  threshold for DISABLED_BY_WIFI_MANAGER
             1,  //  threshold for DISABLED_BY_USER_SWITCH
-            1   //  threshold for DISABLED_BY_WRONG_PASSWORD
+            1,  //  threshold for DISABLED_BY_WRONG_PASSWORD
+            1   //  threshold for DISABLED_AUTHENTICATION_NO_SUBSCRIBED
     };
     /**
      * Network Selection disable timeout for each kind of error. After the timeout milliseconds,
@@ -153,7 +155,8 @@ public class WifiConfigManager {
             Integer.MAX_VALUE,  // threshold for DISABLED_NO_INTERNET_PERMANENT
             Integer.MAX_VALUE,  // threshold for DISABLED_BY_WIFI_MANAGER
             Integer.MAX_VALUE,  // threshold for DISABLED_BY_USER_SWITCH
-            Integer.MAX_VALUE   // threshold for DISABLED_BY_WRONG_PASSWORD
+            Integer.MAX_VALUE,  // threshold for DISABLED_BY_WRONG_PASSWORD
+            Integer.MAX_VALUE   // threshold for DISABLED_AUTHENTICATION_NO_SUBSCRIBED
     };
     /**
      * Interface for other modules to listen to the saved network updated
@@ -283,6 +286,14 @@ public class WifiConfigManager {
      * The SSIDs are encoded in a String as per definition of WifiConfiguration.SSID field.
      */
     private final Set<String> mDeletedEphemeralSSIDs;
+
+    /**
+     * Framework keeps a mapping from configKey to the randomized MAC address so that
+     * when a user forgets a network and thne adds it back, the same randomized MAC address
+     * will get used.
+     */
+    private final Map<String, String> mRandomizedMacAddressMapping;
+
     /**
      * Flag to indicate if only networks with the same psk should be linked.
      * TODO(b/30706406): Remove this flag if unused.
@@ -348,6 +359,7 @@ public class WifiConfigManager {
     private final NetworkListSharedStoreData mNetworkListSharedStoreData;
     private final NetworkListUserStoreData mNetworkListUserStoreData;
     private final DeletedEphemeralSsidsStoreData mDeletedEphemeralSsidsStoreData;
+    private final RandomizedMacStoreData mRandomizedMacStoreData;
 
     // Store the saved network update listener.
     private OnSavedNetworkUpdateListener mListener = null;
@@ -369,6 +381,7 @@ public class WifiConfigManager {
             NetworkListSharedStoreData networkListSharedStoreData,
             NetworkListUserStoreData networkListUserStoreData,
             DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData,
+            RandomizedMacStoreData randomizedMacStoreData,
             FrameworkFacade frameworkFacade, Looper looper) {
         mContext = context;
         mClock = clock;
@@ -384,14 +397,17 @@ public class WifiConfigManager {
         mConfiguredNetworks = new ConfigurationMap(userManager);
         mScanDetailCaches = new HashMap<>(16, 0.75f);
         mDeletedEphemeralSSIDs = new HashSet<>();
+        mRandomizedMacAddressMapping = new HashMap<>();
 
         // Register store data for network list and deleted ephemeral SSIDs.
         mNetworkListSharedStoreData = networkListSharedStoreData;
         mNetworkListUserStoreData = networkListUserStoreData;
         mDeletedEphemeralSsidsStoreData = deletedEphemeralSsidsStoreData;
+        mRandomizedMacStoreData = randomizedMacStoreData;
         mWifiConfigStore.registerStoreData(mNetworkListSharedStoreData);
         mWifiConfigStore.registerStoreData(mNetworkListUserStoreData);
         mWifiConfigStore.registerStoreData(mDeletedEphemeralSsidsStoreData);
+        mWifiConfigStore.registerStoreData(mRandomizedMacStoreData);
 
         mOnlyLinkSameCredentialConfigurations = mContext.getResources().getBoolean(
                 R.bool.config_wifi_only_link_same_credential_configurations);
@@ -1017,7 +1033,7 @@ public class WifiConfigManager {
      * configuration.
      */
     private WifiConfiguration createNewInternalWifiConfigurationFromExternal(
-            WifiConfiguration externalConfig, int uid) {
+            WifiConfiguration externalConfig, int uid, @Nullable String packageName) {
         WifiConfiguration newInternalConfig = new WifiConfiguration();
 
         // First allocate a new network ID for the configuration.
@@ -1037,6 +1053,8 @@ public class WifiConfigManager {
         newInternalConfig.ephemeral = externalConfig.ephemeral;
         newInternalConfig.osu = externalConfig.osu;
         newInternalConfig.trusted = externalConfig.trusted;
+        newInternalConfig.fromWifiNetworkSuggestion = externalConfig.fromWifiNetworkSuggestion;
+        newInternalConfig.fromWifiNetworkSpecifier = externalConfig.fromWifiNetworkSpecifier;
         newInternalConfig.useExternalScores = externalConfig.useExternalScores;
         newInternalConfig.shared = externalConfig.shared;
         newInternalConfig.updateIdentifier = externalConfig.updateIdentifier;
@@ -1044,11 +1062,37 @@ public class WifiConfigManager {
         // Add debug information for network addition.
         newInternalConfig.creatorUid = newInternalConfig.lastUpdateUid = uid;
         newInternalConfig.creatorName = newInternalConfig.lastUpdateName =
-                mContext.getPackageManager().getNameForUid(uid);
+                packageName != null ? packageName : mContext.getPackageManager().getNameForUid(uid);
         newInternalConfig.creationTime = newInternalConfig.updateTime =
                 createDebugTimeStampString(mClock.getWallClockMillis());
+        updateRandomizedMacAddress(newInternalConfig);
 
         return newInternalConfig;
+    }
+
+    /**
+     * Sets the randomized address for the given configuration from stored map if it exist.
+     * Otherwise generates a new randomized address and save to the stored map.
+     * @param config
+     */
+    private void updateRandomizedMacAddress(WifiConfiguration config) {
+        // Update randomized MAC address according to stored map
+        final String key = config.configKey();
+        // If the key is not found in the current store, then it means this network has never been
+        // seen before. So add it to store.
+        if (!mRandomizedMacAddressMapping.containsKey(key)) {
+            mRandomizedMacAddressMapping.put(key,
+                    config.getOrCreateRandomizedMacAddress().toString());
+        } else { // Otherwise read from the store and set the WifiConfiguration
+            try {
+                config.setRandomizedMacAddress(
+                        MacAddress.fromString(mRandomizedMacAddressMapping.get(key)));
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Error creating randomized MAC address from stored value.");
+                mRandomizedMacAddressMapping.put(key,
+                        config.getOrCreateRandomizedMacAddress().toString());
+            }
+        }
     }
 
     /**
@@ -1061,7 +1105,8 @@ public class WifiConfigManager {
      * configuration.
      */
     private WifiConfiguration updateExistingInternalWifiConfigurationFromExternal(
-            WifiConfiguration internalConfig, WifiConfiguration externalConfig, int uid) {
+            WifiConfiguration internalConfig, WifiConfiguration externalConfig, int uid,
+            @Nullable String packageName) {
         WifiConfiguration newInternalConfig = new WifiConfiguration(internalConfig);
 
         // Copy over all the public elements from the provided configuration.
@@ -1069,7 +1114,8 @@ public class WifiConfigManager {
 
         // Add debug information for network update.
         newInternalConfig.lastUpdateUid = uid;
-        newInternalConfig.lastUpdateName = mContext.getPackageManager().getNameForUid(uid);
+        newInternalConfig.lastUpdateName =
+                packageName != null ? packageName : mContext.getPackageManager().getNameForUid(uid);
         newInternalConfig.updateTime = createDebugTimeStampString(mClock.getWallClockMillis());
 
         return newInternalConfig;
@@ -1081,10 +1127,12 @@ public class WifiConfigManager {
      * network configuration. Otherwise, the networkId should refer to an existing configuration.
      *
      * @param config provided WifiConfiguration object.
-     * @param uid    UID of the app requesting the network addition/deletion.
+     * @param uid UID of the app requesting the network addition/modification.
+     * @param packageName Package name of the app requesting the network addition/modification.
      * @return NetworkUpdateResult object representing status of the update.
      */
-    private NetworkUpdateResult addOrUpdateNetworkInternal(WifiConfiguration config, int uid) {
+    private NetworkUpdateResult addOrUpdateNetworkInternal(WifiConfiguration config, int uid,
+                                                           @Nullable String packageName) {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Adding/Updating network " + config.getPrintableSsid());
         }
@@ -1098,7 +1146,8 @@ public class WifiConfigManager {
                 Log.e(TAG, "Cannot add network with invalid config");
                 return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
             }
-            newInternalConfig = createNewInternalWifiConfigurationFromExternal(config, uid);
+            newInternalConfig =
+                    createNewInternalWifiConfigurationFromExternal(config, uid, packageName);
             // Since the original config provided may have had an empty
             // {@link WifiConfiguration#allowedKeyMgmt} field, check again if we already have a
             // network with the the same configkey.
@@ -1119,7 +1168,7 @@ public class WifiConfigManager {
             }
             newInternalConfig =
                     updateExistingInternalWifiConfigurationFromExternal(
-                            existingInternalConfig, config, uid);
+                            existingInternalConfig, config, uid, packageName);
         }
 
         // Only add networks with proxy settings if the user has permission to
@@ -1203,10 +1252,12 @@ public class WifiConfigManager {
      * network configuration. Otherwise, the networkId should refer to an existing configuration.
      *
      * @param config provided WifiConfiguration object.
-     * @param uid    UID of the app requesting the network addition/modification.
+     * @param uid UID of the app requesting the network addition/modification.
+     * @param packageName Package name of the app requesting the network addition/modification.
      * @return NetworkUpdateResult object representing status of the update.
      */
-    public NetworkUpdateResult addOrUpdateNetwork(WifiConfiguration config, int uid) {
+    public NetworkUpdateResult addOrUpdateNetwork(WifiConfiguration config, int uid,
+                                                  @Nullable String packageName) {
         if (!doesUidBelongToCurrentUser(uid)) {
             Log.e(TAG, "UID " + uid + " not visible to the current user");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
@@ -1219,7 +1270,7 @@ public class WifiConfigManager {
             Log.e(TAG, "Cannot add/update network before store is read!");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
-        NetworkUpdateResult result = addOrUpdateNetworkInternal(config, uid);
+        NetworkUpdateResult result = addOrUpdateNetworkInternal(config, uid, packageName);
         if (!result.isSuccess()) {
             Log.e(TAG, "Failed to add/update network " + config.getPrintableSsid());
             return result;
@@ -1242,6 +1293,20 @@ public class WifiConfigManager {
             }
         }
         return result;
+
+    }
+
+    /**
+     * Add a network or update a network configuration to our database.
+     * If the supplied networkId is INVALID_NETWORK_ID, we create a new empty
+     * network configuration. Otherwise, the networkId should refer to an existing configuration.
+     *
+     * @param config provided WifiConfiguration object.
+     * @param uid    UID of the app requesting the network addition/modification.
+     * @return NetworkUpdateResult object representing status of the update.
+     */
+    public NetworkUpdateResult addOrUpdateNetwork(WifiConfiguration config, int uid) {
+        return addOrUpdateNetwork(config, uid, null);
     }
 
     /**
@@ -2676,6 +2741,14 @@ public class WifiConfigManager {
     }
 
     /**
+     * Clear all deleted ephemeral networks.
+     */
+    @VisibleForTesting
+    public void clearDeletedEphemeralNetworks() {
+        mDeletedEphemeralSSIDs.clear();
+    }
+
+    /**
      * Resets all sim networks state.
      */
     public void resetSimNetworks(boolean simPresent) {
@@ -2840,6 +2913,7 @@ public class WifiConfigManager {
         localLog("clearInternalData: Clearing all internal data");
         mConfiguredNetworks.clear();
         mDeletedEphemeralSSIDs.clear();
+        mRandomizedMacAddressMapping.clear();
         mScanDetailCaches.clear();
         clearLastSelectedNetwork();
     }
@@ -2882,7 +2956,8 @@ public class WifiConfigManager {
      * @param configurations list of configurations retrieved from store.
      */
     private void loadInternalDataFromSharedStore(
-            List<WifiConfiguration> configurations) {
+            List<WifiConfiguration> configurations,
+            Map<String, String> macAddressMapping) {
         for (WifiConfiguration configuration : configurations) {
             configuration.networkId = mNextNetworkId++;
             if (mVerboseLoggingEnabled) {
@@ -2894,6 +2969,7 @@ public class WifiConfigManager {
                 Log.e(TAG, "Failed to add network to config map", e);
             }
         }
+        mRandomizedMacAddressMapping.putAll(macAddressMapping);
     }
 
     /**
@@ -2936,11 +3012,12 @@ public class WifiConfigManager {
      */
     private void loadInternalData(
             List<WifiConfiguration> sharedConfigurations,
-            List<WifiConfiguration> userConfigurations, Set<String> deletedEphemeralSSIDs) {
+            List<WifiConfiguration> userConfigurations, Set<String> deletedEphemeralSSIDs,
+            Map<String, String> macAddressMapping) {
         // Clear out all the existing in-memory lists and load the lists from what was retrieved
         // from the config store.
         clearInternalData();
-        loadInternalDataFromSharedStore(sharedConfigurations);
+        loadInternalDataFromSharedStore(sharedConfigurations, macAddressMapping);
         loadInternalDataFromUserStore(userConfigurations, deletedEphemeralSSIDs);
         if (mConfiguredNetworks.sizeForAllUsers() == 0) {
             Log.w(TAG, "No stored networks found.");
@@ -2974,7 +3051,7 @@ public class WifiConfigManager {
         WifiConfigStoreDataLegacy storeData = mWifiConfigStoreLegacy.read();
         Log.d(TAG, "Reading from legacy store completed");
         loadInternalData(storeData.getConfigurations(), new ArrayList<WifiConfiguration>(),
-                storeData.getDeletedEphemeralSSIDs());
+                storeData.getDeletedEphemeralSSIDs(), mRandomizedMacStoreData.getMacMapping());
 
         // Setup user store for the current user in case it have not setup yet, so that data
         // owned by the current user will be backed to the user store.
@@ -3025,7 +3102,8 @@ public class WifiConfigManager {
         }
         loadInternalData(mNetworkListSharedStoreData.getConfigurations(),
                 mNetworkListUserStoreData.getConfigurations(),
-                mDeletedEphemeralSsidsStoreData.getSsidList());
+                mDeletedEphemeralSsidsStoreData.getSsidList(),
+                mRandomizedMacStoreData.getMacMapping());
         return true;
     }
 
@@ -3115,6 +3193,7 @@ public class WifiConfigManager {
         mNetworkListSharedStoreData.setConfigurations(sharedConfigurations);
         mNetworkListUserStoreData.setConfigurations(userConfigurations);
         mDeletedEphemeralSsidsStoreData.setSsidList(mDeletedEphemeralSSIDs);
+        mRandomizedMacStoreData.setMacMapping(mRandomizedMacAddressMapping);
 
         try {
             mWifiConfigStore.write(forceWrite);

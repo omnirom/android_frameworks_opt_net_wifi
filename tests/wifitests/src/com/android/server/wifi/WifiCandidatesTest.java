@@ -40,6 +40,8 @@ public class WifiCandidatesTest {
 
     @Mock ScanDetail mScanDetail1;
     @Mock ScanDetail mScanDetail2;
+    @Mock WifiScoreCard mWifiScoreCard;
+    @Mock WifiScoreCard.PerBssid mPerBssid;
 
     ScanResult mScanResult1;
     ScanResult mScanResult2;
@@ -54,8 +56,8 @@ public class WifiCandidatesTest {
      */
     @Before
     public void setUp() throws Exception {
-        mWifiCandidates = new WifiCandidates();
         MockitoAnnotations.initMocks(this);
+        mWifiCandidates = new WifiCandidates(mWifiScoreCard);
         mConfig1 = WifiConfigurationTestUtil.createOpenNetwork();
         mScanResult1 = new ScanResult() {{
                 SSID = removeEnclosingQuotes(mConfig1.SSID);
@@ -69,6 +71,7 @@ public class WifiCandidatesTest {
             }};
         doReturn(mScanResult1).when(mScanDetail1).getScanResult();
         doReturn(mScanResult2).when(mScanDetail2).getScanResult();
+        doReturn(mPerBssid).when(mWifiScoreCard).lookupBssid(any(), any());
     }
 
     /**
@@ -95,6 +98,7 @@ public class WifiCandidatesTest {
         assertEquals(1, mWifiCandidates.size());
         assertEquals(0, mWifiCandidates.getFaultCount());
         assertNull(mWifiCandidates.getLastFault());
+        verify(mPerBssid).setNetworkConfigId(eq(mConfig1.networkId));
     }
 
     /**

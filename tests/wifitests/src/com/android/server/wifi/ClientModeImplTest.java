@@ -16,8 +16,11 @@
 
 package com.android.server.wifi;
 
-import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus
+        .DISABLED_NO_INTERNET_TEMPORARY;
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE;
+
+import static com.android.server.wifi.ClientModeImpl.CMD_PRE_DHCP_ACTION;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -34,7 +37,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
-import android.database.ContentObserver;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.net.ConnectivityManager;
 import android.net.DhcpResults;
@@ -44,14 +46,16 @@ import android.net.NetworkAgent;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkMisc;
-import android.net.dhcp.DhcpClient;
-import android.net.ip.IpClient;
+import android.net.NetworkSpecifier;
+import android.net.ip.IIpClient;
+import android.net.ip.IpClientCallbacks;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkAgentSpecifier;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
@@ -83,6 +87,7 @@ import android.telephony.TelephonyManager;
 import android.test.mock.MockContentProvider;
 import android.test.mock.MockContentResolver;
 import android.util.Log;
+import android.util.Pair;
 
 import androidx.test.filters.SmallTest;
 
@@ -96,6 +101,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvisioningTestUtil;
 import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
+import com.android.server.wifi.nano.WifiMetricsProto.WifiIsUnusableEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStats;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -202,14 +208,13 @@ public class ClientModeImplTest {
         IBinder batteryStatsBinder = mockService(BatteryStats.class, IBatteryStats.class);
         when(facade.getService(BatteryStats.SERVICE_NAME)).thenReturn(batteryStatsBinder);
 
-        when(facade.makeIpClient(any(Context.class), anyString(), any(IpClient.Callback.class)))
-                .then(new AnswerWithArguments() {
-                    public IpClient answer(
-                            Context context, String ifname, IpClient.Callback callback) {
-                        mIpClientCallback = callback;
-                        return mIpClient;
-                    }
-                });
+        doAnswer(new AnswerWithArguments() {
+            public void answer(
+                    Context context, String ifname, IpClientCallbacks callback) {
+                mIpClientCallback = callback;
+                callback.onIpClientCreated(mIpClient);
+            }
+        }).when(facade).makeIpClient(any(), anyString(), any());
 
         return facade;
     }
@@ -330,10 +335,10 @@ public class ClientModeImplTest {
     Context mContext;
     MockResources mResources;
     FrameworkFacade mFrameworkFacade;
-    IpClient.Callback mIpClientCallback;
+    IpClientCallbacks mIpClientCallback;
     PhoneStateListener mPhoneStateListener;
     OsuProvider mOsuProvider;
-    ContentObserver mContentObserver;
+    WifiConfiguration mConnectedNetwork;
 
     @Mock WifiScanner mWifiScanner;
     @Mock SupplicantStateTracker mSupplicantStateTracker;
@@ -356,7 +361,7 @@ public class ClientModeImplTest {
     @Mock PasspointManager mPasspointManager;
     @Mock SelfRecovery mSelfRecovery;
     @Mock WifiPermissionsUtil mWifiPermissionsUtil;
-    @Mock IpClient mIpClient;
+    @Mock IIpClient mIpClient;
     @Mock TelephonyManager mTelephonyManager;
     @Mock WrongPasswordNotifier mWrongPasswordNotifier;
     @Mock Clock mClock;
@@ -371,6 +376,7 @@ public class ClientModeImplTest {
     @Mock WifiNetworkFactory mWifiNetworkFactory;
     @Mock UntrustedWifiNetworkFactory mUntrustedWifiNetworkFactory;
     @Mock WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
+    @Mock LinkProbeManager mLinkProbeManager;
 
     final ArgumentCaptor<WifiNative.InterfaceCallback> mInterfaceCallbackCaptor =
             ArgumentCaptor.forClass(WifiNative.InterfaceCallback.class);
@@ -423,6 +429,8 @@ public class ClientModeImplTest {
                 .thenReturn(mUntrustedWifiNetworkFactory);
         when(mWifiInjector.getWifiNetworkSuggestionsManager())
                 .thenReturn(mWifiNetworkSuggestionsManager);
+        when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
+                .thenReturn(Pair.create(Process.INVALID_UID, ""));
         when(mWifiNative.initialize()).thenReturn(true);
         when(mWifiNative.getFactoryMacAddress(WIFI_IFACE_NAME)).thenReturn(
                 TEST_GLOBAL_MAC_ADDRESS);
@@ -451,10 +459,6 @@ public class ClientModeImplTest {
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO)).thenReturn(
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO);
 
-        when(mFrameworkFacade.getIntegerSetting(mContext,
-                Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED,
-                0)).thenReturn(0);
-
         when(mFrameworkFacade.makeSupplicantStateTracker(
                 any(Context.class), any(WifiConfigManager.class),
                 any(Handler.class))).thenReturn(mSupplicantStateTracker);
@@ -475,17 +479,14 @@ public class ClientModeImplTest {
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         when(mWifiPermissionsWrapper.getLocalMacAddressPermission(anyInt()))
                 .thenReturn(PackageManager.PERMISSION_DENIED);
+        doAnswer(inv -> {
+            mIpClientCallback.onQuit();
+            return null;
+        }).when(mIpClient).shutdown();
         initializeCmi();
 
         mOsuProvider = PasspointProvisioningTestUtil.generateOsuProvider(true);
-
-        /* Capture the ContentObserver for Connected MAC Randomization. */
-        ArgumentCaptor<ContentObserver> observerCaptor =
-                ArgumentCaptor.forClass(ContentObserver.class);
-        verify(mFrameworkFacade).registerContentObserver(eq(mContext), eq(Settings.Global.getUriFor(
-                Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED)), eq(false),
-                observerCaptor.capture());
-        mContentObserver = observerCaptor.getValue();
+        mConnectedNetwork = spy(WifiConfigurationTestUtil.createOpenNetwork());
     }
 
     private void registerAsyncChannel(Consumer<AsyncChannel> consumer, Messenger messenger) {
@@ -515,7 +516,8 @@ public class ClientModeImplTest {
     private void initializeCmi() throws Exception {
         mCmi = new ClientModeImpl(mContext, mFrameworkFacade, mLooper.getLooper(),
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
-                mWifiScoreCard, mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller);
+                mWifiScoreCard, mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
+                mLinkProbeManager);
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
         registerAsyncChannel((x) -> {
@@ -898,7 +900,7 @@ public class ClientModeImplTest {
     @Test
     public void triggerConnect() throws Exception {
         loadComponentsInStaMode();
-        WifiConfiguration config = spy(WifiConfigurationTestUtil.createOpenNetwork());
+        WifiConfiguration config = mConnectedNetwork;
         config.networkId = FRAMEWORK_NETWORK_ID;
         when(config.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
@@ -1284,6 +1286,32 @@ public class ClientModeImplTest {
         verify(mTelephonyManager, never()).resetCarrierKeysForImsiEncryption();
     }
 
+    /**
+     * Verify that the network selection status will be updated with
+     * DISABLED_AUTHENTICATION_NO_SUBSCRIBED when service is not subscribed.
+     */
+    @Test
+    public void testEapSimNoSubscribedError() throws Exception {
+        initializeAndAddNetworkAndVerifySuccess();
+
+        mLooper.startAutoDispatch();
+        mCmi.syncEnableNetwork(mCmiAsyncChannel, 0, true);
+        mLooper.stopAutoDispatch();
+
+        verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt());
+
+        when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(null);
+
+        mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_EAP_FAILURE,
+                WifiNative.EAP_SIM_NOT_SUBSCRIBED);
+        mLooper.dispatchAll();
+
+        verify(mWifiConfigManager).updateNetworkSelectionStatus(anyInt(),
+                eq(WifiConfiguration.NetworkSelectionStatus
+                        .DISABLED_AUTHENTICATION_NO_SUBSCRIPTION));
+    }
+
     @Test
     public void testBadNetworkEvent() throws Exception {
         initializeAndAddNetworkAndVerifySuccess();
@@ -1309,8 +1337,7 @@ public class ClientModeImplTest {
     public void getWhatToString() throws Exception {
         assertEquals("CMD_CHANNEL_HALF_CONNECTED", mCmi.getWhatToString(
                 AsyncChannel.CMD_CHANNEL_HALF_CONNECTED));
-        assertEquals("CMD_PRE_DHCP_ACTION", mCmi.getWhatToString(
-                DhcpClient.CMD_PRE_DHCP_ACTION));
+        assertEquals("CMD_PRE_DHCP_ACTION", mCmi.getWhatToString(CMD_PRE_DHCP_ACTION));
         assertEquals("CMD_IP_REACHABILITY_LOST", mCmi.getWhatToString(
                 ClientModeImpl.CMD_IP_REACHABILITY_LOST));
     }
@@ -2093,7 +2120,7 @@ public class ClientModeImplTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class));
+                anyInt(), any(NetworkMisc.class), anyInt());
 
         ArrayList<Integer> thresholdsArray = new ArrayList();
         thresholdsArray.add(RSSI_THRESHOLD_MAX);
@@ -2189,8 +2216,6 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
 
-        toggleMacRandomizationSwitch(true);
-
         connect();
         verify(mWifiConfigManager, never()).setNetworkRandomizedMacAddress(0,
                 TEST_LOCAL_MAC_ADDRESS);
@@ -2216,8 +2241,6 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
 
-        toggleMacRandomizationSwitch(true);
-
         connect();
         verify(mWifiConfigManager).setNetworkRandomizedMacAddress(0, TEST_LOCAL_MAC_ADDRESS);
         verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_LOCAL_MAC_ADDRESS);
@@ -2240,7 +2263,6 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
 
-        toggleMacRandomizationSwitch(true);
         when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
                 .thenReturn(TEST_LOCAL_MAC_ADDRESS.toString());
 
@@ -2267,7 +2289,6 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
 
-        toggleMacRandomizationSwitch(true);
         when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
                 .thenReturn(TEST_LOCAL_MAC_ADDRESS.toString());
 
@@ -2303,8 +2324,6 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
 
-        toggleMacRandomizationSwitch(true);
-
         WifiConfiguration config = mock(WifiConfiguration.class);
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         when(config.getNetworkSelectionStatus())
@@ -2328,7 +2347,6 @@ public class ClientModeImplTest {
      */
     @Test
     public void testWifiInfoReturnDefaultMacWhenDisconnectedWithRandomization() throws Exception {
-        toggleMacRandomizationSwitch(true);
         when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
                 .thenReturn(TEST_LOCAL_MAC_ADDRESS.toString());
 
@@ -2355,8 +2373,6 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
 
-        toggleMacRandomizationSwitch(true);
-
         WifiConfiguration config = mock(WifiConfiguration.class);
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
         when(config.getOrCreateRandomizedMacAddress())
@@ -2370,71 +2386,6 @@ public class ClientModeImplTest {
 
         verify(config).getOrCreateRandomizedMacAddress();
         verify(mWifiNative, never()).setMacAddress(eq(WIFI_IFACE_NAME), any(MacAddress.class));
-    }
-
-    /**
-     * Verifies that turning on/off Connected MAC Randomization correctly updates metrics.
-     */
-    @Test
-    public void testUpdateConnectedMacRandomizationSettingMetrics() throws Exception {
-        toggleMacRandomizationSwitch(true);
-        verify(mWifiMetrics).setIsMacRandomizationOn(true);
-
-        toggleMacRandomizationSwitch(false);
-        verify(mWifiMetrics).setIsMacRandomizationOn(false);
-
-        // Updating to the same state twice should be no-op
-        toggleMacRandomizationSwitch(false);
-        verify(mWifiMetrics).setIsMacRandomizationOn(false);
-    }
-
-    /**
-     * Verifies that turning on MAC Randomization sets the current MAC to randomized MAC.
-     * @throws Exception
-     */
-    @Test
-    public void testTurnOnConnectedMacRandomizationSetting() throws Exception {
-        initializeAndAddNetworkAndVerifySuccess();
-        when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
-                .thenReturn(TEST_LOCAL_MAC_ADDRESS.toString());
-        connect();
-
-        // Current MAC is set to factory MAC since MAC randomization is currently off.
-        InOrder inOrder = inOrder(mWifiNative);
-        inOrder.verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_GLOBAL_MAC_ADDRESS);
-        assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
-
-        // After MAC randomization is turned on, the current MAC is set to the randomized MAC.
-        toggleMacRandomizationSwitch(true);
-        mLooper.dispatchAll();
-        inOrder.verify(mWifiNative).disconnect(WIFI_IFACE_NAME);
-        inOrder.verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_LOCAL_MAC_ADDRESS);
-        inOrder.verify(mWifiNative).connectToNetwork(eq(WIFI_IFACE_NAME), any());
-        assertEquals(TEST_LOCAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
-    }
-
-    /**
-     * Verifies that turning off MAC Randomization sets the current MAC to factory MAC.
-     * @throws Exception
-     */
-    @Test
-    public void testTurnOffConnectedMacRandomizationSetting() throws Exception {
-        initializeAndAddNetworkAndVerifySuccess();
-        toggleMacRandomizationSwitch(true);
-        connect();
-
-        // Current MAC is set to randomized MAC since MAC randomization is currently on.
-        InOrder inOrder = inOrder(mWifiNative);
-        inOrder.verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_LOCAL_MAC_ADDRESS);
-        assertEquals(TEST_LOCAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
-
-        // Verify that turning off MAC randomization sets the current MAC is back to factory MAC.
-        toggleMacRandomizationSwitch(false);
-        mLooper.dispatchAll();
-        inOrder.verify(mWifiNative).disconnect(WIFI_IFACE_NAME);
-        inOrder.verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_GLOBAL_MAC_ADDRESS);
-        inOrder.verify(mWifiNative).connectToNetwork(eq(WIFI_IFACE_NAME), any());
-        assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
     }
 
     /**
@@ -2614,7 +2565,7 @@ public class ClientModeImplTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class));
+                anyInt(), any(NetworkMisc.class), anyInt());
 
         Message message = new Message();
         message.what = NetworkAgent.CMD_REPORT_NETWORK_STATUS;
@@ -2765,16 +2716,9 @@ public class ClientModeImplTest {
         mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
         mLooper.dispatchAll();
         verify(mIpClient).shutdown();
-        verify(mIpClient).awaitShutdown();
         verify(mWifiConfigManager).removeAllEphemeralOrPasspointConfiguredNetworks();
     }
 
-    private void toggleMacRandomizationSwitch(boolean isOn) {
-        int status = isOn ? 1 : 0;
-        when(mFrameworkFacade.getIntegerSetting(mContext,
-                Settings.Global.WIFI_CONNECTED_MAC_RANDOMIZATION_ENABLED, 0)).thenReturn(status);
-        mContentObserver.onChange(false);
-    }
     /**
      * Verify that WifiInfo's MAC address is updated when the state machine receives
      * NETWORK_CONNECTION_EVENT while in ConnectedState.
@@ -2782,16 +2726,15 @@ public class ClientModeImplTest {
     @Test
     public void verifyWifiInfoMacUpdatedWithNetworkConnectionWhileConnected() throws Exception {
         connect();
-        // Since MAC randomization is off, the current MAC should be factory MAC.
         assertEquals("ConnectedState", getCurrentState().getName());
-        assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
+        assertEquals(TEST_LOCAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
 
         // Verify receiving a NETWORK_CONNECTION_EVENT changes the MAC in WifiInfo
         when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
-                .thenReturn(TEST_LOCAL_MAC_ADDRESS.toString());
+                .thenReturn(TEST_GLOBAL_MAC_ADDRESS.toString());
         mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
         mLooper.dispatchAll();
-        assertEquals(TEST_LOCAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
+        assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
     }
 
     /**
@@ -2802,7 +2745,9 @@ public class ClientModeImplTest {
     public void verifyWifiInfoMacUpdatedWithNetworkConnectionWhileDisconnected() throws Exception {
         disconnect();
         assertEquals("DisconnectedState", getCurrentState().getName());
-        assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
+        // Since MAC randomization is enabled, wifiInfo's MAC should be set to default MAC
+        // when disconnect happens.
+        assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, mCmi.getWifiInfo().getMacAddress());
 
         when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
                 .thenReturn(TEST_LOCAL_MAC_ADDRESS.toString());
@@ -2822,7 +2767,7 @@ public class ClientModeImplTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class));
+                anyInt(), any(NetworkMisc.class), anyInt());
 
         WifiConfiguration currentNetwork = new WifiConfiguration();
         currentNetwork.networkId = FRAMEWORK_NETWORK_ID;
@@ -2856,7 +2801,7 @@ public class ClientModeImplTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class));
+                anyInt(), any(NetworkMisc.class), anyInt());
 
         WifiConfiguration currentNetwork = new WifiConfiguration();
         currentNetwork.networkId = FRAMEWORK_NETWORK_ID;
@@ -2891,7 +2836,7 @@ public class ClientModeImplTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class));
+                anyInt(), any(NetworkMisc.class), anyInt());
 
         WifiConfiguration currentNetwork = new WifiConfiguration();
         currentNetwork.networkId = FRAMEWORK_NETWORK_ID;
@@ -2924,7 +2869,7 @@ public class ClientModeImplTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class));
+                anyInt(), any(NetworkMisc.class), anyInt());
 
         when(mWifiConfigManager.getLastSelectedNetwork()).thenReturn(FRAMEWORK_NETWORK_ID + 1);
 
@@ -2939,6 +2884,72 @@ public class ClientModeImplTest {
                 .setNetworkValidatedInternetAccess(FRAMEWORK_NETWORK_ID, true);
         verify(mWifiConfigManager).updateNetworkSelectionStatus(
                 FRAMEWORK_NETWORK_ID, NETWORK_SELECTION_ENABLE);
+    }
+
+    /**
+     * Verify that we set the INTERNET capability in the network agent when connected
+     * as a result of auto-join/legacy API's .
+     */
+    @Test
+    public void verifyNetworkCapabilities() throws Exception {
+        when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
+                .thenReturn(Pair.create(Process.INVALID_UID, ""));
+        // Simulate the first connection.
+        connect();
+        ArgumentCaptor<NetworkCapabilities> networkCapabilitiesCaptor =
+                ArgumentCaptor.forClass(NetworkCapabilities.class);
+        verify(mConnectivityManager).registerNetworkAgent(any(Messenger.class),
+                any(NetworkInfo.class), any(LinkProperties.class),
+                networkCapabilitiesCaptor.capture(), anyInt(), any(NetworkMisc.class),
+                anyInt());
+
+        NetworkCapabilities networkCapabilities = networkCapabilitiesCaptor.getValue();
+        assertNotNull(networkCapabilities);
+
+        // should have internet capability.
+        assertTrue(networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET));
+
+        NetworkSpecifier networkSpecifier = networkCapabilities.getNetworkSpecifier();
+        assertTrue(networkSpecifier instanceof WifiNetworkAgentSpecifier);
+        WifiNetworkAgentSpecifier wifiNetworkAgentSpecifier =
+                (WifiNetworkAgentSpecifier) networkSpecifier;
+        WifiNetworkAgentSpecifier expectedWifiNetworkAgentSpecifier =
+                new WifiNetworkAgentSpecifier(mCmi.getCurrentWifiConfiguration(),
+                        Process.INVALID_UID, "");
+        assertEquals(expectedWifiNetworkAgentSpecifier, wifiNetworkAgentSpecifier);
+    }
+
+    /**
+     * Verify that we don't set the INTERNET capability in the network agent when connected
+     * as a result of the new network request API.
+     */
+    @Test
+    public void verifyNetworkCapabilitiesForSpecificRequest() throws Exception {
+        when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
+                .thenReturn(Pair.create(TEST_UID, OP_PACKAGE_NAME));
+        // Simulate the first connection.
+        connect();
+        ArgumentCaptor<NetworkCapabilities> networkCapabilitiesCaptor =
+                ArgumentCaptor.forClass(NetworkCapabilities.class);
+        verify(mConnectivityManager).registerNetworkAgent(any(Messenger.class),
+                any(NetworkInfo.class), any(LinkProperties.class),
+                networkCapabilitiesCaptor.capture(), anyInt(), any(NetworkMisc.class),
+                anyInt());
+
+        NetworkCapabilities networkCapabilities = networkCapabilitiesCaptor.getValue();
+        assertNotNull(networkCapabilities);
+
+        // should not have internet capability.
+        assertFalse(networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET));
+
+        NetworkSpecifier networkSpecifier = networkCapabilities.getNetworkSpecifier();
+        assertTrue(networkSpecifier instanceof WifiNetworkAgentSpecifier);
+        WifiNetworkAgentSpecifier wifiNetworkAgentSpecifier =
+                (WifiNetworkAgentSpecifier) networkSpecifier;
+        WifiNetworkAgentSpecifier expectedWifiNetworkAgentSpecifier =
+                new WifiNetworkAgentSpecifier(mCmi.getCurrentWifiConfiguration(), TEST_UID,
+                        OP_PACKAGE_NAME);
+        assertEquals(expectedWifiNetworkAgentSpecifier, wifiNetworkAgentSpecifier);
     }
 
     /**
@@ -2974,17 +2985,21 @@ public class ClientModeImplTest {
 
         WifiLinkLayerStats stats = new WifiLinkLayerStats();
         when(mWifiNative.getWifiLinkLayerStats(any())).thenReturn(stats);
-        when(mWifiDataStall.checkForDataStall(any(), any())).thenReturn(false);
+        when(mWifiDataStall.checkForDataStall(any(), any()))
+                .thenReturn(WifiIsUnusableEvent.TYPE_UNKNOWN);
         mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
         mLooper.dispatchAll();
         verify(mWifiMetrics).updateWifiUsabilityStatsEntries(any(), eq(stats));
-        verify(mWifiMetrics, never()).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD);
+        verify(mWifiMetrics, never()).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
+                eq(anyInt()));
 
-        when(mWifiDataStall.checkForDataStall(any(), any())).thenReturn(true);
+        when(mWifiDataStall.checkForDataStall(any(), any()))
+                .thenReturn(WifiIsUnusableEvent.TYPE_DATA_STALL_BAD_TX);
         mCmi.sendMessage(ClientModeImpl.CMD_RSSI_POLL, 1);
         mLooper.dispatchAll();
         verify(mWifiMetrics, times(2)).updateWifiUsabilityStatsEntries(any(), eq(stats));
-        verify(mWifiMetrics).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD);
+        verify(mWifiMetrics).addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
+                WifiIsUnusableEvent.TYPE_DATA_STALL_BAD_TX);
     }
 
     /**
@@ -3030,6 +3045,27 @@ public class ClientModeImplTest {
         connect();
 
         verify(mWifiTrafficPoller).notifyOnDataActivity(anyLong(), anyLong());
+    }
+
+    /**
+     * Verify that LinkProbeManager is updated during RSSI poll
+     */
+    @Test
+    public void verifyRssiPollCallsLinkProbeManager() throws Exception {
+        mCmi.enableRssiPolling(true);
+
+        connect();
+        // reset() should be called when RSSI polling is enabled and entering L2ConnectedState
+        verify(mLinkProbeManager).reset();
+        verify(mLinkProbeManager).updateConnectionStats(any(), any());
+
+        mCmi.enableRssiPolling(false);
+        mLooper.dispatchAll();
+        // reset() should be called when in L2ConnectedState (or child states) and RSSI polling
+        // becomes enabled
+        mCmi.enableRssiPolling(true);
+        mLooper.dispatchAll();
+        verify(mLinkProbeManager, times(2)).reset();
     }
 
     /**
@@ -3124,6 +3160,22 @@ public class ClientModeImplTest {
     }
 
     /**
+     * Verify removing sim will also remove an ephemeral Passpoint Provider.
+     */
+    @Test
+    public void testResetSimNetworkWhenRemovingSim() throws Exception {
+        // Switch to connect mode and verify wifi is reported as enabled
+        startSupplicantAndDispatchMessages();
+
+        // Indicate that sim is removed.
+        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, false);
+        mLooper.dispatchAll();
+
+        verify(mPasspointManager).removeEphemeralProviders();
+        verify(mWifiConfigManager).resetSimNetworks(eq(false));
+    }
+
+    /**
      * Verifies that WifiLastResortWatchdog is notified of FOURWAY_HANDSHAKE_TIMEOUT.
      */
     @Test
@@ -3149,5 +3201,39 @@ public class ClientModeImplTest {
         assertEquals("DisconnectedState", getCurrentState().getName());
         verify(mWifiLastResortWatchdog).noteConnectionFailureAndTriggerIfNeeded(
                 sSSID, sBSSID, WifiLastResortWatchdog.FAILURE_CODE_AUTHENTICATION);
+    }
+
+    /**
+     * Verify that WifiInfo is correctly populated after connection.
+     */
+    @Test
+    public void verifyWifiInfoGetNetworkSpecifierPackageName() throws Exception {
+        mConnectedNetwork.fromWifiNetworkSpecifier = true;
+        mConnectedNetwork.ephemeral = true;
+        mConnectedNetwork.trusted = true;
+        mConnectedNetwork.creatorName = OP_PACKAGE_NAME;
+        connect();
+
+        assertTrue(mCmi.getWifiInfo().isEphemeral());
+        assertTrue(mCmi.getWifiInfo().isTrusted());
+        assertEquals(OP_PACKAGE_NAME,
+                mCmi.getWifiInfo().getNetworkSuggestionOrSpecifierPackageName());
+    }
+
+    /**
+     * Verify that WifiInfo is correctly populated after connection.
+     */
+    @Test
+    public void verifyWifiInfoGetNetworkSuggestionPackageName() throws Exception {
+        mConnectedNetwork.fromWifiNetworkSuggestion = true;
+        mConnectedNetwork.ephemeral = true;
+        mConnectedNetwork.trusted = true;
+        mConnectedNetwork.creatorName = OP_PACKAGE_NAME;
+        connect();
+
+        assertTrue(mCmi.getWifiInfo().isEphemeral());
+        assertTrue(mCmi.getWifiInfo().isTrusted());
+        assertEquals(OP_PACKAGE_NAME,
+                mCmi.getWifiInfo().getNetworkSuggestionOrSpecifierPackageName());
     }
 }

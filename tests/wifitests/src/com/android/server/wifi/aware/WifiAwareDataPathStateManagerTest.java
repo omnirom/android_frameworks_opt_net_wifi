@@ -98,7 +98,6 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-
 /**
  * Unit test harness for WifiAwareDataPathStateManager class.
  */
@@ -156,7 +155,7 @@ public class WifiAwareDataPathStateManagerTest {
 
         // by default pretend to be an old API: i.e. allow Responders configured as *ANY*. This
         // allows older (more extrensive) tests to run.
-        when(mWifiPermissionsUtil.isLegacyVersion(anyString(), anyInt())).thenReturn(true);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(), anyInt())).thenReturn(true);
         when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(true);
 
         mDut = new WifiAwareStateManager();
@@ -543,7 +542,7 @@ public class WifiAwareDataPathStateManagerTest {
                 first = false;
             }
             inOrder.verify(mMockCm).registerNetworkAgent(messengerCaptor.capture(), any(), any(),
-                    netCapCaptor.capture(), anyInt(), any());
+                    netCapCaptor.capture(), anyInt(), any(), anyInt());
             agentMessengers[i] = messengerCaptor.getValue();
             inOrderM.verify(mAwareMetricsMock).recordNdpStatus(eq(NanStatusType.SUCCESS),
                     eq(false), anyLong());
@@ -668,7 +667,7 @@ public class WifiAwareDataPathStateManagerTest {
         inOrder.verify(mMockNwMgt).setInterfaceUp(anyString());
         inOrder.verify(mMockNwMgt).enableIpv6(anyString());
         inOrder.verify(mMockCm).registerNetworkAgent(agentMessengerCaptor.capture(), any(), any(),
-                netCapCaptor.capture(), anyInt(), any());
+                netCapCaptor.capture(), anyInt(), any(), anyInt());
         inOrderM.verify(mAwareMetricsMock).recordNdpStatus(eq(NanStatusType.SUCCESS),
                 eq(true), anyLong());
         inOrderM.verify(mAwareMetricsMock).recordNdpCreation(anyInt(), any());
@@ -786,7 +785,7 @@ public class WifiAwareDataPathStateManagerTest {
                 inOrder.verify(mMockNwMgt).setInterfaceUp(anyString());
                 inOrder.verify(mMockNwMgt).enableIpv6(anyString());
                 inOrder.verify(mMockCm).registerNetworkAgent(any(), any(), any(),
-                        netCapCaptor.capture(), anyInt(), any());
+                        netCapCaptor.capture(), anyInt(), any(), anyInt());
                 inOrderM.verify(mAwareMetricsMock).recordNdpStatus(eq(NanStatusType.SUCCESS),
                         eq(true), anyLong());
                 inOrderM.verify(mAwareMetricsMock).recordNdpCreation(anyInt(), any());
@@ -949,7 +948,7 @@ public class WifiAwareDataPathStateManagerTest {
      */
     @Test
     public void testDataPathResonderMacPassphraseNoPeerIdSuccessNonLegacy() throws Exception {
-        when(mWifiPermissionsUtil.isLegacyVersion(anyString(), anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(), anyInt())).thenReturn(false);
         testDataPathResponderUtility(false, false, false, true, true);
     }
 
@@ -960,7 +959,7 @@ public class WifiAwareDataPathStateManagerTest {
     @Test
     public void testDataPathResonderMacOpenNoPeerIdNoPmkPassphraseSuccessNonLegacy()
             throws Exception {
-        when(mWifiPermissionsUtil.isLegacyVersion(anyString(), anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(), anyInt())).thenReturn(false);
         testDataPathResponderUtility(false, false, false, false, true);
     }
 
@@ -1006,7 +1005,7 @@ public class WifiAwareDataPathStateManagerTest {
      */
     @Test
     public void testDataPathResonderDirectNoMacPassphraseSuccessNonLegacy() throws Exception {
-        when(mWifiPermissionsUtil.isLegacyVersion(anyString(), anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(), anyInt())).thenReturn(false);
         testDataPathResponderUtility(true, false, false, true, true);
     }
 
@@ -1016,7 +1015,7 @@ public class WifiAwareDataPathStateManagerTest {
      */
     @Test
     public void testDataPathResonderDirectNoMacNoPmkPassphraseSuccessNonLegacy() throws Exception {
-        when(mWifiPermissionsUtil.isLegacyVersion(anyString(), anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(), anyInt())).thenReturn(false);
         testDataPathResponderUtility(true, false, false, false, true);
     }
 
@@ -1260,7 +1259,7 @@ public class WifiAwareDataPathStateManagerTest {
             inOrder.verify(mMockNwMgt).setInterfaceUp(anyString());
             inOrder.verify(mMockNwMgt).enableIpv6(anyString());
             inOrder.verify(mMockCm).registerNetworkAgent(messengerCaptor.capture(), any(), any(),
-                    netCapCaptor.capture(), anyInt(), any());
+                    netCapCaptor.capture(), anyInt(), any(), anyInt());
             inOrderM.verify(mAwareMetricsMock).recordNdpStatus(eq(NanStatusType.SUCCESS),
                     eq(useDirect), anyLong());
             inOrderM.verify(mAwareMetricsMock).recordNdpCreation(anyInt(), any());
@@ -1324,7 +1323,8 @@ public class WifiAwareDataPathStateManagerTest {
                 mMockNwMgt);
         InOrder inOrderM = inOrder(mAwareMetricsMock);
 
-        boolean isLegacy = mWifiPermissionsUtil.isLegacyVersion("anything", Build.VERSION_CODES.P);
+        boolean isLegacy = mWifiPermissionsUtil.isTargetSdkLessThan("anything",
+                Build.VERSION_CODES.P);
 
         if (providePmk) {
             when(mPermissionsWrapperMock.getUidPermission(
@@ -1373,7 +1373,7 @@ public class WifiAwareDataPathStateManagerTest {
                 inOrder.verify(mMockNwMgt).setInterfaceUp(anyString());
                 inOrder.verify(mMockNwMgt).enableIpv6(anyString());
                 inOrder.verify(mMockCm).registerNetworkAgent(messengerCaptor.capture(), any(),
-                        any(), netCapCaptor.capture(), anyInt(), any());
+                        any(), netCapCaptor.capture(), anyInt(), any(), anyInt());
                 inOrderM.verify(mAwareMetricsMock).recordNdpStatus(eq(NanStatusType.SUCCESS),
                         eq(useDirect), anyLong());
                 inOrderM.verify(mAwareMetricsMock).recordNdpCreation(anyInt(), any());

@@ -62,11 +62,12 @@ import android.net.DhcpResults;
 import android.net.Network;
 import android.net.NetworkUtils;
 import android.net.Uri;
-import android.net.ip.IpClient;
+import android.net.ip.IpClientUtil;
 import android.net.wifi.IDppCallback;
 import android.net.wifi.INetworkRequestMatchCallback;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ITrafficStateCallback;
+import android.net.wifi.IWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiActivityEnergyInfo;
 import android.net.wifi.WifiConfiguration;
@@ -911,30 +912,13 @@ public class WifiServiceImpl extends BaseWifiService {
         mWifiPermissionsUtil.enforceLocationPermission(pkgName, uid);
     }
 
-    private boolean isTargetSdkLessThan(String packageName, int versionCode) {
-        long ident = Binder.clearCallingIdentity();
-        try {
-            if (mContext.getPackageManager().getApplicationInfo(packageName, 0).targetSdkVersion
-                    < versionCode) {
-                return true;
-            }
-        } catch (PackageManager.NameNotFoundException e) {
-            // In case of exception, assume unknown app (more strict checking)
-            // Note: This case will never happen since checkPackage is
-            // called to verify validity before checking App's version.
-        } finally {
-            Binder.restoreCallingIdentity(ident);
-        }
-        return false;
-    }
-
     /**
      * Helper method to check if the app is allowed to access public API's deprecated in
      * {@link Build.VERSION_CODES.Q}.
      * Note: Invoke mAppOps.checkPackage(uid, packageName) before to ensure correct package name.
      */
     private boolean isTargetSdkLessThanQOrPrivileged(String packageName, int pid, int uid) {
-        return isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)
+        return mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)
                 || isPrivileged(pid, uid)
                 // DO/PO apps should be able to add/modify saved networks.
                 || isDeviceOrProfileOwner(uid)
@@ -1525,9 +1509,14 @@ public class WifiServiceImpl extends BaseWifiService {
             return LocalOnlyHotspotCallback.ERROR_GENERIC;
         }
         enforceLocationPermission(packageName, uid);
-        // also need to verify that Locations services are enabled.
-        if (!mWifiPermissionsUtil.isLocationModeEnabled()) {
-            throw new SecurityException("Location mode is not enabled.");
+        long ident = Binder.clearCallingIdentity();
+        try {
+            // also need to verify that Locations services are enabled.
+            if (!mWifiPermissionsUtil.isLocationModeEnabled()) {
+                throw new SecurityException("Location mode is not enabled.");
+            }
+        } finally {
+            Binder.restoreCallingIdentity(ident);
         }
 
         // verify that tethering is not disabled
@@ -1544,7 +1533,10 @@ public class WifiServiceImpl extends BaseWifiService {
 
         synchronized (mLocalOnlyHotspotRequests) {
             // check if we are currently tethering
-            if (mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_TETHERED)) {
+            // TODO(b/110697252): handle all configurations in the wifi stack
+            //                    (just by changing the HAL)
+            if (getMaxApInterfacesCount() < 2
+                    && mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_TETHERED)) {
                 // Tethering is enabled, cannot start LocalOnlyHotspot
                 mLog.info("Cannot start localOnlyHotspot when WiFi Tethering is active.").flush();
                 return LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE;
@@ -2522,13 +2514,19 @@ public class WifiServiceImpl extends BaseWifiService {
 
     @Override
     public boolean isDualBandSupported() {
-        //TODO (b/80552904): Should move towards adding a driver API that checks at runtime
+        //TODO (b/123227116): pull it from the HAL
         if (mVerboseLoggingEnabled) {
             mLog.info("isDualBandSupported uid=%").c(Binder.getCallingUid()).flush();
         }
 
         return mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_wifi_dual_band_support);
+    }
+
+    private int getMaxApInterfacesCount() {
+        //TODO (b/123227116): pull it from the HAL
+        return mContext.getResources().getInteger(
+                com.android.internal.R.integer.config_wifi_max_ap_interfaces);
     }
 
     /**
@@ -2718,7 +2716,7 @@ public class WifiServiceImpl extends BaseWifiService {
     public void disableEphemeralNetwork(String SSID, String packageName) {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.CHANGE_WIFI_STATE,
                 "WifiService");
-        if (!isPrivileged(Binder.getCallingUid(), Binder.getCallingPid())) {
+        if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())) {
             mLog.info("disableEphemeralNetwork not allowed for uid=%")
                     .c(Binder.getCallingUid()).flush();
             return;
@@ -2802,6 +2800,7 @@ public class WifiServiceImpl extends BaseWifiService {
                         mScanRequestProxy.clearScanRequestTimestampsForApp(pkgName, uid);
                         // Remove all suggestions from the package.
                         mWifiNetworkSuggestionsManager.removeApp(pkgName);
+                        mClientModeImpl.removeNetworkRequestUserApprovedAccessPointsForApp(pkgName);
                     });
                 }
             }
@@ -2811,7 +2810,7 @@ public class WifiServiceImpl extends BaseWifiService {
     @Override
     public void onShellCommand(FileDescriptor in, FileDescriptor out, FileDescriptor err,
             String[] args, ShellCallback callback, ResultReceiver resultReceiver) {
-        (new WifiShellCommand(mClientModeImpl, mWifiLockManager)).exec(this, in, out, err,
+        (new WifiShellCommand(mWifiInjector)).exec(this, in, out, err,
                 args, callback, resultReceiver);
     }
 
@@ -2828,7 +2827,7 @@ public class WifiServiceImpl extends BaseWifiService {
             // WifiMetrics proto bytes were requested. Dump only these.
             mClientModeImpl.updateWifiMetrics();
             mWifiMetrics.dump(fd, pw, args);
-        } else if (args != null && args.length > 0 && IpClient.DUMP_ARG.equals(args[0])) {
+        } else if (args != null && args.length > 0 && IpClientUtil.DUMP_ARG.equals(args[0])) {
             // IpClient dump was requested. Pass it along and take no further action.
             String[] ipClientArgs = new String[args.length - 1];
             System.arraycopy(args, 1, ipClientArgs, 0, ipClientArgs.length);
@@ -3750,5 +3749,87 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(Binder.getCallingUid())
                 .c(enable).flush();
         mFacade.setIntegerSetting(mContext, Settings.Global.WIFI_COVERAGE_EXTEND_FEATURE_ENABLED, (enable ? 1 : 0));
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#addWifiUsabilityStatsListener(Executor,
+     * WifiUsabilityStatsListener)}
+     *
+     * @param binder IBinder instance to allow cleanup if the app dies
+     * @param listener WifiUsabilityStatsEntry listener to add
+     * @param listenerIdentifier Unique ID of the adding listener. This ID will be used to
+     *        remove the listener. See {@link removeWifiUsabilityStatsListener(int)}
+     *
+     * @throws SecurityException if the caller does not have permission to add a listener
+     * @throws RemoteException if remote exception happens
+     * @throws IllegalArgumentException if the arguments are null or invalid
+     */
+    @Override
+    public void addWifiUsabilityStatsListener(IBinder binder,
+            IWifiUsabilityStatsListener listener, int listenerIdentifier) {
+        // verify arguments
+        if (binder == null) {
+            throw new IllegalArgumentException("Binder must not be null");
+        }
+        if (listener == null) {
+            throw new IllegalArgumentException("Listener must not be null");
+        }
+        mContext.enforceCallingPermission(
+                android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE, "WifiService");
+        if (mVerboseLoggingEnabled) {
+            mLog.info("addWifiUsabilityStatsListener uid=%")
+                .c(Binder.getCallingUid()).flush();
+        }
+        // Post operation to handler thread
+        mWifiInjector.getClientModeImplHandler().post(() -> {
+            mWifiMetrics.addWifiUsabilityListener(binder, listener, listenerIdentifier);
+        });
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#removeWifiUsabilityStatsListener(
+     * WifiUsabilityStatsListener)}
+     *
+     * @param listenerIdentifier Unique ID of the listener to be removed.
+     *
+     * @throws SecurityException if the caller does not have permission to add a listener
+     */
+    @Override
+    public void removeWifiUsabilityStatsListener(int listenerIdentifier) {
+        mContext.enforceCallingPermission(
+                android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE, "WifiService");
+        if (mVerboseLoggingEnabled) {
+            mLog.info("removeWifiUsabilityStatsListener uid=%")
+                    .c(Binder.getCallingUid()).flush();
+        }
+        // Post operation to handler thread
+        mWifiInjector.getClientModeImplHandler().post(() -> {
+            mWifiMetrics.removeWifiUsabilityListener(listenerIdentifier);
+        });
+    }
+
+    /**
+     * Updates the Wi-Fi usability score.
+     * @param seqNum Sequence number of the Wi-Fi usability score.
+     * @param score The Wi-Fi usability score.
+     * @param predictionHorizonSec Prediction horizon of the Wi-Fi usability score.
+     */
+    @Override
+    public void updateWifiUsabilityScore(int seqNum, int score, int predictionHorizonSec) {
+        mContext.enforceCallingPermission(
+                android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE, "WifiService");
+
+        if (mVerboseLoggingEnabled) {
+            mLog.info("updateWifiUsability uid=% seqNum=% score=% predictionHorizonSec=%")
+                    .c(Binder.getCallingUid())
+                    .c(seqNum)
+                    .c(score)
+                    .c(predictionHorizonSec)
+                    .flush();
+        }
+        // Post operation to handler thread
+        mWifiInjector.getClientModeImplHandler().post(
+                () -> mClientModeImpl.updateWifiUsabilityScore(seqNum, score,
+                        predictionHorizonSec));
     }
 }
