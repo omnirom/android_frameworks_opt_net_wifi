@@ -1209,7 +1209,14 @@ public class ClientModeImpl extends StateMachine {
         mDataInterfaceName = dataInterfaceName;
 
         if (mIpClient != null) {
-            mIpClient.shutdown();
+            try {
+                mIpClient.shutdown();
+                // Block to make sure IpClient has really shut down, lest cleanup
+                // race with, say, bringup code over in tethering.
+                mIpClientCallbacks.awaitShutdown();
+            } catch (RemoteException e) {
+                loge("Error shutting down IpClient", e);
+            }
         }
 
         mIpClientCallbacks = new IpClientCallbacksImpl();
@@ -3156,7 +3163,8 @@ public class ClientModeImpl extends StateMachine {
     }
 
     void buildDiscoverWithRapidCommitPacket() {
-        ByteBuffer mDiscoverPacket = mIpClient.buildDiscoverWithRapidCommitPacket();
+        // TODO(b/124083198): IIpClient does not define buildDiscoverWithRapidCommitPacket.
+        ByteBuffer mDiscoverPacket = null; // = mIpClient.buildDiscoverWithRapidCommitPacket();
         if (mDiscoverPacket != null) {
             byte [] bytes = mDiscoverPacket.array();
             StringBuilder dst = new StringBuilder();
@@ -3188,12 +3196,12 @@ public class ClientModeImpl extends StateMachine {
             Message msg = new Message();
             msg.what = WifiP2pServiceImpl.BLOCK_DISCOVERY;
             msg.arg1 = WifiP2pServiceImpl.ENABLED;
-            msg.arg2 = DhcpClient.CMD_PRE_DHCP_ACTION_COMPLETE;
+            msg.arg2 = CMD_PRE_DHCP_ACTION_COMPLETE;
             msg.obj = ClientModeImpl.this;
             mWifiP2pChannel.sendMessage(msg);
         } else {
             // If the p2p service is not running, we can proceed directly.
-            sendMessage(DhcpClient.CMD_PRE_DHCP_ACTION_COMPLETE);
+            sendMessage(CMD_PRE_DHCP_ACTION_COMPLETE);
         }
     }
 
@@ -6069,14 +6077,17 @@ public class ClientModeImpl extends StateMachine {
             if (mVerboseLoggingEnabled) {
                 Log.d(TAG, "Filsstate enter");
             }
-            final IpClient.ProvisioningConfiguration prov =
-               mIpClient.buildProvisioningConfiguration()
+            final ProvisioningConfiguration prov = new ProvisioningConfiguration.Builder()
                          .withPreDhcpAction()
                          .withApfCapabilities(mWifiNative.getApfCapabilities(mInterfaceName))
                          .build();
                   prov.mRapidCommit = true;
                   prov.mDiscoverSent = true;
-                  mIpClient.startProvisioning(prov);
+               try {
+                   mIpClient.startProvisioning(prov.toStableParcelable());
+               } catch (RemoteException e) {
+                   loge("Error starting IpClient provisioning", e);
+               }
                mIsIpClientStarted = true;
         }
 
@@ -6085,11 +6096,15 @@ public class ClientModeImpl extends StateMachine {
             logStateAndMessage(message, this);
             WifiConfiguration config;
             switch (message.what) {
-                case DhcpClient.CMD_PRE_DHCP_ACTION:
+                case CMD_PRE_DHCP_ACTION:
                     handlePreFilsDhcpSetup();
                     break;
-                case DhcpClient.CMD_PRE_DHCP_ACTION_COMPLETE:
-                    mIpClient.completedPreDhcpAction();
+                case CMD_PRE_DHCP_ACTION_COMPLETE:
+                    try {
+                        mIpClient.completedPreDhcpAction();
+                    } catch (RemoteException e) {
+                        loge("Error completing PreDhcpAction", e);
+                    }
                     buildDiscoverWithRapidCommitPacket();
 
                     reportConnectionAttemptStart(mFilsConfig, mTargetRoamBSSID,
@@ -6152,7 +6167,7 @@ public class ClientModeImpl extends StateMachine {
                 case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
                     stopIpClient();
                     return NOT_HANDLED;
-                case DhcpClient.CMD_POST_DHCP_ACTION:
+                case CMD_POST_DHCP_ACTION:
                     deferMessage(message);
                     break;
                 case CMD_IPV4_PROVISIONING_SUCCESS:
