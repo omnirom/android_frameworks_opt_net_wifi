@@ -423,8 +423,6 @@ public class XmlUtil {
                     out, XML_TAG_ALLOWED_SUITE_B_CIPHERS,
                     configuration.allowedSuiteBCiphers.toByteArray());
             XmlUtil.writeNextValue(out, XML_TAG_SHARED, configuration.shared);
-            XmlUtil.writeNextValue(out, XML_TAG_MAC_RANDOMIZATION_SETTING,
-                    configuration.macRandomizationSetting);
         }
 
         /**
@@ -484,6 +482,8 @@ public class XmlUtil {
                     out, XML_TAG_ROAMING_CONSORTIUM_OIS, configuration.roamingConsortiumIds);
             XmlUtil.writeNextValue(out, XML_TAG_RANDOMIZED_MAC_ADDRESS,
                     configuration.getRandomizedMacAddress().toString());
+            XmlUtil.writeNextValue(out, XML_TAG_MAC_RANDOMIZATION_SETTING,
+                    configuration.macRandomizationSetting);
 
             XmlUtil.writeNextValue(out, XML_TAG_DPP_CONNECTOR, configuration.dppConnector);
             XmlUtil.writeNextValue(out, XML_TAG_DPP_NETACCESSKEY, configuration.dppNetAccessKey);

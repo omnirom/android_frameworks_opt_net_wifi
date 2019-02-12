@@ -16,6 +16,7 @@
 package com.android.server.wifi;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -1308,6 +1309,7 @@ public class WifiMetricsTest {
         WifiConfiguration config = mock(WifiConfiguration.class);
         config.SSID = "\"" + SSID + "\"";
         config.dtimInterval = CONFIG_DTIM;
+        config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
         WifiConfiguration.NetworkSelectionStatus networkSelectionStat =
                 mock(WifiConfiguration.NetworkSelectionStatus.class);
         when(networkSelectionStat.getCandidate()).thenReturn(scanResult);
@@ -1323,6 +1325,7 @@ public class WifiMetricsTest {
                 WifiMetrics.ConnectionEvent.FAILURE_NONE,
                 WifiMetricsProto.ConnectionEvent.HLF_NONE);
 
+        config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         //Create a connection event using the config and a scan detail
         mWifiMetrics.startConnectionEvent(config, "Green",
                 WifiMetricsProto.ConnectionEvent.ROAM_NONE);
@@ -1342,6 +1345,8 @@ public class WifiMetricsTest {
         assertEquals(SCAN_RESULT_LEVEL, mDecodedProto.connectionEvent[1].signalStrength);
         assertEquals(NETWORK_DETAIL_WIFIMODE,
                 mDecodedProto.connectionEvent[1].routerFingerprint.routerTechnology);
+        assertTrue(mDecodedProto.connectionEvent[0].useRandomizedMac);
+        assertFalse(mDecodedProto.connectionEvent[1].useRandomizedMac);
     }
 
     /**
@@ -2559,6 +2564,7 @@ public class WifiMetricsTest {
         assertEquals(stats.on_time_roam_scan, usabilityStats.totalRoamScanTimeMs);
         assertEquals(stats.on_time_pno_scan, usabilityStats.totalPnoScanTimeMs);
         assertEquals(stats.on_time_hs20_scan, usabilityStats.totalHotspot2ScanTimeMs);
+        assertEquals(stats.beacon_rx, usabilityStats.totalBeaconRx);
     }
 
     // Simulate adding a LABEL_GOOD WifiUsabilityStats
@@ -2601,10 +2607,21 @@ public class WifiMetricsTest {
         WifiInfo info = mock(WifiInfo.class);
         when(info.getRssi()).thenReturn(nextRandInt());
         when(info.getLinkSpeed()).thenReturn(nextRandInt());
+        when(info.getRxLinkSpeedMbps()).thenReturn(nextRandInt());
+        when(info.getBSSID()).thenReturn("Wifi");
+        when(info.getFrequency()).thenReturn(5745);
+
         WifiLinkLayerStats stats1 = nextRandomStats(new WifiLinkLayerStats());
         WifiLinkLayerStats stats2 = nextRandomStats(stats1);
-
+        mWifiMetrics.incrementWifiScoreCount(60);
+        mWifiMetrics.incrementWifiUsabilityScoreCount(2, 55, 15);
+        mWifiMetrics.logLinkProbeSuccess(nextRandInt(), nextRandInt(), nextRandInt(),
+                nextRandInt(), 12);
         mWifiMetrics.updateWifiUsabilityStatsEntries(info, stats1);
+        mWifiMetrics.incrementWifiScoreCount(58);
+        mWifiMetrics.incrementWifiUsabilityScoreCount(3, 56, 15);
+        mWifiMetrics.logLinkProbeFailure(nextRandInt(), nextRandInt(), nextRandInt(),
+                nextRandInt(), nextRandInt());
         mWifiMetrics.updateWifiUsabilityStatsEntries(info, stats2);
         mWifiMetrics.addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
                 WifiUsabilityStats.TYPE_DATA_STALL_BAD_TX);
@@ -2622,6 +2639,29 @@ public class WifiMetricsTest {
                 mDecodedProto.wifiUsabilityStatsList[1].stats[0]);
         assertUsabilityStatsAssignment(info, stats2,
                 mDecodedProto.wifiUsabilityStatsList[1].stats[1]);
+
+        assertEquals(2, mDecodedProto.wifiUsabilityStatsList[1].stats[0].seqNumToFramework);
+        assertEquals(3, mDecodedProto.wifiUsabilityStatsList[1].stats[1].seqNumToFramework);
+        assertEquals(0, mDecodedProto.wifiUsabilityStatsList[1].stats[0].seqNumInsideFramework);
+        assertEquals(1, mDecodedProto.wifiUsabilityStatsList[1].stats[1].seqNumInsideFramework);
+        assertEquals(60, mDecodedProto.wifiUsabilityStatsList[1].stats[0].wifiScore);
+        assertEquals(58, mDecodedProto.wifiUsabilityStatsList[1].stats[1].wifiScore);
+        assertEquals(55, mDecodedProto.wifiUsabilityStatsList[1].stats[0].wifiUsabilityScore);
+        assertEquals(56, mDecodedProto.wifiUsabilityStatsList[1].stats[1].wifiUsabilityScore);
+        assertEquals(15, mDecodedProto.wifiUsabilityStatsList[1].stats[0].predictionHorizonSec);
+        assertEquals(true, mDecodedProto.wifiUsabilityStatsList[1].stats[0].isSameBssidAndFreq);
+        assertEquals(android.net.wifi.WifiUsabilityStatsEntry.PROBE_STATUS_SUCCESS,
+                mDecodedProto.wifiUsabilityStatsList[1].stats[0].probeStatusSinceLastUpdate);
+        assertEquals(android.net.wifi.WifiUsabilityStatsEntry.PROBE_STATUS_FAILURE,
+                mDecodedProto.wifiUsabilityStatsList[1].stats[1].probeStatusSinceLastUpdate);
+        assertEquals(android.net.wifi.WifiUsabilityStatsEntry.PROBE_STATUS_NO_PROBE,
+                mDecodedProto.wifiUsabilityStatsList[0].stats[0].probeStatusSinceLastUpdate);
+        assertEquals(12,
+                mDecodedProto.wifiUsabilityStatsList[1].stats[0].probeElapsedTimeMsSinceLastUpdate);
+        assertEquals(Integer.MAX_VALUE, mDecodedProto.wifiUsabilityStatsList[1]
+                .stats[1].probeElapsedTimeMsSinceLastUpdate);
+        assertEquals(-1, mDecodedProto.wifiUsabilityStatsList[0]
+                .stats[0].probeElapsedTimeMsSinceLastUpdate);
     }
 
     /**

@@ -157,10 +157,12 @@ public class ScanResultUtil {
             WifiConfiguration config) {
         if (isScanResultForSaeNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SAE);
+            config.requirePMF = true;
         } else if (isScanResultForPskNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
         } else if (isScanResultForEapSuiteBNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SUITE_B_192);
+            config.requirePMF = true;
         } else if (isScanResultForEapNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_EAP);
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.IEEE8021X);
@@ -180,6 +182,7 @@ public class ScanResultUtil {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SAE);
         } else if (isScanResultForOweNetwork(scanResult)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.OWE);
+            config.requirePMF = true;
         } else {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
         }
