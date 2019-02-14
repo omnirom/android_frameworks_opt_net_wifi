@@ -462,11 +462,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         mP2pStateMachine.start();
     }
     public void enableVerboseLogging(int verbose) {
-        if (verbose > 0 ) {
-            DBG = true;
-        } else {
-            DBG = false;
-        }
+        mVerboseLoggingEnabled = verbose > 0;
     }
     /**
      * Obtains the service interface for Managements services
@@ -1265,7 +1261,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         class P2pNotSupportedState extends State {
             @Override
             public boolean processMessage(Message message) {
-                if (DBG) logStateAndMessage(message, this);
+                if (mVerboseLoggingEnabled) logStateAndMessage(message, this);
                 switch (message.what) {
                     case WifiP2pManager.DISCOVER_PEERS:
                         replyToMessage(message, WifiP2pManager.DISCOVER_PEERS_FAILED,

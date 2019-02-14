@@ -753,7 +753,7 @@ public class SupplicantP2pIfaceHal {
                 Log.e(TAG, "ISupplicantVendor." + methodStr + " failed: " + status);
                 return false;
             } else {
-                if (DBG) {
+                if (sVerboseLoggingEnabled) {
                     Log.d(TAG, "ISupplicantVendor." + methodStr + " succeeded");
                 }
                 return true;
@@ -772,7 +772,7 @@ public class SupplicantP2pIfaceHal {
                 Log.e(TAG, "ISupplicantVendorP2pIface." + methodStr + " failed: " + status);
                 return false;
             } else {
-                if (DBG) {
+                if (sVerboseLoggingEnabled) {
                     Log.d(TAG, "ISupplicantVendorP2PIface." + methodStr + " succeeded");
                 }
                 return true;
