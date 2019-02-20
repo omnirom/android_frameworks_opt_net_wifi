@@ -59,7 +59,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
      */
 
     private static final String TAG = "WifiDiags";
-    private static final boolean DBG = false;
+    private static final boolean DBG = true;
 
     /** log level flags; keep these consistent with wifi_logger.h */
 
@@ -169,7 +169,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         }
 
         if (verboseEnabled) {
-            mLogLevel = VERBOSE_LOG_WITH_WAKEUP;
+            mLogLevel = VERBOSE_DETAILED_LOG_WITH_WAKEUP;
             mMaxRingBufferSizeBytes = RING_BUFFER_BYTE_LIMIT_LARGE;
         } else {
             mLogLevel = VERBOSE_NORMAL_LOG;
