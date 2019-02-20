@@ -1920,9 +1920,10 @@ public class ClientModeImpl extends StateMachine {
         long supportedFeatureSet = ((Long) resultMsg.obj).longValue();
         resultMsg.recycle();
 
-        boolean checkRtt = mContext.getPackageManager().hasSystemFeature(
+        // Mask the feature set against system properties.
+        boolean rttSupported = mContext.getPackageManager().hasSystemFeature(
                 PackageManager.FEATURE_WIFI_RTT);
-        if (!checkRtt) {
+        if (!rttSupported) {
             supportedFeatureSet &=
                     ~(WifiManager.WIFI_FEATURE_D2D_RTT | WifiManager.WIFI_FEATURE_D2AP_RTT);
         }
@@ -2685,6 +2686,8 @@ public class ClientModeImpl extends StateMachine {
         if (wifiLockManager != null) {
             wifiLockManager.handleScreenStateChanged(screenOn);
         }
+
+        mSarManager.handleScreenStateChanged(screenOn);
 
         if (mVerboseLoggingEnabled) log("handleScreenStateChanged Exit: " + screenOn);
     }
