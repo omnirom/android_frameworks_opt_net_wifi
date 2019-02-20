@@ -124,6 +124,7 @@ import com.android.server.wifi.util.TelephonyUtil.SimAuthRequestData;
 import com.android.server.wifi.util.TelephonyUtil.SimAuthResponseData;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
+import com.android.server.wifi.WifiNative.WifiGenerationStatus;
 
 import java.io.BufferedReader;
 import java.io.FileDescriptor;
@@ -3281,6 +3282,27 @@ public class ClientModeImpl extends StateMachine {
     @VisibleForTesting
     public static final long DIAGS_CONNECT_TIMEOUT_MILLIS = 60 * 1000;
 
+    private WifiGenerationStatus getWifiGenerationStatus() {
+         if (mInterfaceName == null)
+             return null;
+
+        return mWifiNative.getWifiGenerationStatus(mInterfaceName);
+    }
+
+    private void updateWifiGenerationInfo() {
+        WifiGenerationStatus wifiGenerationStatus = getWifiGenerationStatus();
+
+        if (wifiGenerationStatus != null) {
+            mWifiInfo.setWifiGeneration(wifiGenerationStatus.generation);
+            mWifiInfo.setVhtMax8SpatialStreamsSupport(wifiGenerationStatus.vhtMax8SpatialStreamsSupport);
+            mWifiInfo.setTwtSupport(wifiGenerationStatus.twtSupport);
+        } else {
+            mWifiInfo.setWifiGeneration(0);
+            mWifiInfo.setVhtMax8SpatialStreamsSupport(false);
+            mWifiInfo.setTwtSupport(false);
+        }
+    }
+
     /**
      * Inform other components that a new connection attempt is starting.
      */
@@ -4652,6 +4674,7 @@ public class ClientModeImpl extends StateMachine {
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
                         mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
+                        updateWifiGenerationInfo();
 
                         ScanDetailCache scanDetailCache =
                                 mWifiConfigManager.getScanDetailCacheForNetwork(config.networkId);
@@ -5382,6 +5405,7 @@ public class ClientModeImpl extends StateMachine {
                     mWifiInfo.setNetworkId(mLastNetworkId);
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
                     if (!mLastBssid.equals(message.obj)) {
+                        updateWifiGenerationInfo();
                         mLastBssid = (String) message.obj;
                         sendNetworkStateChangeBroadcast(mLastBssid);
                     }
@@ -5464,6 +5488,7 @@ public class ClientModeImpl extends StateMachine {
                     if (mLastBssid != null && (mWifiInfo.getBSSID() == null
                             || !mLastBssid.equals(mWifiInfo.getBSSID()))) {
                         mWifiInfo.setBSSID(mLastBssid);
+                        updateWifiGenerationInfo();
                         WifiConfiguration config = getCurrentWifiConfiguration();
                         if (config != null) {
                             ScanDetailCache scanDetailCache = mWifiConfigManager
@@ -5859,6 +5884,7 @@ public class ClientModeImpl extends StateMachine {
                         mLastBssid = (String) message.obj;
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
+                        updateWifiGenerationInfo();
                         int reasonCode = message.arg2;
                         mWifiConnectivityManager.trackBssid(mLastBssid, true, reasonCode);
                         sendNetworkStateChangeBroadcast(mLastBssid);
@@ -6386,6 +6412,7 @@ public class ClientModeImpl extends StateMachine {
                     if (config != null) {
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
+                        updateWifiGenerationInfo();
                         mWifiConnectivityManager.trackBssid(mLastBssid, true, reasonCode);
                         // We need to get the updated pseudonym from supplicant for EAP-SIM/AKA/AKA'
                         if (config.enterpriseConfig != null

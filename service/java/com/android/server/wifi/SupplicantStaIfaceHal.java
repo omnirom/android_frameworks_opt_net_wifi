@@ -48,6 +48,7 @@ import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaIface;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorNetwork;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaNetwork;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaIfaceCallback;
+import vendor.qti.hardware.wifi.supplicant.V2_1.WifiGenerationStatus;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantIface;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIface;
@@ -4287,5 +4288,44 @@ public class SupplicantStaIfaceHal {
      */
     public void registerDppCallback(DppEventCallback dppCallback) {
         mDppCallback = dppCallback;
+    }
+
+    protected vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface
+    getSupplicantVendorStaIfaceV2_1Mockable(ISupplicantVendorStaIface vendorIfaceV2_0) {
+        if (vendorIfaceV2_0 == null) return null;
+        return vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface.castFrom(
+                vendorIfaceV2_0);
+    }
+
+    public WifiNative.WifiGenerationStatus getWifiGenerationStatus(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final String methodStr = "getWifiGenerationStatus";
+            final Mutable<WifiNative.WifiGenerationStatus> STATUS = new Mutable<>();
+            ISupplicantVendorStaIface vendorIfaceV2_0 = getVendorStaIface(ifaceName);
+            if (vendorIfaceV2_0 == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", ISupplicantVendorStaIface is null");
+                return null;
+            }
+
+            vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface vendorIfaceV2_1;
+            vendorIfaceV2_1 = getSupplicantVendorStaIfaceV2_1Mockable(vendorIfaceV2_0);
+            if (vendorIfaceV2_1 == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", V2_1.ISupplicantVendorStaIface is null");
+                return null;
+            }
+
+            try {
+                vendorIfaceV2_1.getWifiGenerationStatus((SupplicantStatus status, WifiGenerationStatus generationStatus) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                STATUS.value = new WifiNative.WifiGenerationStatus(generationStatus.generation,
+                                                                                   generationStatus.vhtMax8SpatialStreamsSupport,
+                                                                                   generationStatus.twtSupport);
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return STATUS.value;
+        }
     }
 }
