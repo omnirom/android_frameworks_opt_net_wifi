@@ -585,12 +585,6 @@ public class SoftApManager implements ActiveModeManager {
                 }
                 mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(mNumAssociatedStations,
                         mMode);
-
-                if (mNumAssociatedStations == 0) {
-                    scheduleTimeoutMessage();
-                } else {
-                    cancelTimeoutMessage();
-                }
             }
 
             /**
@@ -605,6 +599,8 @@ public class SoftApManager implements ActiveModeManager {
                 } else {
                     Log.e(TAG, "SoftApCallback is null. Dropping onStaConnected event.");
                 }
+                if (mQCNumAssociatedStations > 0)
+                    cancelTimeoutMessage();
             }
 
             /**
@@ -620,6 +616,8 @@ public class SoftApManager implements ActiveModeManager {
                 } else {
                     Log.e(TAG, "SoftApCallback is null. Dropping onStaDisconnected event.");
                 }
+                if (mQCNumAssociatedStations == 0)
+                    scheduleTimeoutMessage();
             }
 
            private void onUpChanged(boolean isUp) {
@@ -759,7 +757,7 @@ public class SoftApManager implements ActiveModeManager {
                         if (!mTimeoutEnabled) {
                             cancelTimeoutMessage();
                         }
-                        if (mTimeoutEnabled && mNumAssociatedStations == 0) {
+                        if (mTimeoutEnabled && mQCNumAssociatedStations == 0) {
                             scheduleTimeoutMessage();
                         }
                         break;
