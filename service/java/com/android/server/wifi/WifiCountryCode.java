@@ -75,6 +75,13 @@ public class WifiCountryCode {
         }
     }
 
+    public WifiCountryCode(
+            WifiNative wifiNative,
+            String oemDefaultCountryCode,
+            boolean revertCountryCodeOnCellularLoss) {
+        this(null, wifiNative, oemDefaultCountryCode, revertCountryCodeOnCellularLoss);
+    }
+
     /**
      * Enable verbose logging for WifiCountryCode.
      */
@@ -87,6 +94,10 @@ public class WifiCountryCode {
     }
 
     private void sendCountryCodeChangedBroadcast() {
+        if (mContext == null) {
+            return;
+        }
+
         Log.d(TAG, "sending WIFI_COUNTRY_CODE_CHANGED_ACTION");
         Intent intent = new Intent(WifiManager.WIFI_COUNTRY_CODE_CHANGED_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);

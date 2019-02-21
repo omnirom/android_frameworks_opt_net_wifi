@@ -37,7 +37,7 @@ using android::base::WriteStringToFile;
 using std::string;
 
 static const char FSTMAN_IFNAME[] = "wlan0";
-static const char FSTMAN_NAME[] = "vendor.fstman";
+static const char FSTMAN_NAME[] = "fstman";
 static const char FST_RATE_UPGRADE_ENABLED_PROP_NAME[] = "persist.vendor.fst.rate.upgrade.en";
 static const char FST_SOFTAP_ENABLED_PROP_NAME[] = "persist.vendor.fst.softap.en";
 
