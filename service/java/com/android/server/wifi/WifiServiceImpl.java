@@ -2548,14 +2548,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             } else if (action.equals(Intent.ACTION_USER_REMOVED)) {
                 int userHandle = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, 0);
                 mWifiStateMachine.removeUserConfigs(userHandle);
-            } else if (action.equals(Intent.ACTION_SHUTDOWN)) {
-                mLog.info("Device is shutting down").flush();
-                boolean stopSta = (getWifiEnabledState() != WifiManager.WIFI_STATE_DISABLED);
-                boolean stopAp = (getWifiApEnabledState() != WifiManager.WIFI_AP_STATE_DISABLED);
-                if (stopSta || stopAp) {
-                    mLog.info("Shutdown wifi").flush();
-                    mWifiStateMachinePrime.shutdownWifi();
-                }
             } else if (action.equals(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)) {
                 int state = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE,
                         BluetoothAdapter.STATE_DISCONNECTED);
@@ -2622,7 +2614,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         IntentFilter intentFilter = new IntentFilter();
         intentFilter.addAction(Intent.ACTION_USER_PRESENT);
         intentFilter.addAction(Intent.ACTION_USER_REMOVED);
-        intentFilter.addAction(Intent.ACTION_SHUTDOWN);
         intentFilter.addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION);
         intentFilter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
         intentFilter.addAction(TelephonyIntents.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED);
