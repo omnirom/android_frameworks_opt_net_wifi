@@ -79,6 +79,7 @@ import java.util.Set;
 @SmallTest
 public class WifiConfigManagerTest {
 
+    private static final String TEST_SSID = "\"test_ssid\"";
     private static final String TEST_BSSID = "0a:08:5c:67:89:00";
     private static final long TEST_WALLCLOCK_CREATION_TIME_MILLIS = 9845637;
     private static final long TEST_WALLCLOCK_UPDATE_TIME_MILLIS = 75455637;
@@ -192,8 +193,7 @@ public class WifiConfigManagerTest {
                 .thenReturn(true);
 
         when(mWifiConfigStore.areStoresPresent()).thenReturn(true);
-        setupStoreDataForRead(new ArrayList<WifiConfiguration>(),
-                new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForRead(new ArrayList<>(), new ArrayList<>(), new HashMap<>());
 
         when(mDevicePolicyManagerInternal.isActiveAdminWithPolicy(anyInt(), anyInt()))
                 .thenReturn(false);
@@ -283,6 +283,65 @@ public class WifiConfigManagerTest {
     }
 
     /**
+     * Verifies the addition of a single network when the corresponding ephemeral network exists.
+     */
+    @Test
+    public void testAddSingleOpenNetworkWhenCorrespondingEphemeralNetworkExists() throws Exception {
+        WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        List<WifiConfiguration> networks = new ArrayList<>();
+        networks.add(openNetwork);
+        WifiConfiguration ephemeralNetwork = new WifiConfiguration(openNetwork);
+        ephemeralNetwork.ephemeral = true;
+
+        verifyAddEphemeralNetworkToWifiConfigManager(ephemeralNetwork);
+
+        NetworkUpdateResult result = addNetworkToWifiConfigManager(openNetwork);
+        assertTrue(result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
+        assertTrue(result.isNewNetwork());
+
+        verifyNetworkRemoveBroadcast(ephemeralNetwork);
+        verifyNetworkAddBroadcast(openNetwork);
+
+        // Verify that the config store write was triggered with this new configuration.
+        verifyNetworkInConfigStoreData(openNetwork);
+
+        List<WifiConfiguration> retrievedNetworks =
+                mWifiConfigManager.getConfiguredNetworksWithPasswords();
+        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigManagerAddOrUpdate(
+                networks, retrievedNetworks);
+
+        // Ensure that the newly added network is disabled.
+        assertEquals(WifiConfiguration.Status.DISABLED, retrievedNetworks.get(0).status);
+    }
+
+    /**
+     * Verifies the addition of an ephemeral network when the corresponding ephemeral network
+     * exists.
+     */
+    @Test
+    public void testAddEphemeralNetworkWhenCorrespondingEphemeralNetworkExists() throws Exception {
+        WifiConfiguration ephemeralNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        ephemeralNetwork.ephemeral = true;
+        List<WifiConfiguration> networks = new ArrayList<>();
+        networks.add(ephemeralNetwork);
+
+        WifiConfiguration ephemeralNetwork2 = new WifiConfiguration(ephemeralNetwork);
+        verifyAddEphemeralNetworkToWifiConfigManager(ephemeralNetwork);
+
+        NetworkUpdateResult result = addNetworkToWifiConfigManager(ephemeralNetwork2);
+        assertTrue(result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
+        verifyNetworkUpdateBroadcast(ephemeralNetwork);
+
+        // Ensure that the write was not invoked for ephemeral network addition.
+        mContextConfigStoreMockOrder.verify(mWifiConfigStore, never()).write(anyBoolean());
+
+        List<WifiConfiguration> retrievedNetworks =
+                mWifiConfigManager.getConfiguredNetworksWithPasswords();
+        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigManagerAddOrUpdate(
+                networks, retrievedNetworks);
+    }
+
+    /**
      * Verifies when adding a new network with already saved MAC, the saved MAC gets set to the
      * internal WifiConfiguration.
      * {@link WifiConfigManager#addOrUpdateNetwork(WifiConfiguration, int)}
@@ -348,8 +407,7 @@ public class WifiConfigManagerTest {
         sharedConfigList.add(openNetwork);
 
         // Setup xml storage
-        setupStoreDataForRead(sharedConfigList, new ArrayList<WifiConfiguration>(),
-                new HashSet<String>());
+        setupStoreDataForRead(sharedConfigList, new ArrayList<>(), new HashMap<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -2665,6 +2723,8 @@ public class WifiConfigManagerTest {
         setupUserProfiles(user2);
 
         int appId = 674;
+        long currentTimeMs = 67823;
+        when(mClock.getWallClockMillis()).thenReturn(currentTimeMs);
 
         // Create 3 networks. 1 for user1, 1 for user2 and 1 shared.
         final WifiConfiguration user1Network = WifiConfigurationTestUtil.createPskNetwork();
@@ -2688,7 +2748,13 @@ public class WifiConfigManagerTest {
                 add(user1Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, user1Networks, new HashSet<String>());
+        Map<String, Long> deletedSsidsToTimeMap = new HashMap<String, Long>() {
+            {
+                put(TEST_SSID, currentTimeMs);
+            }
+
+        };
+        setupStoreDataForRead(sharedNetworks, user1Networks, deletedSsidsToTimeMap);
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -2706,6 +2772,7 @@ public class WifiConfigManagerTest {
         }
         assertTrue(sharedNetwork1Id != WifiConfiguration.INVALID_NETWORK_ID);
         assertTrue(sharedNetwork2Id != WifiConfiguration.INVALID_NETWORK_ID);
+        assertTrue(mWifiConfigManager.wasEphemeralNetworkDeleted(TEST_SSID));
 
         // Set up the user 2 store data that is loaded at user switch.
         List<WifiConfiguration> user2Networks = new ArrayList<WifiConfiguration>() {
@@ -2713,7 +2780,7 @@ public class WifiConfigManagerTest {
                 add(user2Network);
             }
         };
-        setupStoreDataForUserRead(user2Networks, new HashSet<String>());
+        setupStoreDataForUserRead(user2Networks, new HashMap<>());
         // Now switch the user to user 2 and ensure that shared network's IDs have not changed.
         when(mUserManager.isUserUnlockingOrUnlocked(user2)).thenReturn(true);
         mWifiConfigManager.handleUserSwitch(user2);
@@ -2733,6 +2800,7 @@ public class WifiConfigManagerTest {
         }
         assertEquals(sharedNetwork1Id, updatedSharedNetwork1Id);
         assertEquals(sharedNetwork2Id, updatedSharedNetwork2Id);
+        assertFalse(mWifiConfigManager.wasEphemeralNetworkDeleted(TEST_SSID));
     }
 
     /**
@@ -2770,7 +2838,7 @@ public class WifiConfigManagerTest {
                 add(user1Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, user1Networks, new HashSet<String>());
+        setupStoreDataForRead(sharedNetworks, user1Networks, new HashMap<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -2790,7 +2858,7 @@ public class WifiConfigManagerTest {
                 add(user2Network);
             }
         };
-        setupStoreDataForUserRead(user2Networks, new HashSet<String>());
+        setupStoreDataForUserRead(user2Networks, new HashMap<>());
         // Now switch the user to user 2 and ensure that user 1's private network has been removed.
         when(mUserManager.isUserUnlockingOrUnlocked(user2)).thenReturn(true);
         Set<Integer> removedNetworks = mWifiConfigManager.handleUserSwitch(user2);
@@ -2841,8 +2909,7 @@ public class WifiConfigManagerTest {
                 add(sharedNetwork);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<WifiConfiguration>(),
-                new HashSet<String>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -2852,7 +2919,7 @@ public class WifiConfigManagerTest {
                 add(user2Network);
             }
         };
-        setupStoreDataForUserRead(user2Networks, new HashSet<String>());
+        setupStoreDataForUserRead(user2Networks, new HashMap<>());
         // Now switch the user to user 2 and ensure that no private network has been removed.
         when(mUserManager.isUserUnlockingOrUnlocked(user2)).thenReturn(true);
         Set<Integer> removedNetworks = mWifiConfigManager.handleUserSwitch(user2);
@@ -2894,8 +2961,7 @@ public class WifiConfigManagerTest {
                 add(user2Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<WifiConfiguration>(),
-                new HashSet<String>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -2905,7 +2971,7 @@ public class WifiConfigManagerTest {
                 add(user1Network);
             }
         };
-        setupStoreDataForUserRead(userNetworks, new HashSet<String>());
+        setupStoreDataForUserRead(userNetworks, new HashMap<>());
         mWifiConfigManager.handleUserUnlock(user1);
         verify(mWifiConfigStore).switchUserStoresAndRead(any(List.class));
         // Capture the written data for the user 1 and ensure that it corresponds to what was
@@ -2976,15 +3042,14 @@ public class WifiConfigManagerTest {
                 add(passpointConfig);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<WifiConfiguration>(),
-                new HashSet<String>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
         assertEquals(1, mWifiConfigManager.getConfiguredNetworks().size());
 
         // Unlock the owner of the legacy Passpoint configuration, verify it is removed from
         // the configured networks (migrated to PasspointManager).
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashMap<>());
         mWifiConfigManager.handleUserUnlock(user1);
         verify(mWifiConfigStore).switchUserStoresAndRead(any(List.class));
         Pair<List<WifiConfiguration>, List<WifiConfiguration>> writtenNetworkList =
@@ -3008,7 +3073,7 @@ public class WifiConfigManagerTest {
         // Set up the internal data first.
         assertTrue(mWifiConfigManager.loadFromStore());
 
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<>(), new HashMap<>());
         // user2 is unlocked and switched to foreground.
         when(mUserManager.isUserUnlockingOrUnlocked(user2)).thenReturn(true);
         mWifiConfigManager.handleUserSwitch(user2);
@@ -3044,7 +3109,7 @@ public class WifiConfigManagerTest {
         mContextConfigStoreMockOrder.verify(mWifiConfigStore, never())
                 .switchUserStoresAndRead(any(List.class));
 
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<>(), new HashMap<>());
         // Unlock the user2 and ensure that we read the data now.
         mWifiConfigManager.handleUserUnlock(user2);
         mContextConfigStoreMockOrder.verify(mWifiConfigStore)
@@ -3106,7 +3171,7 @@ public class WifiConfigManagerTest {
                 add(user1Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, user1Networks, new HashSet<String>());
+        setupStoreDataForRead(sharedNetworks, user1Networks, new HashMap<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -3135,7 +3200,7 @@ public class WifiConfigManagerTest {
         mContextConfigStoreMockOrder.verify(mWifiConfigStore, never())
                 .switchUserStoresAndRead(any(List.class));
 
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<>(), new HashMap<>());
         // Unlock the user1 (default user) for the first time and ensure that we read the data.
         mWifiConfigManager.handleUserUnlock(user1);
         mContextConfigStoreMockOrder.verify(mWifiConfigStore, never()).read();
@@ -3161,7 +3226,7 @@ public class WifiConfigManagerTest {
         mContextConfigStoreMockOrder.verify(mWifiConfigStore, never())
                 .switchUserStoresAndRead(any(List.class));
 
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashMap<>());
         // Read from store now.
         assertTrue(mWifiConfigManager.loadFromStore());
         mContextConfigStoreMockOrder.verify(mWifiConfigStore)
@@ -3193,7 +3258,7 @@ public class WifiConfigManagerTest {
         mContextConfigStoreMockOrder.verify(mWifiConfigStore).read();
 
         // Unlock the user2 and ensure that we read from the user store.
-        setupStoreDataForUserRead(new ArrayList<>(), new HashSet<>());
+        setupStoreDataForUserRead(new ArrayList<>(), new HashMap<>());
         mWifiConfigManager.handleUserUnlock(user2);
         mContextConfigStoreMockOrder.verify(mWifiConfigStore)
                 .switchUserStoresAndRead(any(List.class));
@@ -3212,7 +3277,7 @@ public class WifiConfigManagerTest {
         // Set up the internal data first.
         assertTrue(mWifiConfigManager.loadFromStore());
 
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<>(), new HashMap<>());
         // user2 is unlocked and switched to foreground.
         when(mUserManager.isUserUnlockingOrUnlocked(user2)).thenReturn(true);
         mWifiConfigManager.handleUserSwitch(user2);
@@ -3314,7 +3379,7 @@ public class WifiConfigManagerTest {
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
-        setupStoreDataForUserRead(new ArrayList<WifiConfiguration>(), new HashSet<String>());
+        setupStoreDataForUserRead(new ArrayList<>(), new HashMap<>());
         // Now switch the user to user 2.
         when(mUserManager.isUserUnlockingOrUnlocked(user2)).thenReturn(true);
         mWifiConfigManager.handleUserSwitch(user2);
@@ -4191,8 +4256,7 @@ public class WifiConfigManagerTest {
                 add(peapSimNetwork);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<WifiConfiguration>(),
-                new HashSet<String>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
 
         // 1. Call resetSimNetworks with true(SIM is present).
         mWifiConfigManager.resetSimNetworks(true);
@@ -4215,6 +4279,41 @@ public class WifiConfigManagerTest {
                 mWifiConfigManager.getConfiguredNetwork(peapSimNetwork.networkId);
         assertEquals(retrievedPeapNetwork.enterpriseConfig.getIdentity(), "identity");
         assertFalse(retrievedPeapNetwork.enterpriseConfig.getAnonymousIdentity().isEmpty());
+    }
+
+    /**
+     * Verifies the deletion of ephemeral network using
+     * {@link WifiConfigManager#disableEphemeralNetwork(String)}.
+     */
+    @Test
+    public void testDisableEphemeralNetwork() throws Exception {
+        WifiConfiguration ephemeralNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        ephemeralNetwork.ephemeral = true;
+        List<WifiConfiguration> networks = new ArrayList<>();
+        networks.add(ephemeralNetwork);
+
+        verifyAddEphemeralNetworkToWifiConfigManager(ephemeralNetwork);
+
+        List<WifiConfiguration> retrievedNetworks =
+                mWifiConfigManager.getConfiguredNetworksWithPasswords();
+        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigManagerAddOrUpdate(
+                networks, retrievedNetworks);
+
+        // Disable the ephemeral network.
+        long disableTimeMs = 546643L;
+        long currentTimeMs = disableTimeMs;
+        when(mClock.getWallClockMillis()).thenReturn(currentTimeMs);
+        mWifiConfigManager.disableEphemeralNetwork(ephemeralNetwork.SSID);
+
+        // Before the expiry of timeout.
+        currentTimeMs = disableTimeMs + WifiConfigManager.DELETED_EPHEMERAL_SSID_EXPIRY_MS - 1;
+        when(mClock.getWallClockMillis()).thenReturn(currentTimeMs);
+        assertTrue(mWifiConfigManager.wasEphemeralNetworkDeleted(ephemeralNetwork.SSID));
+
+        // After the expiry of timeout.
+        currentTimeMs = disableTimeMs + WifiConfigManager.DELETED_EPHEMERAL_SSID_EXPIRY_MS + 1;
+        when(mClock.getWallClockMillis()).thenReturn(currentTimeMs);
+        assertFalse(mWifiConfigManager.wasEphemeralNetworkDeleted(ephemeralNetwork.SSID));
     }
 
     private NetworkUpdateResult verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
@@ -4452,11 +4551,11 @@ public class WifiConfigManagerTest {
      * after WifiConfigStore#read.
      */
     private void setupStoreDataForRead(List<WifiConfiguration> sharedConfigurations,
-            List<WifiConfiguration> userConfigurations, Set<String> deletedEphemeralSsids) {
+            List<WifiConfiguration> userConfigurations, Map<String, Long> deletedEphemeralSsids) {
         when(mNetworkListSharedStoreData.getConfigurations())
                 .thenReturn(sharedConfigurations);
         when(mNetworkListUserStoreData.getConfigurations()).thenReturn(userConfigurations);
-        when(mDeletedEphemeralSsidsStoreData.getSsidList()).thenReturn(deletedEphemeralSsids);
+        when(mDeletedEphemeralSsidsStoreData.getSsidToTimeMap()).thenReturn(deletedEphemeralSsids);
     }
 
     /**
@@ -4464,9 +4563,9 @@ public class WifiConfigManagerTest {
      * after WifiConfigStore#switchUserStoresAndRead.
      */
     private void setupStoreDataForUserRead(List<WifiConfiguration> userConfigurations,
-            Set<String> deletedEphemeralSsids) {
+            Map<String, Long> deletedEphemeralSsids) {
         when(mNetworkListUserStoreData.getConfigurations()).thenReturn(userConfigurations);
-        when(mDeletedEphemeralSsidsStoreData.getSsidList()).thenReturn(deletedEphemeralSsids);
+        when(mDeletedEphemeralSsidsStoreData.getSsidToTimeMap()).thenReturn(deletedEphemeralSsids);
     }
 
     /**
