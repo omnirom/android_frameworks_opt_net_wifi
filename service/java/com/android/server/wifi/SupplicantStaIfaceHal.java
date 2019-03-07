@@ -1009,7 +1009,7 @@ public class SupplicantStaIfaceHal {
                 return (getSupplicantVendorMockable() != null);
             } catch (RemoteException e) {
                 Log.e(TAG, "ISupplicantVendor.getService exception: " + e);
-                supplicantServiceDiedHandler();
+                supplicantServiceDiedHandler(mDeathRecipientCookie);
                 return false;
             }
         }

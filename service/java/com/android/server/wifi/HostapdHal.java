@@ -121,7 +121,7 @@ public class HostapdHal {
             cookie -> {
                 synchronized (mLock) {
                     Log.w(TAG, "IHostapdVendor died: cookie=" + cookie);
-                    hostapdServiceDiedHandler();
+                    hostapdServiceDiedHandler(cookie);
                 }
             };
 
@@ -325,7 +325,7 @@ public class HostapdHal {
             try {
                 if (!mIHostapdVendor.linkToDeath(mHostapdVendorDeathRecipient, 0)) {
                     Log.wtf(TAG, "Error on linkToDeath on IHostapdVendor");
-                    hostapdServiceDiedHandler();
+                    hostapdServiceDiedHandler(mDeathRecipientCookie);
                     return false;
                 }
             } catch (RemoteException e) {
