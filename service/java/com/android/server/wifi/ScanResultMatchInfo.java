@@ -61,24 +61,9 @@ public class ScanResultMatchInfo {
      * Get the ScanResultMatchInfo for the given WifiConfiguration
      */
     public static ScanResultMatchInfo fromWifiConfiguration(WifiConfiguration config) {
-        // copied from state of the world after commit 92ac7b84da during a merge conflict
         ScanResultMatchInfo info = new ScanResultMatchInfo();
         info.networkSsid = config.SSID;
-        if (WifiConfigurationUtil.isConfigForPskNetwork(config)) {
-            info.networkType = NETWORK_TYPE_PSK;
-        } else if (WifiConfigurationUtil.isConfigForEapNetwork(config)) {
-            info.networkType = NETWORK_TYPE_EAP;
-        } else if (WifiConfigurationUtil.isConfigForWepNetwork(config)) {
-            info.networkType = NETWORK_TYPE_WEP;
-        } else if (WifiConfigurationUtil.isConfigForOpenNetwork(config)) {
-            info.networkType = NETWORK_TYPE_OPEN;
-        } else if (WifiConfigurationUtil.isConfigForSha256Network(config)) {
-            info.networkType = NETWORK_TYPE_FILS_SHA256;
-        } else if (WifiConfigurationUtil.isConfigForSha384Network(config)) {
-            info.networkType = NETWORK_TYPE_FILS_SHA384;
-        } else {
-            throw new IllegalArgumentException("Invalid WifiConfiguration: " + config);
-        }
+        info.networkType = getNetworkType(config);
         return info;
     }
 
