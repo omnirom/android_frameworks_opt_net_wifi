@@ -315,50 +315,6 @@ public class HostapdHal {
         return true;
     }
 
-    /**
-     * Link to death for IHostapdVendor object.
-     * @return true on success, false otherwise.
-     */
-    private boolean linkToHostapdVendorDeath() {
-        synchronized (mLock) {
-            if (mIHostapdVendor == null) return false;
-            try {
-                if (!mIHostapdVendor.linkToDeath(mHostapdVendorDeathRecipient, 0)) {
-                    Log.wtf(TAG, "Error on linkToDeath on IHostapdVendor");
-                    hostapdServiceDiedHandler(mDeathRecipientCookie);
-                    return false;
-                }
-            } catch (RemoteException e) {
-                Log.e(TAG, "IHostapdVendor.linkToDeath exception", e);
-                return false;
-            }
-            return true;
-        }
-    }
-
-    /**
-     * Initialize the IHostapdVendor object.
-     * @return true on success, false otherwise.
-     */
-    public boolean initHostapdVendorService() {
-        synchronized (mLock) {
-            try {
-                mIHostapdVendor = getHostapdVendorMockable();
-            } catch (RemoteException e) {
-                Log.e(TAG, "IHostapdVendor.getService exception: " + e);
-                return false;
-            }
-            if (mIHostapdVendor == null) {
-                Log.e(TAG, "Got null IHostapdVendor service. Stopping hostapdVendor HIDL startup");
-                return false;
-            }
-            if (!linkToHostapdVendorDeath()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
 
     /**
      * Add and start a new access point.
@@ -453,126 +409,6 @@ public class HostapdHal {
                 }
                 mSoftApListeners.remove(ifaceName);
                 return true;
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-
-    /**
-     * Add and start a new vendor access point.
-     *
-     * @param ifaceName Name of the softap interface.
-     * @param config Configuration to use for the AP.
-     * @param listener Callback for AP events.
-     * @return true on success, false otherwise.
-     */
-    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config, SoftApListener listener) {
-        synchronized (mLock) {
-            final String methodStr = "addVendorAccessPoint";
-            WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
-            IHostapdVendor.VendorIfaceParams vendorIfaceParams = new IHostapdVendor.VendorIfaceParams();
-            IHostapd.IfaceParams ifaceParams = vendorIfaceParams.ifaceParams;
-            ifaceParams.ifaceName = ifaceName;
-            ifaceParams.hwModeParams.enable80211N = true;
-            ifaceParams.hwModeParams.enable80211AC = mEnableIeee80211AC;
-            vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
-            vendorIfaceParams.bridgeIfaceName = "";
-            try {
-                ifaceParams.channelParams.band = getBand(config);
-            } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Unrecognized apBand " + config.apBand);
-                return false;
-            }
-            if (mEnableAcs) {
-                ifaceParams.channelParams.enableAcs = true;
-                ifaceParams.channelParams.acsShouldExcludeDfs = true;
-            } else {
-                // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
-                // is not supported.
-                // We should remove this workaround once channel selection is moved from
-                // ApConfigUtil to here.
-                if (ifaceParams.channelParams.band == IHostapd.Band.BAND_ANY) {
-                    Log.d(TAG, "ACS is not supported on this device, using 2.4 GHz band.");
-                    ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
-                }
-                ifaceParams.channelParams.enableAcs = false;
-                ifaceParams.channelParams.channel = config.apChannel;
-            }
-
-            IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
-            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
-            nwParams.isHidden = config.hiddenSSID;
-            nwParams.encryptionType = getEncryptionType(config);
-            nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
-
-            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
-            try {
-                if (apConfigStore.getDualSapStatus()) {
-                    String bridgeIfaceName = apConfigStore.getBridgeInterface();
-                    vendorIfaceParams.bridgeIfaceName = (bridgeIfaceName != null) ? bridgeIfaceName : "";
-                }
-
-                HostapdStatus status = mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams, nwParams);
-                if (checkVendorStatusAndLogFailure(status, methodStr) && (mIHostapdVendor != null)) {
-                    IHostapdVendorIfaceCallback vendorcallback = new HostapdVendorIfaceHalCallback(ifaceName, listener);
-                    if (vendorcallback != null) {
-                        if (!registerVendorCallback(ifaceParams.ifaceName, mIHostapdVendor, vendorcallback)) {
-                            Log.e(TAG, "Failed to register Hostapd Vendor callback");
-                            return false;
-                        }
-                    } else {
-                        Log.e(TAG, "Failed to create vendorcallback instance");
-                    }
-                    return true;
-                }
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-            return false;
-        }
-    }
-
-    /**
-     * Remove a previously started access point.
-     *
-     * @param ifaceName Name of the interface.
-     * @return true on success, false otherwise.
-     */
-    public boolean removeVendorAccessPoint(@NonNull String ifaceName) {
-        synchronized (mLock) {
-            final String methodStr = "removeVendorAccessPoint";
-            WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
-
-            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
-            try {
-                HostapdStatus status = mIHostapdVendor.removeVendorAccessPoint(ifaceName);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-
-
-    /**
-     * Set hostapd parameters via QSAP command.
-     *
-     * This would call QSAP library APIs via hostapd hidl.
-     *
-     * @param cmd QSAP command.
-     * @return true on success, false otherwise.
-     */
-    public boolean setHostapdParams(@NonNull String cmd) {
-        synchronized (mLock) {
-            final String methodStr = "setHostapdParams";
-            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
-            try {
-                HostapdStatus status = mIHostapdVendor.setHostapdParams(cmd);
-                return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -717,13 +553,6 @@ public class HostapdHal {
         }
     }
 
-    @VisibleForTesting
-    protected IHostapdVendor getHostapdVendorMockable() throws RemoteException {
-        synchronized (mLock) {
-            return IHostapdVendor.getService();
-        }
-    }
-
     private static int getEncryptionType(WifiConfiguration localConfig) {
         int encryptionType;
         switch (localConfig.getAuthType()) {
@@ -802,20 +631,6 @@ public class HostapdHal {
         }
         return acsChannelRanges;
     }
-    /**
-     * set country code for vendor hostapd.
-     */
-    public void setCountryCode(String countryCode) {
-        mCountryCode = countryCode;
-    }
-
-    /**
-     * Check if the device is running hostapd vendor service.
-     * @return
-     */
-    public boolean isVendorHostapdHal() {
-        return mIHostapdVendor != null;
-    }
 
     /**
      * Returns false if Hostapd is null, and logs failure to call methodStr
@@ -851,6 +666,215 @@ public class HostapdHal {
     }
 
 
+    private void handleRemoteException(RemoteException e, String methodStr) {
+        synchronized (mLock) {
+            hostapdServiceDiedHandler(mDeathRecipientCookie);
+            Log.e(TAG, "IHostapd." + methodStr + " failed with exception", e);
+        }
+    }
+
+    private class HostapdCallback extends
+            android.hardware.wifi.hostapd.V1_1.IHostapdCallback.Stub {
+        @Override
+        public void onFailure(String ifaceName) {
+            Log.w(TAG, "Failure on iface " + ifaceName);
+            WifiNative.SoftApListener listener = mSoftApListeners.get(ifaceName);
+            if (listener != null) {
+                listener.onFailure();
+            }
+        }
+    }
+
+
+    /* ######################### Hostapd Vendor change ###################### */
+    // Keep hostapd vendor changes below this line to have minimal conflicts during merge/upgrade
+
+    /**
+     * Link to death for IHostapdVendor object.
+     * @return true on success, false otherwise.
+     */
+    private boolean linkToHostapdVendorDeath() {
+        synchronized (mLock) {
+            if (mIHostapdVendor == null) return false;
+            try {
+                if (!mIHostapdVendor.linkToDeath(mHostapdVendorDeathRecipient, mDeathRecipientCookie)) {
+                    Log.wtf(TAG, "Error on linkToDeath on IHostapdVendor");
+                    hostapdServiceDiedHandler(mDeathRecipientCookie);
+                    return false;
+                }
+            } catch (RemoteException e) {
+                Log.e(TAG, "IHostapdVendor.linkToDeath exception", e);
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Initialize the IHostapdVendor object.
+     * @return true on success, false otherwise.
+     */
+    public boolean initHostapdVendorService() {
+        synchronized (mLock) {
+            try {
+                mIHostapdVendor = getHostapdVendorMockable();
+            } catch (RemoteException e) {
+                Log.e(TAG, "IHostapdVendor.getService exception: " + e);
+                return false;
+            }
+            if (mIHostapdVendor == null) {
+                Log.e(TAG, "Got null IHostapdVendor service. Stopping hostapdVendor HIDL startup");
+                return false;
+            }
+            if (!linkToHostapdVendorDeath()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Add and start a new vendor access point.
+     *
+     * @param ifaceName Name of the softap interface.
+     * @param config Configuration to use for the AP.
+     * @param listener Callback for AP events.
+     * @return true on success, false otherwise.
+     */
+    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config, SoftApListener listener) {
+        synchronized (mLock) {
+            final String methodStr = "addVendorAccessPoint";
+            WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
+            IHostapdVendor.VendorIfaceParams vendorIfaceParams = new IHostapdVendor.VendorIfaceParams();
+            IHostapd.IfaceParams ifaceParams = vendorIfaceParams.ifaceParams;
+            ifaceParams.ifaceName = ifaceName;
+            ifaceParams.hwModeParams.enable80211N = true;
+            ifaceParams.hwModeParams.enable80211AC = mEnableIeee80211AC;
+            vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
+            vendorIfaceParams.bridgeIfaceName = "";
+            try {
+                ifaceParams.channelParams.band = getBand(config);
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Unrecognized apBand " + config.apBand);
+                return false;
+            }
+            if (mEnableAcs) {
+                ifaceParams.channelParams.enableAcs = true;
+                ifaceParams.channelParams.acsShouldExcludeDfs = true;
+            } else {
+                // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
+                // is not supported.
+                // We should remove this workaround once channel selection is moved from
+                // ApConfigUtil to here.
+                if (ifaceParams.channelParams.band == IHostapd.Band.BAND_ANY) {
+                    Log.d(TAG, "ACS is not supported on this device, using 2.4 GHz band.");
+                    ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
+                }
+                ifaceParams.channelParams.enableAcs = false;
+                ifaceParams.channelParams.channel = config.apChannel;
+            }
+
+            IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
+            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
+            nwParams.isHidden = config.hiddenSSID;
+            nwParams.encryptionType = getEncryptionType(config);
+            nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+
+            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
+            try {
+                if (apConfigStore.getDualSapStatus()) {
+                    String bridgeIfaceName = apConfigStore.getBridgeInterface();
+                    vendorIfaceParams.bridgeIfaceName = (bridgeIfaceName != null) ? bridgeIfaceName : "";
+                }
+
+                HostapdStatus status = mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams, nwParams);
+                if (checkVendorStatusAndLogFailure(status, methodStr) && (mIHostapdVendor != null)) {
+                    IHostapdVendorIfaceCallback vendorcallback = new HostapdVendorIfaceHalCallback(ifaceName, listener);
+                    if (vendorcallback != null) {
+                        if (!registerVendorCallback(ifaceParams.ifaceName, mIHostapdVendor, vendorcallback)) {
+                            Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                            return false;
+                        }
+                    } else {
+                        Log.e(TAG, "Failed to create vendorcallback instance");
+                    }
+                    return true;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Remove a previously started access point.
+     *
+     * @param ifaceName Name of the interface.
+     * @return true on success, false otherwise.
+     */
+    public boolean removeVendorAccessPoint(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final String methodStr = "removeVendorAccessPoint";
+            WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
+
+            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
+            try {
+                HostapdStatus status = mIHostapdVendor.removeVendorAccessPoint(ifaceName);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+
+    /**
+     * Set hostapd parameters via QSAP command.
+     *
+     * This would call QSAP library APIs via hostapd hidl.
+     *
+     * @param cmd QSAP command.
+     * @return true on success, false otherwise.
+     */
+    public boolean setHostapdParams(@NonNull String cmd) {
+        synchronized (mLock) {
+            final String methodStr = "setHostapdParams";
+            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
+            try {
+                HostapdStatus status = mIHostapdVendor.setHostapdParams(cmd);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    @VisibleForTesting
+    protected IHostapdVendor getHostapdVendorMockable() throws RemoteException {
+        synchronized (mLock) {
+            return IHostapdVendor.getService();
+        }
+    }
+
+    /**
+     * set country code for vendor hostapd.
+     */
+    public void setCountryCode(String countryCode) {
+        mCountryCode = countryCode;
+    }
+
+    /**
+     * Check if the device is running hostapd vendor service.
+     * @return
+     */
+    public boolean isVendorHostapdHal() {
+        return mIHostapdVendor != null;
+    }
+
     /**
      * Returns false if HostapdVendor is null, and logs failure to call methodStr
      */
@@ -880,25 +904,6 @@ public class HostapdHal {
                     Log.e(TAG, "IHostapdVendor." + methodStr + " succeeded");
                 }
                 return true;
-            }
-        }
-    }
-
-    private void handleRemoteException(RemoteException e, String methodStr) {
-        synchronized (mLock) {
-            hostapdServiceDiedHandler(mDeathRecipientCookie);
-            Log.e(TAG, "IHostapd." + methodStr + " failed with exception", e);
-        }
-    }
-
-    private class HostapdCallback extends
-            android.hardware.wifi.hostapd.V1_1.IHostapdCallback.Stub {
-        @Override
-        public void onFailure(String ifaceName) {
-            Log.w(TAG, "Failure on iface " + ifaceName);
-            WifiNative.SoftApListener listener = mSoftApListeners.get(ifaceName);
-            if (listener != null) {
-                listener.onFailure();
             }
         }
     }
