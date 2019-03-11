@@ -708,6 +708,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         // Is wifi on or off.
         private boolean mIsWifiEnabled = false;
 
+        // p2p start failure count.
+        // Current design keeps on calling setupIface even though p2p init fails in supplicant.
+        // Break this infinite loop by maintaining a temp counter for continuous setup failures.
+        private int mSetupFailureCount = 0;
+        // Threshold for continuous setup failure.
+        private static final int P2P_SETUP_FAILURE_COUNT_THRESHOLD = 10;
+
         // Saved WifiP2pConfig for an ongoing peer connection. This will never be null.
         // The deviceAddress will be an empty string when the device is inactive
         // or if it is connected without any ongoing join request
@@ -782,6 +789,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             checkAndReEnableP2p();
                         } else {
                             mIsWifiEnabled = false;
+                            mSetupFailureCount = 0;
                             // Teardown P2P if it's up already.
                             sendMessage(DISABLE_P2P);
                         }
@@ -791,10 +799,14 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 // Register for interface availability from HalDeviceManager
                 mWifiNative.registerInterfaceAvailableListener((boolean isAvailable) -> {
                     mIsInterfaceAvailable = isAvailable;
-                    if (isAvailable) {
-                        checkAndReEnableP2p();
+                    if (mSetupFailureCount < P2P_SETUP_FAILURE_COUNT_THRESHOLD) {
+                        if (isAvailable) {
+                            checkAndReEnableP2p();
+                        }
+                        checkAndSendP2pStateChangedBroadcast();
+                    } else {
+                        Log.i(TAG, "Ignore InterfaceAvailable for continuous failures. count=" +mSetupFailureCount);
                     }
-                    checkAndSendP2pStateChangedBroadcast();
                 }, getHandler());
             }
         }
@@ -1253,9 +1265,11 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             checkAndSendP2pStateChangedBroadcast();
                         }, getHandler());
                         if (mInterfaceName == null) {
+                            mSetupFailureCount++;
                             Log.e(TAG, "Failed to setup interface for P2P");
                             break;
                         }
+                        mSetupFailureCount = 0;
                         try {
                             mNwService.setInterfaceUp(mInterfaceName);
                         } catch (RemoteException re) {
