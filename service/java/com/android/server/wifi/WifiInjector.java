@@ -21,6 +21,7 @@ import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.AppOpsManager;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.hardware.SystemSensorManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkKey;
@@ -319,6 +320,16 @@ public class WifiInjector {
                 BatteryStatsService.getService());
         mDppManager = new DppManager(mWifiCoreHandlerThread.getLooper(), mWifiNative,
                 mWifiConfigManager, mContext, mDppMetrics);
+
+        // Register the various network evaluators with the network selector.
+        mWifiNetworkSelector.registerNetworkEvaluator(mSavedNetworkEvaluator);
+        mWifiNetworkSelector.registerNetworkEvaluator(mNetworkSuggestionEvaluator);
+        if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            mWifiNetworkSelector.registerNetworkEvaluator(mPasspointNetworkEvaluator);
+        }
+        mWifiNetworkSelector.registerNetworkEvaluator(mCarrierNetworkEvaluator);
+        mWifiNetworkSelector.registerNetworkEvaluator(mScoredNetworkEvaluator);
+
     }
 
     /**
@@ -582,9 +593,7 @@ public class WifiInjector {
                 mWifiNetworkSelector, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier, mCarrierNetworkNotifier,
                 mCarrierNetworkConfig, mWifiMetrics, mWifiCoreHandlerThread.getLooper(),
-                mClock, mConnectivityLocalLog,
-                mSavedNetworkEvaluator, mScoredNetworkEvaluator, mPasspointNetworkEvaluator,
-                mNetworkSuggestionEvaluator, mCarrierNetworkEvaluator);
+                mClock, mConnectivityLocalLog);
     }
 
     /**
