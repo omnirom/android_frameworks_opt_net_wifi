@@ -23,6 +23,8 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.util.ArrayMap;
 
+import com.android.internal.util.Preconditions;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
@@ -35,8 +37,8 @@ import java.util.StringJoiner;
 public class WifiCandidates {
     private static final String TAG = "WifiCandidates";
 
-    WifiCandidates(WifiScoreCard wifiScoreCard) {
-        mWifiScoreCard = wifiScoreCard;
+    WifiCandidates(@NonNull WifiScoreCard wifiScoreCard) {
+        mWifiScoreCard = Preconditions.checkNotNull(wifiScoreCard);
     }
     private final WifiScoreCard mWifiScoreCard;
 
@@ -62,6 +64,18 @@ public class WifiCandidates {
          * Returns true for an open network.
          */
         boolean isOpenNetwork();
+        /**
+         * Returns true for a passpoint network.
+         */
+        boolean isPasspoint();
+        /**
+         * Returns true for an ephemeral network.
+         */
+        boolean isEphemeral();
+        /**
+         * Returns true for a trusted network.
+         */
+        boolean isTrusted();
         /**
          * Returns the index of the evaluator that provided the candidate.
          */
@@ -145,6 +159,21 @@ public class WifiCandidates {
         }
 
         @Override
+        public boolean isPasspoint() {
+            return config.isPasspoint();
+        }
+
+        @Override
+        public boolean isEphemeral() {
+            return config.ephemeral;
+        }
+
+        @Override
+        public boolean isTrusted() {
+            return config.trusted;
+        }
+
+        @Override
         public int getEvaluatorIndex() {
             return evaluatorIndex;
         }
@@ -176,7 +205,9 @@ public class WifiCandidates {
         public WifiScoreCardProto.Signal
                 getEventStatistics(WifiScoreCardProto.Event event) {
             if (mPerBssid == null) return null;
-            return mPerBssid.lookupSignal(event, getFrequency()).toSignal();
+            WifiScoreCard.PerSignal perSignal = mPerBssid.lookupSignal(event, getFrequency());
+            if (perSignal == null) return null;
+            return perSignal.toSignal();
         }
 
     }
@@ -355,6 +386,7 @@ public class WifiCandidates {
      * @returns the chosen scored candidate, or ScoredCandidate.NONE.
      */
     public @NonNull ScoredCandidate choose(@NonNull CandidateScorer candidateScorer) {
+        Preconditions.checkNotNull(candidateScorer);
         ScoredCandidate choice = ScoredCandidate.NONE;
         for (Collection<Candidate> group : getGroupedCandidates()) {
             ScoredCandidate scoredCandidate = candidateScorer.scoreCandidates(group);

@@ -628,7 +628,7 @@ public class SoftApManagerTest {
         order.verify(mContext).sendStickyBroadcastAsUser(intentCaptor.capture(),
                 eq(UserHandle.ALL));
         checkApStateChangedBroadcast(intentCaptor.getValue(), WIFI_AP_STATE_DISABLED,
-                WIFI_AP_STATE_DISABLING, HOTSPOT_NO_ERROR, null,
+                WIFI_AP_STATE_DISABLING, HOTSPOT_NO_ERROR, TEST_INTERFACE_NAME,
                 softApModeConfig.getTargetMode());
     }
 
@@ -915,6 +915,33 @@ public class SoftApManagerTest {
         verify(mCallback, never()).onNumClientsChanged(mInvalidNumClients);
         verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(anyInt(),
                 anyInt());
+    }
+
+    @Test
+    public void testCallbackForClientUpdateToZeroWhenLeaveSoftapStarted() throws Exception {
+        InOrder order = inOrder(mCallback, mWifiMetrics);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED, null);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        mSoftApListenerCaptor.getValue().onNumAssociatedStationsChanged(
+                TEST_NUM_CONNECTED_CLIENTS);
+        mLooper.dispatchAll();
+
+        order.verify(mCallback).onNumClientsChanged(TEST_NUM_CONNECTED_CLIENTS);
+        order.verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                TEST_NUM_CONNECTED_CLIENTS, apConfig.getTargetMode());
+        // Verify timer is canceled at this point
+        verify(mAlarmManager.getAlarmManager()).cancel(any(WakeupMessage.class));
+
+        mSoftApManager.stop();
+        mLooper.dispatchAll();
+
+        order.verify(mCallback).onNumClientsChanged(0);
+        order.verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(0,
+                apConfig.getTargetMode());
+        // Verify timer is canceled after stop softap
+        verify(mAlarmManager.getAlarmManager(), times(2)).cancel(any(WakeupMessage.class));
     }
 
     @Test

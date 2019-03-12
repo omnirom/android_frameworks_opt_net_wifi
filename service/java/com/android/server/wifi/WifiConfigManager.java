@@ -226,7 +226,7 @@ public class WifiConfigManager {
     public static final long MAX_PNO_SCAN_FREQUENCY_AGE_MS = (long) 1000 * 3600 * 24 * 30;
 
     private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 1; // 0 = disabled
-    private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 0; // 0 = disabled:
+    private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 1; // 0 = disabled:
 
     /**
      * Expiration timeout for deleted ephemeral ssids. (1 day)
@@ -1740,6 +1740,12 @@ public class WifiConfigManager {
         if (config == null) {
             return false;
         }
+        // Set the "last selected" flag even if the app does not have permissions to modify this
+        // network config. Apps are allowed to connect to networks even if they don't have
+        // permission to modify it.
+        if (disableOthers) {
+            setLastSelectedNetwork(networkId);
+        }
         if (!canModifyNetwork(config, uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                     + config.configKey());
@@ -1748,9 +1754,6 @@ public class WifiConfigManager {
         if (!updateNetworkSelectionStatus(
                 networkId, WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE)) {
             return false;
-        }
-        if (disableOthers) {
-            setLastSelectedNetwork(networkId);
         }
         saveToStore(true);
         return true;
@@ -1775,6 +1778,11 @@ public class WifiConfigManager {
         if (config == null) {
             return false;
         }
+        // Reset the "last selected" flag even if the app does not have permissions to modify this
+        // network config.
+        if (networkId == mLastSelectedNetworkId) {
+            clearLastSelectedNetwork();
+        }
         if (!canModifyNetwork(config, uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                     + config.configKey());
@@ -1783,9 +1791,6 @@ public class WifiConfigManager {
         if (!updateNetworkSelectionStatus(
                 networkId, NetworkSelectionStatus.DISABLED_BY_WIFI_MANAGER)) {
             return false;
-        }
-        if (networkId == mLastSelectedNetworkId) {
-            clearLastSelectedNetwork();
         }
         saveToStore(true);
         return true;

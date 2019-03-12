@@ -71,10 +71,11 @@ public class HalDeviceManager {
     // attempt.
     @VisibleForTesting
     public static final int START_HAL_RETRY_TIMES = 3;
-    @VisibleForTesting
-    public static final String HAL_INSTANCE_NAME = "default";
 
     private final Clock mClock;
+
+    // cache the value for supporting vendor HAL or not
+    private boolean mIsVendorHalSupported = false;
 
     // public API
     public HalDeviceManager(Clock clock) {
@@ -134,7 +135,7 @@ public class HalDeviceManager {
      * Returns whether the vendor HAL is supported on this device or not.
      */
     public boolean isSupported() {
-        return isSupportedInternal();
+        return mIsVendorHalSupported;
     }
 
     /**
@@ -143,7 +144,7 @@ public class HalDeviceManager {
      * the registerStatusListener() to listener for status changes.
      */
     public boolean isReady() {
-        return mWifi != null;
+        return mIsReady;
     }
 
     /**
@@ -530,6 +531,7 @@ public class HalDeviceManager {
     private final SparseArray<Map<InterfaceAvailableForRequestListenerProxy, Boolean>>
             mInterfaceAvailableForRequestListeners = new SparseArray<>();
     private final SparseArray<IWifiChipEventCallback.Stub> mDebugCallbacks = new SparseArray<>();
+    private boolean mIsReady;
 
     /*
      * This is the only place where we cache HIDL information in this manager. Necessary since
@@ -611,7 +613,7 @@ public class HalDeviceManager {
 
     private void initializeInternal() {
         initIServiceManagerIfNecessary();
-        if (isSupportedInternal()) {
+        if (mIsVendorHalSupported) {
             initIWifiIfNecessary();
         }
     }
@@ -685,6 +687,9 @@ public class HalDeviceManager {
                     Log.wtf(TAG, "Exception while operating on IServiceManager: " + e);
                     mServiceManager = null;
                 }
+
+                // Cache the result for the supporting vendor hal or not
+                mIsVendorHalSupported = isSupportedInternal();
             }
         }
     }
@@ -718,6 +723,7 @@ public class HalDeviceManager {
                 Log.e(TAG, "IWifi HAL service died! Have a listener for it ... cookie=" + cookie);
                 synchronized (mLock) { // prevents race condition with surrounding method
                     mWifi = null;
+                    mIsReady = false;
                     teardownInternal();
                     // don't restart: wait for registration notification
                 }
@@ -760,6 +766,7 @@ public class HalDeviceManager {
                 }
                 // Stopping wifi just in case. This would also trigger the status callback.
                 stopWifi();
+                mIsReady = true;
             } catch (RemoteException e) {
                 Log.e(TAG, "Exception while operating on IWifi: " + e);
             }
