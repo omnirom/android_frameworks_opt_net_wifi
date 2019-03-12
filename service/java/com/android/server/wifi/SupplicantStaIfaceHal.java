@@ -66,10 +66,12 @@ import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
+import android.os.Handler;
 import android.os.HidlSupport.Mutable;
 import android.net.wifi.WifiDppConfig;
 import android.net.wifi.WifiDppConfig.DppResult;
 import android.os.HwRemoteBinder;
+import android.os.Looper;
 import android.os.Process;
 import android.os.RemoteException;
 import android.text.TextUtils;
@@ -146,9 +148,14 @@ public class SupplicantStaIfaceHal {
     private HashMap<String, SupplicantStaNetworkHal> mCurrentNetworkRemoteHandles = new HashMap<>();
     private HashMap<String, WifiConfiguration> mCurrentNetworkLocalConfigs = new HashMap<>();
     private SupplicantDeathEventHandler mDeathEventHandler;
+    private ServiceManagerDeathRecipient mServiceManagerDeathRecipient;
+    private SupplicantDeathRecipient mSupplicantDeathRecipient;
+    // Death recipient cookie registered for current supplicant instance.
+    private long mDeathRecipientCookie = 0;
     private final Context mContext;
     private final WifiMonitor mWifiMonitor;
     private final PropertyService mPropertyService;
+    private final Handler mEventHandler;
     private DppEventCallback mDppCallback = null;
 
     private final IServiceNotification mServiceNotificationCallback =
@@ -161,28 +168,36 @@ public class SupplicantStaIfaceHal {
                 }
                 if (!initSupplicantService()) {
                     Log.e(TAG, "initalizing ISupplicant failed.");
-                    supplicantServiceDiedHandler();
+                    supplicantServiceDiedHandler(mDeathRecipientCookie);
                 } else {
                     Log.i(TAG, "Completed initialization of ISupplicant.");
                 }
             }
         }
     };
-    private final HwRemoteBinder.DeathRecipient mServiceManagerDeathRecipient =
-            cookie -> {
+    private class ServiceManagerDeathRecipient implements HwRemoteBinder.DeathRecipient {
+        @Override
+        public void serviceDied(long cookie) {
+            mEventHandler.post(() -> {
                 synchronized (mLock) {
                     Log.w(TAG, "IServiceManager died: cookie=" + cookie);
-                    supplicantServiceDiedHandler();
+                    supplicantServiceDiedHandler(mDeathRecipientCookie);
                     mIServiceManager = null; // Will need to register a new ServiceNotification
                 }
-            };
-    private final HwRemoteBinder.DeathRecipient mSupplicantDeathRecipient =
-            cookie -> {
+            });
+        }
+    }
+    private class SupplicantDeathRecipient implements HwRemoteBinder.DeathRecipient {
+        @Override
+        public void serviceDied(long cookie) {
+            mEventHandler.post(() -> {
                 synchronized (mLock) {
                     Log.w(TAG, "ISupplicant died: cookie=" + cookie);
-                    supplicantServiceDiedHandler();
+                    supplicantServiceDiedHandler(cookie);
                 }
-            };
+            });
+        }
+    }
 
     private final HwRemoteBinder.DeathRecipient mSupplicantVendorDeathRecipient =
             cookie -> {
@@ -193,10 +208,14 @@ public class SupplicantStaIfaceHal {
             };
 
     public SupplicantStaIfaceHal(Context context, WifiMonitor monitor,
-                                 PropertyService propertyService) {
+                                 PropertyService propertyService, Looper looper) {
         mContext = context;
         mWifiMonitor = monitor;
         mPropertyService = propertyService;
+        mEventHandler = new Handler(looper);
+
+        mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
+        mSupplicantDeathRecipient = new SupplicantDeathRecipient();
     }
 
     /**
@@ -216,7 +235,7 @@ public class SupplicantStaIfaceHal {
             try {
                 if (!mIServiceManager.linkToDeath(mServiceManagerDeathRecipient, 0)) {
                     Log.wtf(TAG, "Error on linkToDeath on IServiceManager");
-                    supplicantServiceDiedHandler();
+                    supplicantServiceDiedHandler(mDeathRecipientCookie);
                     mIServiceManager = null; // Will need to register a new ServiceNotification
                     return false;
                 }
@@ -268,7 +287,7 @@ public class SupplicantStaIfaceHal {
             } catch (RemoteException e) {
                 Log.e(TAG, "Exception while trying to register a listener for ISupplicant service: "
                         + e);
-                supplicantServiceDiedHandler();
+                supplicantServiceDiedHandler(mDeathRecipientCookie);
             }
             return true;
         }
@@ -278,9 +297,9 @@ public class SupplicantStaIfaceHal {
         synchronized (mLock) {
             if (mISupplicant == null) return false;
             try {
-                if (!mISupplicant.linkToDeath(mSupplicantDeathRecipient, 0)) {
+                if (!mISupplicant.linkToDeath(mSupplicantDeathRecipient, ++mDeathRecipientCookie)) {
                     Log.wtf(TAG, "Error on linkToDeath on ISupplicant");
-                    supplicantServiceDiedHandler();
+                    supplicantServiceDiedHandler(mDeathRecipientCookie);
                     return false;
                 }
             } catch (RemoteException e) {
@@ -754,8 +773,12 @@ public class SupplicantStaIfaceHal {
         }
     }
 
-    private void supplicantServiceDiedHandler() {
+    private void supplicantServiceDiedHandler(long cookie) {
         synchronized (mLock) {
+            if (mDeathRecipientCookie != cookie) {
+                Log.i(TAG, "Ignoring stale death recipient notification");
+                return;
+            }
             for (String ifaceName : mISupplicantStaIfaces.keySet()) {
                 mWifiMonitor.broadcastSupplicantDisconnectionEvent(ifaceName);
             }
@@ -798,7 +821,7 @@ public class SupplicantStaIfaceHal {
             } catch (RemoteException e) {
                 Log.e(TAG, "Exception while trying to start supplicant: "
                         + e);
-                supplicantServiceDiedHandler();
+                supplicantServiceDiedHandler(mDeathRecipientCookie);
                 return false;
             } catch (NoSuchElementException e) {
                 // We're starting the daemon, so expect |NoSuchElementException|.
@@ -986,7 +1009,7 @@ public class SupplicantStaIfaceHal {
                 return (getSupplicantVendorMockable() != null);
             } catch (RemoteException e) {
                 Log.e(TAG, "ISupplicantVendor.getService exception: " + e);
-                supplicantServiceDiedHandler();
+                supplicantServiceDiedHandler(mDeathRecipientCookie);
                 return false;
             }
         }
@@ -3558,11 +3581,11 @@ public class SupplicantStaIfaceHal {
         }
 
         @Override
-        public void onDppSuccess(int code) {
+        public void onDppSuccessConfigSent() {
             if (mDppCallback != null) {
-                mDppCallback.onSuccess(code);
+                mDppCallback.onSuccessConfigSent();
             } else {
-                loge("onDppSuccess callback is null");
+                loge("onSuccessConfigSent callback is null");
             }
         }
 

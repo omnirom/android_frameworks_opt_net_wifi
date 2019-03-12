@@ -41,12 +41,14 @@ import com.android.server.wifi.WifiNetworkSelectorTestUtil.ScanDetailsAndWifiCon
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.Spy;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 
@@ -66,18 +68,23 @@ public class WifiNetworkSelectorTest {
         setupResources();
         setupWifiConfigManager();
         setupWifiInfo();
-        mScoringParams = new ScoringParams(mContext);
+
+        mScoringParams = new ScoringParams();
+        setupThresholds();
+
         mLocalLog = new LocalLog(512);
 
         mWifiNetworkSelector = new WifiNetworkSelector(mContext,
                 mWifiScoreCard,
                 mScoringParams,
                 mWifiConfigManager, mClock,
-                mLocalLog);
+                mLocalLog,
+                mWifiMetrics);
         mWifiNetworkSelector.registerNetworkEvaluator(mDummyEvaluator);
         mDummyEvaluator.setEvaluatorToSelectCandidate(true);
         when(mClock.getElapsedSinceBootMillis()).thenReturn(SystemClock.elapsedRealtime());
         when(mCarrierNetworkConfig.isCarrierNetwork(any())).thenReturn(true);
+        when(mWifiScoreCard.lookupBssid(any(), any())).thenReturn(mPerBssid);
     }
 
     /** Cleans up test. */
@@ -94,6 +101,24 @@ public class WifiNetworkSelectorTest {
         private static final String NAME = "DummyNetworkEvaluator";
 
         private boolean mEvaluatorShouldSelectCandidate = true;
+
+        private int mNetworkIndexToReturn;
+
+        public DummyNetworkEvaluator(int networkIndexToReturn) {
+            mNetworkIndexToReturn = networkIndexToReturn;
+        }
+
+        public DummyNetworkEvaluator() {
+            this(0);
+        }
+
+        public int getNetworkIndexToReturn() {
+            return mNetworkIndexToReturn;
+        }
+
+        public void setNetworkIndexToReturn(int networkIndexToReturn) {
+            mNetworkIndexToReturn = networkIndexToReturn;
+        }
 
         @Override
         public String getName() {
@@ -125,7 +150,7 @@ public class WifiNetworkSelectorTest {
             if (!mEvaluatorShouldSelectCandidate) {
                 return null;
             }
-            ScanDetail scanDetail = scanDetails.get(0);
+            ScanDetail scanDetail = scanDetails.get(mNetworkIndexToReturn);
             mWifiConfigManager.setNetworkCandidateScanResult(0, scanDetail.getScanResult(), 100);
             WifiConfiguration config =
                     mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail);
@@ -141,6 +166,9 @@ public class WifiNetworkSelectorTest {
     @Mock private Context mContext;
     @Mock private CarrierNetworkConfig mCarrierNetworkConfig;
     @Mock private WifiScoreCard mWifiScoreCard;
+    @Mock private WifiScoreCard.PerBssid mPerBssid;
+    @Mock private WifiCandidates.CandidateScorer mCandidateScorer;
+    @Mock private WifiMetrics mWifiMetrics;
 
     // For simulating the resources, we use a Spy on a MockResource
     // (which is really more of a stub than a mock, in spite if its name).
@@ -170,18 +198,18 @@ public class WifiNetworkSelectorTest {
         doReturn(true).when(mResource).getBoolean(
                 R.bool.config_wifi_framework_enable_associated_network_selection);
 
-        mThresholdMinimumRssi2G = setupIntegerResource(
-                R.integer.config_wifi_framework_wifi_score_entry_rssi_threshold_24GHz, -79);
-        mThresholdMinimumRssi5G = setupIntegerResource(
-                R.integer.config_wifi_framework_wifi_score_entry_rssi_threshold_5GHz, -76);
-        mThresholdQualifiedRssi2G = setupIntegerResource(
-                R.integer.config_wifi_framework_wifi_score_low_rssi_threshold_24GHz, -73);
-        mThresholdQualifiedRssi5G = setupIntegerResource(
-                R.integer.config_wifi_framework_wifi_score_low_rssi_threshold_5GHz, -70);
         mStayOnNetworkMinimumTxRate = setupIntegerResource(
                 R.integer.config_wifi_framework_min_tx_rate_for_staying_on_network, 16);
         mStayOnNetworkMinimumRxRate = setupIntegerResource(
                 R.integer.config_wifi_framework_min_rx_rate_for_staying_on_network, 16);
+    }
+
+    private void setupThresholds() {
+        mThresholdMinimumRssi2G = mScoringParams.getEntryRssi(ScoringParams.BAND2);
+        mThresholdMinimumRssi5G = mScoringParams.getEntryRssi(ScoringParams.BAND5);
+
+        mThresholdQualifiedRssi2G = mScoringParams.getSufficientRssi(ScoringParams.BAND2);
+        mThresholdQualifiedRssi5G = mScoringParams.getSufficientRssi(ScoringParams.BAND5);
     }
 
     private void setupWifiInfo() {
@@ -196,8 +224,12 @@ public class WifiNetworkSelectorTest {
     }
 
     private void setupWifiConfigManager() {
+        setupWifiConfigManager(WifiConfiguration.INVALID_NETWORK_ID);
+    }
+
+    private void setupWifiConfigManager(int networkId) {
         when(mWifiConfigManager.getLastSelectedNetwork())
-                .thenReturn(WifiConfiguration.INVALID_NETWORK_ID);
+                .thenReturn(networkId);
     }
 
     /**
@@ -243,9 +275,9 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\"", "\"test2\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
         int[] freqs = {2437, 5180};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]", "[WPA2-EAP-CCMP][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G - 1, mThresholdMinimumRssi5G - 1};
-        int[] securities = {SECURITY_PSK, SECURITY_PSK};
+        int[] securities = {SECURITY_PSK, SECURITY_EAP};
 
         ScanDetailsAndWifiConfigs scanDetailsAndConfigs =
                 WifiNetworkSelectorTestUtil.setupScanDetailsAndConfigStore(ssids, bssids,
@@ -273,9 +305,9 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\"", "\"test2\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
         int[] freqs = {2437, 5180};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]", "[WPA2-EAP-CCMP][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G + RSSI_BUMP, mThresholdMinimumRssi5G + RSSI_BUMP};
-        int[] securities = {SECURITY_PSK, SECURITY_PSK};
+        int[] securities = {SECURITY_PSK, SECURITY_EAP};
 
         // Make a network selection.
         ScanDetailsAndWifiConfigs scanDetailsAndConfigs =
@@ -303,7 +335,7 @@ public class WifiNetworkSelectorTest {
      *
      * ClientModeImpl is in disconnected state.
      * scanDetails contains two valid networks.
-     * Perform a network seletion right after the first one.
+     * Perform a network selection right after the first one.
      *
      * Expected behavior: the first network is recommended by Network Selector
      */
@@ -314,7 +346,7 @@ public class WifiNetworkSelectorTest {
         int[] freqs = {2437, 5180};
         String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G + RSSI_BUMP, mThresholdMinimumRssi5G + RSSI_BUMP};
-        int[] securities = {SECURITY_PSK, SECURITY_PSK};
+        int[] securities = {SECURITY_EAP, SECURITY_EAP};
 
         // Make a network selection.
         ScanDetailsAndWifiConfigs scanDetailsAndConfigs =
@@ -403,7 +435,7 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3"};
         int[] freqs = {5180};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]"};
         int[] levels = {mThresholdQualifiedRssi5G - 2};
         int[] securities = {SECURITY_PSK};
 
@@ -451,7 +483,7 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3"};
         int[] freqs = {5180};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]"};
         int[] levels = {mThresholdQualifiedRssi5G + 5};
         int[] securities = {SECURITY_PSK};
 
@@ -500,7 +532,7 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3"};
         int[] freqs = {5180};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]"};
         int[] levels = {mThresholdQualifiedRssi5G + 8};
         int[] securities = {SECURITY_PSK};
 
@@ -532,9 +564,9 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\"", "\"test2\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
         int[] freqs = {2437, 2457};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-PSK][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G + 20, mThresholdMinimumRssi2G + RSSI_BUMP};
-        int[] securities = {SECURITY_PSK, SECURITY_PSK};
+        int[] securities = {SECURITY_EAP, SECURITY_PSK};
 
         // Make a network selection to connect to test1.
         ScanDetailsAndWifiConfigs scanDetailsAndConfigs =
@@ -573,7 +605,7 @@ public class WifiNetworkSelectorTest {
     }
 
     /**
-     * Ensures that settings the user connect choice updates the
+     * Ensures that setting the user connect choice updates the
      * NetworkSelectionStatus#mConnectChoice for all other WifiConfigurations in range in the last
      * round of network selection.
      *
@@ -585,10 +617,10 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\"", "\"test2\"", "\"test3\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4", "6c:f3:7f:ae:8c:f5"};
         int[] freqs = {2437, 5180, 5181};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]", "[WPA2-EAP-CCMP][ESS]", "[WPA2-PSK][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G + RSSI_BUMP, mThresholdMinimumRssi5G + RSSI_BUMP,
                 mThresholdMinimumRssi5G + RSSI_BUMP};
-        int[] securities = {SECURITY_PSK, SECURITY_PSK, SECURITY_PSK};
+        int[] securities = {SECURITY_PSK, SECURITY_EAP, SECURITY_PSK};
 
         ScanDetailsAndWifiConfigs scanDetailsAndConfigs =
                 WifiNetworkSelectorTestUtil.setupScanDetailsAndConfigStore(ssids, bssids,
@@ -632,7 +664,7 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\"", "\"test2\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
         int[] freqs = {2437, 5180};
-        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {"[WPA2-PSK][ESS]", "[WPA2-PSK][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G + RSSI_BUMP, mThresholdMinimumRssi5G + RSSI_BUMP};
         int[] securities = {SECURITY_PSK, SECURITY_PSK};
 
@@ -929,8 +961,8 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\"", "\"test2\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
         int[] freqs = {is5GHzNetwork1 ? 5180 : 2437, is5GHzNetwork2 ? 5180 : 2437};
-        String[] caps = {isOpenNetwork1 ? "[ESS]" : "[WPA2-EAP-CCMP][ESS]",
-                         isOpenNetwork2 ? "[ESS]" : "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {isOpenNetwork1 ? "[ESS]" : "[WPA2-PSK][ESS]",
+                         isOpenNetwork2 ? "[ESS]" : "[WPA2-PSK][ESS]"};
         int[] levels = {rssiNetwork1, rssiNetwork2};
         int[] securities = {isOpenNetwork1 ? SECURITY_NONE : SECURITY_PSK,
                             isOpenNetwork2 ? SECURITY_NONE : SECURITY_PSK};
@@ -950,7 +982,7 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3"};
         int[] freqs = {is5GHz ? 5180 : 2437};
-        String[] caps = {isOpenNetwork ? "[ESS]" : "[WPA2-EAP-CCMP][ESS]"};
+        String[] caps = {isOpenNetwork ? "[ESS]" : "[WPA2-PSK][ESS]"};
         int[] levels = {rssi};
         int[] securities = {isOpenNetwork ? SECURITY_NONE : SECURITY_PSK};
         testStayOrTryToSwitchImpl(ssids, bssids, freqs, caps, levels, securities, shouldSelect);
@@ -1168,7 +1200,7 @@ public class WifiNetworkSelectorTest {
         String[] ssids = {"\"test1\""};
         String[] bssids = {"6c:f3:7f:ae:8c:f3"};
         int[] freqs = {2437, 5180};
-        String[] caps = {"[EAP][ESS]"};
+        String[] caps = {"[WPA2-EAP-CCMP][ESS]"};
         int[] levels = {mThresholdMinimumRssi2G + RSSI_BUMP};
         int[] securities = {SECURITY_EAP};
         mDummyEvaluator.setEvaluatorToSelectCandidate(false);
@@ -1301,5 +1333,206 @@ public class WifiNetworkSelectorTest {
         test2GhzHighQuality5GhzAvailable();
     }
 
+    /**
+     * Test that registering a new CandidateScorer causes it to be used
+     */
+    @Test
+    public void testCandidateScorerUse() throws Exception {
+        String myid = "Mock CandidateScorer";
+        when(mCandidateScorer.getIdentifier()).thenReturn(myid);
+        setupWifiConfigManager(13);
+
+        int experimentId = WifiNetworkSelector.experimentIdFromIdentifier(myid);
+        assertTrue("" + myid, 42000000 <=  experimentId && experimentId <= 42999999);
+        String diagnose = "" + mScoringParams + " // " + experimentId;
+        assertTrue(diagnose, mScoringParams.update("expid=" + experimentId));
+        assertEquals(experimentId, mScoringParams.getExperimentIdentifier());
+
+        mWifiNetworkSelector.registerCandidateScorer(mCandidateScorer);
+        test2GhzHighQuality5GhzAvailable(); // calls selectNetwork twice
+        verify(mCandidateScorer, times(2)).scoreCandidates(any());
+    }
+
+    /**
+     * Tests that no metrics are recorded if there is only a single legacy scorer.
+     */
+    @Test
+    public void testCandidateScorerMetrics_onlyOneScorer() {
+        mWifiNetworkSelector.unregisterCandidateScorer(new CompatibiltyScorer(mScoringParams));
+        mWifiNetworkSelector.unregisterCandidateScorer(new ScoreCardBasedScorer(mScoringParams));
+
+        test2GhzHighQuality5GhzAvailable();
+
+        verifyNoMoreInteractions(mWifiMetrics);
+    }
+
+    /**
+     * Tests that metrics are recorded for 2 scorers (legacy and legacy compatibility).
+     */
+    @Test
+    public void testCandidateScorerMetrics_twoScorers() {
+        // unregister ScoreCard scorer, leaving only compatibility scorer
+        mWifiNetworkSelector.unregisterCandidateScorer(new ScoreCardBasedScorer(mScoringParams));
+
+        // add a second NetworkEvaluator that returns the second network in the scan list
+        mWifiNetworkSelector.registerNetworkEvaluator(new DummyNetworkEvaluator(1));
+
+        test2GhzHighQuality5GhzAvailable();
+
+        String compatibilityExpIdStr = new CompatibiltyScorer(mScoringParams).getIdentifier();
+        int compatibilityExpId = WifiNetworkSelector
+                .experimentIdFromIdentifier(compatibilityExpIdStr);
+
+        // Wanted 2 times since test2GhzHighQuality5GhzAvailable() calls
+        // WifiNetworkSelector.selectNetwork() twice
+        verify(mWifiMetrics, times(2)).logNetworkSelectionDecision(compatibilityExpId,
+                WifiNetworkSelector.LEGACY_CANDIDATE_SCORER_EXP_ID, true, 2);
+
+        verifyNoMoreInteractions(mWifiMetrics);
+    }
+
+    /**
+     * Tests that metrics are recorded for 2 scorers (legacy and legacy compatibility), when
+     * legacy compatibility experiment is active.
+     */
+    @Test
+    public void testCandidateScorerMetrics_twoScorers_experimentActive() {
+        // unregister ScoreCard scorer, leaving only compatibility scorer
+        mWifiNetworkSelector.unregisterCandidateScorer(new ScoreCardBasedScorer(mScoringParams));
+
+        // add a second NetworkEvaluator that returns the second network in the scan list
+        mWifiNetworkSelector.registerNetworkEvaluator(new DummyNetworkEvaluator(1));
+
+        String compatibilityExpIdStr = new CompatibiltyScorer(mScoringParams).getIdentifier();
+        int compatibilityExpId = WifiNetworkSelector
+                .experimentIdFromIdentifier(compatibilityExpIdStr);
+        mScoringParams.update("expid=" + compatibilityExpId);
+        assertEquals(compatibilityExpId, mScoringParams.getExperimentIdentifier());
+
+        test2GhzHighQuality5GhzAvailable();
+
+        // Wanted 2 times since test2GhzHighQuality5GhzAvailable() calls
+        // WifiNetworkSelector.selectNetwork() twice
+        verify(mWifiMetrics, times(2)).logNetworkSelectionDecision(
+                WifiNetworkSelector.LEGACY_CANDIDATE_SCORER_EXP_ID, compatibilityExpId, true, 2);
+
+        verifyNoMoreInteractions(mWifiMetrics);
+    }
+
+    private static final WifiCandidates.CandidateScorer NULL_SCORER =
+            new WifiCandidates.CandidateScorer() {
+                @Override
+                public String getIdentifier() {
+                    return "NULL_SCORER";
+                }
+
+                @Override
+                public WifiCandidates.ScoredCandidate scoreCandidates(
+                        Collection<WifiCandidates.Candidate> group) {
+                    return new WifiCandidates.ScoredCandidate(0, 0, null);
+                }
+
+                @Override
+                public boolean userConnectChoiceOverrideWanted() {
+                    return false;
+                }
+            };
+
+    /**
+     * Tests that metrics are recorded for 2 scorers (legacy and null score) when one
+     * candidate scorer returns null.
+     */
+    @Test
+    public void testCandidateScorerMetrics_twoScorers_oneNull() {
+        // unregister all default scorers
+        mWifiNetworkSelector.unregisterCandidateScorer(new ScoreCardBasedScorer(mScoringParams));
+        mWifiNetworkSelector.unregisterCandidateScorer(new CompatibiltyScorer(mScoringParams));
+
+        // add null scorer
+        mWifiNetworkSelector.registerCandidateScorer(NULL_SCORER);
+
+        // add a second NetworkEvaluator that returns the second network in the scan list
+        mWifiNetworkSelector.registerNetworkEvaluator(new DummyNetworkEvaluator(1));
+
+        test2GhzHighQuality5GhzAvailable();
+
+        int nullScorerId = WifiNetworkSelector
+                .experimentIdFromIdentifier(NULL_SCORER.getIdentifier());
+
+        // Wanted 2 times since test2GhzHighQuality5GhzAvailable() calls
+        // WifiNetworkSelector.selectNetwork() twice
+        verify(mWifiMetrics, times(2)).logNetworkSelectionDecision(nullScorerId,
+                WifiNetworkSelector.LEGACY_CANDIDATE_SCORER_EXP_ID, false, 2);
+
+        verifyNoMoreInteractions(mWifiMetrics);
+    }
+
+    /**
+     * Tests that metrics are recorded for 2 scorers (legacy and null score) when the active
+     * candidate scorer returns null.
+     */
+    @Test
+    @Ignore("TODO Until b/126273496 is resolved")
+    public void testCandidateScorerMetrics_twoScorers_nullActive() {
+        // unregister all default scorers
+        mWifiNetworkSelector.unregisterCandidateScorer(new ScoreCardBasedScorer(mScoringParams));
+        mWifiNetworkSelector.unregisterCandidateScorer(new CompatibiltyScorer(mScoringParams));
+
+        int nullScorerId = WifiNetworkSelector
+                .experimentIdFromIdentifier(NULL_SCORER.getIdentifier());
+
+        mScoringParams.update("expid=" + nullScorerId);
+        assertEquals(nullScorerId, mScoringParams.getExperimentIdentifier());
+
+        // add null scorer
+        mWifiNetworkSelector.registerCandidateScorer(NULL_SCORER);
+
+        // add a second NetworkEvaluator that returns the second network in the scan list
+        mWifiNetworkSelector.registerNetworkEvaluator(new DummyNetworkEvaluator(1));
+
+        test2GhzHighQuality5GhzAvailable();
+
+        // Wanted 2 times since test2GhzHighQuality5GhzAvailable() calls
+        // WifiNetworkSelector.selectNetwork() twice
+        verify(mWifiMetrics, times(2)).logNetworkSelectionDecision(
+                WifiNetworkSelector.LEGACY_CANDIDATE_SCORER_EXP_ID, nullScorerId, false, 2);
+
+        verifyNoMoreInteractions(mWifiMetrics);
+    }
+
+    /**
+     * Tests that metrics are recorded for 3 scorers (legacy, compat, and null scorer).
+     */
+    @Test
+    public void testCandidateScorerMetrics_threeScorers() {
+        mWifiNetworkSelector.unregisterCandidateScorer(new ScoreCardBasedScorer(mScoringParams));
+
+        // add null scorer
+        mWifiNetworkSelector.registerCandidateScorer(NULL_SCORER);
+
+        // add a second NetworkEvaluator that returns the second network in the scan list
+        mWifiNetworkSelector.registerNetworkEvaluator(new DummyNetworkEvaluator(1));
+
+        String compatibilityExpIdStr = new CompatibiltyScorer(mScoringParams).getIdentifier();
+        int compatibilityExpId = WifiNetworkSelector
+                .experimentIdFromIdentifier(compatibilityExpIdStr);
+        mScoringParams.update("expid=" + compatibilityExpId);
+        assertEquals(compatibilityExpId, mScoringParams.getExperimentIdentifier());
+
+        test2GhzHighQuality5GhzAvailable();
+
+        int nullScorerId = WifiNetworkSelector
+                .experimentIdFromIdentifier(NULL_SCORER.getIdentifier());
+
+        // Wanted 2 times since test2GhzHighQuality5GhzAvailable() calls
+        // WifiNetworkSelector.selectNetwork() twice
+        verify(mWifiMetrics, times(2)).logNetworkSelectionDecision(nullScorerId,
+                compatibilityExpId, false, 2);
+
+        verify(mWifiMetrics, times(2)).logNetworkSelectionDecision(
+                WifiNetworkSelector.LEGACY_CANDIDATE_SCORER_EXP_ID, compatibilityExpId, true, 2);
+
+        verifyNoMoreInteractions(mWifiMetrics);
+    }
 }
 

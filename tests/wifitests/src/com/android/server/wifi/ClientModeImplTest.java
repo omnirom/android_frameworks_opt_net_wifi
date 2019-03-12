@@ -428,6 +428,7 @@ public class ClientModeImplTest {
                 .thenReturn(mUntrustedWifiNetworkFactory);
         when(mWifiInjector.getWifiNetworkSuggestionsManager())
                 .thenReturn(mWifiNetworkSuggestionsManager);
+        when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
         when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
                 .thenReturn(Pair.create(Process.INVALID_UID, ""));
         when(mWifiNative.initialize()).thenReturn(true);
@@ -515,7 +516,7 @@ public class ClientModeImplTest {
     private void initializeCmi() throws Exception {
         mCmi = new ClientModeImpl(mContext, mFrameworkFacade, mLooper.getLooper(),
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
-                mWifiScoreCard, mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
+                mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
                 mLinkProbeManager);
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
@@ -986,11 +987,68 @@ public class ClientModeImplTest {
         assertEquals(sBSSID, wifiInfo.getBSSID());
         assertEquals(sFreq, wifiInfo.getFrequency());
         assertTrue(sWifiSsid.equals(wifiInfo.getWifiSsid()));
+        assertNull(wifiInfo.getProviderFriendlyName());
         // Ensure the connection stats for the network is updated.
         verify(mWifiConfigManager).updateNetworkAfterConnect(FRAMEWORK_NETWORK_ID);
 
         verify(mWifiStateTracker).updateState(eq(WifiStateTracker.CONNECTED));
         assertEquals("ConnectedState", getCurrentState().getName());
+    }
+
+    /**
+     * Tests the Passpoint information is set in WifiInfo for Passpoint AP connection.
+     */
+    @Test
+    public void connectPasspointAp() throws Exception {
+        loadComponentsInStaMode();
+        WifiConfiguration config = spy(WifiConfigurationTestUtil.createPasspointNetwork());
+        config.SSID = sWifiSsid.toString();
+        config.BSSID = sBSSID;
+        config.networkId = FRAMEWORK_NETWORK_ID;
+        when(config.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
+        config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
+        setupAndStartConnectSequence(config);
+        validateSuccessfulConnectSequence(config);
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(FRAMEWORK_NETWORK_ID, sWifiSsid, sBSSID,
+                        SupplicantState.ASSOCIATING));
+        mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mCmi.getWifiInfo();
+        assertNotNull(wifiInfo);
+        assertEquals(WifiConfigurationTestUtil.TEST_FQDN, wifiInfo.getFqdn());
+        assertEquals(WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME,
+                wifiInfo.getProviderFriendlyName());
+    }
+
+    /**
+     * Tests the OSU information is set in WifiInfo for OSU AP connection.
+     */
+    @Test
+    public void connectOsuAp() throws Exception {
+        loadComponentsInStaMode();
+        WifiConfiguration osuConfig = spy(WifiConfigurationTestUtil.createEphemeralNetwork());
+        osuConfig.SSID = sWifiSsid.toString();
+        osuConfig.BSSID = sBSSID;
+        osuConfig.osu = true;
+        osuConfig.networkId = FRAMEWORK_NETWORK_ID;
+        osuConfig.providerFriendlyName = WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME;
+        when(osuConfig.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
+        osuConfig.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
+        setupAndStartConnectSequence(osuConfig);
+        validateSuccessfulConnectSequence(osuConfig);
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(FRAMEWORK_NETWORK_ID, sWifiSsid, sBSSID,
+                        SupplicantState.ASSOCIATING));
+        mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mCmi.getWifiInfo();
+        assertNotNull(wifiInfo);
+        assertTrue(wifiInfo.isOsuAp());
+        assertEquals(WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME,
+                wifiInfo.getProviderFriendlyName());
     }
 
     /**
