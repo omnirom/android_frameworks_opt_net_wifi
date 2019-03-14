@@ -118,8 +118,9 @@ public class WifiNative {
         public static final int IFACE_TYPE_AP = 0;
         public static final int IFACE_TYPE_STA = 1;
         public static final int IFACE_TYPE_FST = 2;
+        public static final int IFACE_TYPE_BRIDGE = 3;
 
-        @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA, IFACE_TYPE_FST})
+        @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA, IFACE_TYPE_FST, IFACE_TYPE_BRIDGE})
         @Retention(RetentionPolicy.SOURCE)
         public @interface IfaceType{}
 
@@ -151,7 +152,8 @@ public class WifiNative {
                 .append("Id=").append(id)
                 .append(",")
                 .append("Type=").append(type == IFACE_TYPE_STA ? "STA" :
-                                        type == IFACE_TYPE_AP ? "AP" : "FST")
+                                        (type == IFACE_TYPE_BRIDGE ? "Bridge" :
+                                         type == IFACE_TYPE_AP ? "AP" : "FST"))
                 .append("}");
             return sb.toString();
         }
@@ -371,6 +373,20 @@ public class WifiNative {
         }
     }
 
+    /** Helper method invoked to stop hostapd if there are no more AP ifaces */
+    private void stopHostapdIfNecessary(String ifaceName) {
+        synchronized (mLock) {
+            if (!mIfaceMgr.hasAnyApIface()) {
+                if (!mHostapdHal.deregisterDeathHandler()) {
+                    Log.e(TAG, "Failed to deregister hostapd death handler");
+                }
+                if (!mWificondControl.stopHostapd(ifaceName)) {
+                    Log.e(TAG, "Failed to stop hostapd on " + ifaceName);
+                }
+            }
+        }
+    }
+
     /** Helper method to register a network observer and return it */
     private boolean registerNetworkObserver(NetworkObserverInternal observer) {
         if (observer == null) return false;
@@ -425,18 +441,22 @@ public class WifiNative {
             } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
-            if (!mHostapdHal.deregisterDeathHandler()) {
-                Log.e(TAG, "Failed to deregister supplicant death handler");
-            }
-            // TODO(b/71513606): Move this to a global operation.
-            if (!mWificondControl.stopHostapd(iface.name)) {
-                Log.e(TAG, "Failed to stop hostapd on " + iface);
-            }
+            stopHostapdIfNecessary(iface.name);
             if (!mWificondControl.tearDownSoftApInterface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopHalAndWificondIfNecessary();
             removeFstInterface();
+        }
+    }
+
+    /** Helper method invoked to teardown softAp iface and perform necessary cleanup */
+    private void onBridgeInterfaceDestroyed(@NonNull Iface iface) {
+        synchronized (mLock) {
+            if (!unregisterNetworkObserver(iface.networkObserver)) {
+                Log.e(TAG, "Failed to unregister network observer on " + iface);
+            }
+            stopHalAndWificondIfNecessary();
         }
     }
 
@@ -447,6 +467,8 @@ public class WifiNative {
                 onClientInterfaceDestroyed(iface);
             } else if (iface.type == Iface.IFACE_TYPE_AP) {
                 onSoftApInterfaceDestroyed(iface);
+            } else if (iface.type == Iface.IFACE_TYPE_BRIDGE) {
+                onBridgeInterfaceDestroyed(iface);
             }
             // Invoke the external callback.
             iface.externalListener.onDestroyed(iface.name);
@@ -561,7 +583,8 @@ public class WifiNative {
                 iface.externalListener.onDown(iface.name);
                 if (iface.type == Iface.IFACE_TYPE_STA) {
                     mWifiMetrics.incrementNumClientInterfaceDown();
-                } else if (iface.type == Iface.IFACE_TYPE_AP) {
+                } else if (iface.type == Iface.IFACE_TYPE_AP
+                        || iface.type == Iface.IFACE_TYPE_BRIDGE) {
                     mWifiMetrics.incrementNumSoftApInterfaceDown();
                 }
             }
@@ -1060,7 +1083,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
                 return null;
             }
-            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_AP);
+            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_BRIDGE);
             if (iface == null) {
                 Log.e(TAG, "Failed to allocate new bridge iface");
                 return null;
@@ -1141,6 +1164,9 @@ public class WifiNative {
                     Log.e(TAG, "Failed to remove iface in vendor HAL=" + ifaceName);
                     return;
                 }
+            } else if (iface.type == Iface.IFACE_TYPE_BRIDGE) {
+                 mIfaceMgr.removeIface(iface.id);
+                 onInterfaceDestroyed(iface);
             }
             Log.i(TAG, "Successfully initiated teardown for iface=" + ifaceName);
         }
