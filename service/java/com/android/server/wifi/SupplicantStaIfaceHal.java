@@ -236,7 +236,7 @@ public class SupplicantStaIfaceHal {
                 /* TODO(b/33639391) : Use the new ISupplicant.registerForNotifications() once it
                    exists */
                 if (!mIServiceManager.registerForNotifications(
-                        ISupplicant.kInterfaceName, "", mServiceNotificationCallback)) {
+                        ISupplicant.kInterfaceName, "default", mServiceNotificationCallback)) {
                     Log.e(TAG, "Failed to register for notifications to "
                             + ISupplicant.kInterfaceName);
                     mIServiceManager = null; // Will need to register a new ServiceNotification

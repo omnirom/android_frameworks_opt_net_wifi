@@ -169,7 +169,7 @@ public class HostapdHal {
                 /* TODO(b/33639391) : Use the new IHostapd.registerForNotifications() once it
                    exists */
                 if (!mIServiceManager.registerForNotifications(
-                        IHostapd.kInterfaceName, "", mServiceNotificationCallback)) {
+                        IHostapd.kInterfaceName, "default", mServiceNotificationCallback)) {
                     Log.e(TAG, "Failed to register for notifications to "
                             + IHostapd.kInterfaceName);
                     mIServiceManager = null; // Will need to register a new ServiceNotification
