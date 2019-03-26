@@ -16,6 +16,8 @@
 
 package com.android.server.wifi;
 
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_DISABLED_PERMANENT_STARTING_INDEX;
+
 import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.admin.DeviceAdminInfo;
@@ -126,6 +128,7 @@ public class WifiConfigManager {
             1,  //  threshold for DISABLED_NO_INTERNET_TEMPORARY
             1,  //  threshold for DISABLED_WPS_START
             6,  //  threshold for DISABLED_TLS_VERSION_MISMATCH
+            1,  //  threshold for DISABLED_BY_WIFI_MANAGER_DISCONNECT
             1,  //  threshold for DISABLED_AUTHENTICATION_NO_CREDENTIALS
             1,  //  threshold for DISABLED_NO_INTERNET_PERMANENT
             1,  //  threshold for DISABLED_BY_WIFI_MANAGER
@@ -150,6 +153,7 @@ public class WifiConfigManager {
             10 * 60 * 1000,     // threshold for DISABLED_NO_INTERNET_TEMPORARY
             0 * 60 * 1000,      // threshold for DISABLED_WPS_START
             Integer.MAX_VALUE,  // threshold for DISABLED_TLS_VERSION
+            1 * 60 * 60 * 1000,  //  threshold for DISABLED_BY_WIFI_MANAGER_DISCONNECT
             Integer.MAX_VALUE,  // threshold for DISABLED_AUTHENTICATION_NO_CREDENTIALS
             Integer.MAX_VALUE,  // threshold for DISABLED_NO_INTERNET_PERMANENT
             Integer.MAX_VALUE,  // threshold for DISABLED_BY_WIFI_MANAGER
@@ -270,6 +274,8 @@ public class WifiConfigManager {
     private final WifiConfigStore mWifiConfigStore;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
+    private final WifiInjector mWifiInjector;
+
     /**
      * Local log used for debugging any WifiConfigManager issues.
      */
@@ -384,6 +390,7 @@ public class WifiConfigManager {
             WifiConfigStore wifiConfigStore,
             WifiPermissionsUtil wifiPermissionsUtil,
             WifiPermissionsWrapper wifiPermissionsWrapper,
+            WifiInjector wifiInjector,
             NetworkListSharedStoreData networkListSharedStoreData,
             NetworkListUserStoreData networkListUserStoreData,
             DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData,
@@ -398,6 +405,7 @@ public class WifiConfigManager {
         mWifiConfigStore = wifiConfigStore;
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mWifiPermissionsWrapper = wifiPermissionsWrapper;
+        mWifiInjector = wifiInjector;
 
         mConfiguredNetworks = new ConfigurationMap(userManager);
         mScanDetailCaches = new HashMap<>(16, 0.75f);
@@ -1582,7 +1590,7 @@ public class WifiConfigManager {
         if (reason == NetworkSelectionStatus.NETWORK_SELECTION_ENABLE) {
             setNetworkSelectionEnabled(config);
             setNetworkStatus(config, WifiConfiguration.Status.ENABLED);
-        } else if (reason < NetworkSelectionStatus.DISABLED_TLS_VERSION_MISMATCH) {
+        } else if (reason < NETWORK_SELECTION_DISABLED_PERMANENT_STARTING_INDEX) {
             setNetworkSelectionTemporarilyDisabled(config, reason);
         } else {
             setNetworkSelectionPermanentlyDisabled(config, reason);
@@ -1607,6 +1615,22 @@ public class WifiConfigManager {
     private boolean updateNetworkSelectionStatus(WifiConfiguration config, int reason) {
         NetworkSelectionStatus networkStatus = config.getNetworkSelectionStatus();
         if (reason != NetworkSelectionStatus.NETWORK_SELECTION_ENABLE) {
+
+            // Do not update SSID blacklist with information if this is the only
+            // SSID be observed. By ignoring it we will cause additional failures
+            // which will trigger Watchdog.
+            if (reason == NetworkSelectionStatus.DISABLED_ASSOCIATION_REJECTION
+                    || reason == NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE
+                    || reason == NetworkSelectionStatus.DISABLED_DHCP_FAILURE) {
+                if (mWifiInjector.getWifiLastResortWatchdog().shouldIgnoreSsidUpdate()) {
+                    if (mVerboseLoggingEnabled) {
+                        Log.v(TAG, "Ignore update network selection status "
+                                    + "since Watchdog trigger is activated");
+                    }
+                    return false;
+                }
+            }
+
             networkStatus.incrementDisableReasonCounter(reason);
             // For network disable reasons, we should only update the status if we cross the
             // threshold.
@@ -2794,7 +2818,8 @@ public class WifiConfigManager {
                 if (TelephonyUtil.isSimConfig(config)) {
                     Pair<String, String> currentIdentity =
                             TelephonyUtil.getSimIdentity(mTelephonyManager,
-                                    new TelephonyUtil(), config);
+                                    new TelephonyUtil(), config,
+                                    mWifiInjector.getCarrierNetworkConfig());
                     if (mVerboseLoggingEnabled) {
                         Log.d(TAG, "New identity for config " + config + ": " + currentIdentity);
                     }

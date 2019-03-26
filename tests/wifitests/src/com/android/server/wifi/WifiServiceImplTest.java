@@ -69,9 +69,9 @@ import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.net.Uri;
 import android.net.wifi.INetworkRequestMatchCallback;
+import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ITrafficStateCallback;
-import android.net.wifi.IWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
@@ -116,6 +116,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatcher;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.Spy;
@@ -232,8 +233,10 @@ public class WifiServiceImplTest {
     @Mock WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
     @Mock DevicePolicyManagerInternal mDevicePolicyManagerInternal;
     @Mock TelephonyManager mTelephonyManager;
-    @Mock IWifiUsabilityStatsListener mWifiUsabilityStatsListener;
+    @Mock IOnWifiUsabilityStatsListener mOnWifiUsabilityStatsListener;
     @Mock WifiConfigManager mWifiConfigManager;
+    @Mock WifiScoreReport mWifiScoreReport;
+    @Mock WifiScoreCard mWifiScoreCard;
 
     @Spy FakeWifiLog mLog;
 
@@ -358,6 +361,8 @@ public class WifiServiceImplTest {
                 .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiInjector.makeTelephonyManager()).thenReturn(mTelephonyManager);
         when(mWifiInjector.getWifiConfigManager()).thenReturn(mWifiConfigManager);
+        when(mClientModeImpl.getWifiScoreReport()).thenReturn(mWifiScoreReport);
+        when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
         when(mClientModeImpl.syncStartSubscriptionProvisioning(anyInt(),
                 any(OsuProvider.class), any(IProvisioningCallback.class), any())).thenReturn(true);
         when(mPackageManager.hasSystemFeature(
@@ -437,6 +442,35 @@ public class WifiServiceImplTest {
         setupClientModeImplHandlerForRunWithScissors();
 
         mWifiServiceImpl.dump(new FileDescriptor(), new PrintWriter(new StringWriter()), null);
+    }
+
+    /**
+     * Ensure that WifiServiceImpl.dump() calls
+     * {@link ClientModeImpl#updateLinkLayerStatsRssiAndScoreReport()}, then calls
+     * mWifiInjector.getClientModeImplHandler().runWithScissors() at least once before calling
+     * {@link WifiScoreReport#dump(FileDescriptor, PrintWriter, String[])}.
+     *
+     * runWithScissors() needs to be called at least once so that we know that the async call
+     * {@link ClientModeImpl#updateLinkLayerStatsRssiAndScoreReport()} has completed, since
+     * runWithScissors() blocks the current thread until the call completes, which includes all
+     * previous calls posted to that thread.
+     *
+     * This ensures that WifiScoreReport will always get updated RSSI and link layer stats before
+     * dumping during a bug report, no matter if the screen is on or not.
+     */
+    @Test
+    public void testWifiScoreReportDump() {
+        setupClientModeImplHandlerForRunWithScissors();
+
+        mWifiServiceImpl.dump(new FileDescriptor(), new PrintWriter(new StringWriter()), null);
+
+        InOrder inOrder = inOrder(mClientModeImpl, mHandlerSpyForCmiRunWithScissors,
+                mWifiScoreReport);
+
+        inOrder.verify(mClientModeImpl).updateLinkLayerStatsRssiAndScoreReport();
+        inOrder.verify(mHandlerSpyForCmiRunWithScissors, atLeastOnce())
+                .runWithScissors(any(), anyLong());
+        inOrder.verify(mWifiScoreReport).dump(any(), any(), any());
     }
 
     /**
@@ -2903,7 +2937,7 @@ public class WifiServiceImplTest {
         doThrow(new SecurityException()).when(mAppOpsManager)
                 .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
         assertTrue(mWifiServiceImpl.disconnect(TEST_PACKAGE_NAME));
-        verify(mClientModeImpl).disconnectCommand();
+        verify(mClientModeImpl).disconnectCommandExternal();
     }
 
     /**
@@ -2915,7 +2949,7 @@ public class WifiServiceImplTest {
     public void testDisconnectWithChangeWifiStatePerm() throws Exception {
         assertFalse(mWifiServiceImpl.disconnect(TEST_PACKAGE_NAME));
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
-        verify(mClientModeImpl, never()).disconnectCommand();
+        verify(mClientModeImpl, never()).disconnectCommandExternal();
     }
 
     /**
@@ -2934,7 +2968,7 @@ public class WifiServiceImplTest {
 
         }
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
-        verify(mClientModeImpl, never()).disconnectCommand();
+        verify(mClientModeImpl, never()).disconnectCommandExternal();
     }
 
     @Test
@@ -3350,6 +3384,7 @@ public class WifiServiceImplTest {
         verify(mWifiConfigManager).clearDeletedEphemeralNetworks();
         verify(mClientModeImpl).clearNetworkRequestUserApprovedAccessPoints();
         verify(mWifiNetworkSuggestionsManager).clear();
+        verify(mWifiScoreCard).clear();
     }
 
     /**
@@ -3700,7 +3735,7 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that a call to addWifiUsabilityStatsListener throws a SecurityException if
+     * Verify that a call to addOnWifiUsabilityStatsListener throws a SecurityException if
      * the caller does not have WIFI_UPDATE_USABILITY_STATS_SCORE permission.
      */
     @Test
@@ -3710,21 +3745,21 @@ public class WifiServiceImplTest {
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
-            mWifiServiceImpl.addWifiUsabilityStatsListener(mAppBinder,
-                    mWifiUsabilityStatsListener, TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER);
+            mWifiServiceImpl.addOnWifiUsabilityStatsListener(mAppBinder,
+                    mOnWifiUsabilityStatsListener, TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER);
             fail("expected SecurityException");
         } catch (SecurityException expected) {
         }
     }
 
     /**
-     * Verify that a call to addWifiUsabilityStatsListener throws an IllegalArgumentException
+     * Verify that a call to addOnWifiUsabilityStatsListener throws an IllegalArgumentException
      * if the parameters are not provided.
      */
     @Test
     public void testAddStatsListenerThrowsIllegalArgumentExceptionOnInvalidArguments() {
         try {
-            mWifiServiceImpl.addWifiUsabilityStatsListener(
+            mWifiServiceImpl.addOnWifiUsabilityStatsListener(
                     mAppBinder, null, TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER);
             fail("expected IllegalArgumentException");
         } catch (IllegalArgumentException expected) {
@@ -3732,7 +3767,7 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that a call to removeWifiUsabilityStatsListener throws a SecurityException if
+     * Verify that a call to removeOnWifiUsabilityStatsListener throws a SecurityException if
      * the caller does not have WIFI_UPDATE_USABILITY_STATS_SCORE permission.
      */
     @Test
@@ -3742,7 +3777,7 @@ public class WifiServiceImplTest {
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
-            mWifiServiceImpl.removeWifiUsabilityStatsListener(
+            mWifiServiceImpl.removeOnWifiUsabilityStatsListener(
                     TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER);
             fail("expected SecurityException");
         } catch (SecurityException expected) {
@@ -3750,30 +3785,30 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that addWifiUsabilityStatsListener adds listener to {@link WifiMetrics}.
+     * Verify that addOnWifiUsabilityStatsListener adds listener to {@link WifiMetrics}.
      */
     @Test
-    public void testAddWifiUsabilityStatsListenerAndVerify() throws Exception {
+    public void testAddOnWifiUsabilityStatsListenerAndVerify() throws Exception {
         setupClientModeImplHandlerForPost();
 
-        mWifiServiceImpl.addWifiUsabilityStatsListener(mAppBinder, mWifiUsabilityStatsListener,
+        mWifiServiceImpl.addOnWifiUsabilityStatsListener(mAppBinder, mOnWifiUsabilityStatsListener,
                 TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER);
         mLooper.dispatchAll();
-        verify(mWifiMetrics).addWifiUsabilityListener(mAppBinder, mWifiUsabilityStatsListener,
+        verify(mWifiMetrics).addOnWifiUsabilityListener(mAppBinder, mOnWifiUsabilityStatsListener,
                 TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER);
     }
 
     /**
-     * Verify that removeWifiUsabilityStatsListener removes listener from
+     * Verify that removeOnWifiUsabilityStatsListener removes listener from
      * {@link WifiMetrics}.
      */
     @Test
-    public void testRemoveWifiUsabilityStatsListenerAndVerify() throws Exception {
+    public void testRemoveOnWifiUsabilityStatsListenerAndVerify() throws Exception {
         setupClientModeImplHandlerForPost();
 
-        mWifiServiceImpl.removeWifiUsabilityStatsListener(0);
+        mWifiServiceImpl.removeOnWifiUsabilityStatsListener(0);
         mLooper.dispatchAll();
-        verify(mWifiMetrics).removeWifiUsabilityListener(0);
+        verify(mWifiMetrics).removeOnWifiUsabilityListener(0);
     }
 
     /**

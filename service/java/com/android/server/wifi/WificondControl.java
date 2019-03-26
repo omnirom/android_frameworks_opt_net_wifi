@@ -53,6 +53,7 @@ import com.android.server.wifi.wificond.SingleScanSettings;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -698,7 +699,7 @@ public class WificondControl implements IBinder.DeathRecipient {
     public boolean scan(@NonNull String ifaceName,
                         int scanType,
                         Set<Integer> freqs,
-                        Set<String> hiddenNetworkSSIDs) {
+                        List<String> hiddenNetworkSSIDs) {
         IWifiScannerImpl scannerImpl = getScannerImpl(ifaceName);
         if (scannerImpl == null) {
             Log.e(TAG, "No valid wificond scanner interface handler");
@@ -735,7 +736,11 @@ public class WificondControl implements IBinder.DeathRecipient {
                                 network.ssid + " , network.ssid.size = " + network.ssid.length);
                     continue;
                 }
-                settings.hiddenNetworks.add(network);
+                // settings.hiddenNetworks is expected to be very small, so this shouldn't cause
+                // any performance issues.
+                if (!settings.hiddenNetworks.contains(network)) {
+                    settings.hiddenNetworks.add(network);
+                }
             }
         }
 

@@ -133,6 +133,13 @@ public class WifiScoreCard {
     private boolean mPolled = false;
 
     /**
+     * Records validation success for the current connection.
+     *
+     * We want to gather statistics only on the first success.
+     */
+    private boolean mValidated = false;
+
+    /**
      * A note to ourself that we are attempting a network switch
      */
     private boolean mAttemptingSwitch = false;
@@ -170,6 +177,7 @@ public class WifiScoreCard {
         }
         mTsRoam = TS_NONE;
         mPolled = false;
+        mValidated = false;
     }
 
     /**
@@ -220,6 +228,17 @@ public class WifiScoreCard {
         update(Event.IP_CONFIGURATION_SUCCESS, wifiInfo);
         mAttemptingSwitch = false;
         doWrites();
+    }
+
+    /**
+     * Updates the score card after network validation success.
+     *
+     * @param wifiInfo object holding relevant values
+     */
+    public void noteValidationSuccess(ExtendedWifiInfo wifiInfo) {
+        if (mValidated) return; // Only once per connection
+        update(Event.VALIDATION_SUCCESS, wifiInfo);
+        mValidated = true;
     }
 
     /**
@@ -617,6 +636,7 @@ public class WifiScoreCard {
             switch (event) {
                 case FIRST_POLL_AFTER_CONNECTION:
                 case IP_CONFIGURATION_SUCCESS:
+                case VALIDATION_SUCCESS:
                 case CONNECTION_FAILURE:
                 case WIFI_DISABLED:
                 case ROAM_FAILURE:
@@ -792,6 +812,23 @@ public class WifiScoreCard {
     public String getNetworkListBase64(boolean obfuscate) {
         byte[] raw = getNetworkListByteArray(obfuscate);
         return Base64.encodeToString(raw, Base64.DEFAULT);
+    }
+
+    /**
+     * Clears the internal state.
+     *
+     * This is called in response to a factoryReset call from Settings.
+     * The memory store will be called after we are called, to wipe the stable
+     * storage as well. Since we will have just removed all of our networks,
+     * it is very unlikely that we're connected, or will connect immediately.
+     * Any in-flight reads will land in the objects we are dropping here, and
+     * the memory store should drop the in-flight writes. Ideally we would
+     * avoid issuing reads until we were sure that the memory store had
+     * received the factoryReset.
+     */
+    public void clear() {
+        mApForBssid.clear();
+        resetConnectionStateInternal(false);
     }
 
 }
