@@ -3223,22 +3223,24 @@ public class WifiVendorHal {
     public class HalDeviceManagerStatusListener implements HalDeviceManager.ManagerStatusListener {
         @Override
         public void onStatusChanged() {
-            boolean isReady = mHalDeviceManager.isReady();
-            boolean isStarted = mHalDeviceManager.isStarted();
+            mHalEventHandler.post(() -> {
+                boolean isReady = mHalDeviceManager.isReady();
+                boolean isStarted = mHalDeviceManager.isStarted();
 
-            mVerboseLog.i("Device Manager onStatusChanged. isReady(): " + isReady
-                    + ", isStarted(): " + isStarted);
-            if (!isReady) {
-                // Probably something unpleasant, e.g. the server died
-                WifiNative.VendorHalDeathEventHandler handler;
-                synchronized (sLock) {
-                    clearState();
-                    handler = mDeathEventHandler;
+                mVerboseLog.i("Device Manager onStatusChanged. isReady(): " + isReady
+                        + ", isStarted(): " + isStarted);
+                if (!isReady) {
+                    // Probably something unpleasant, e.g. the server died
+                    WifiNative.VendorHalDeathEventHandler handler;
+                    synchronized (sLock) {
+                        clearState();
+                        handler = mDeathEventHandler;
+                    }
+                    if (handler != null) {
+                        handler.onDeath();
+                    }
                 }
-                if (handler != null) {
-                    handler.onDeath();
-                }
-            }
+            });
         }
     }
 }
