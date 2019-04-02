@@ -99,6 +99,7 @@ public class WifiNetworkSuggestionsManager {
     private final PackageManager mPackageManager;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiConfigManager mWifiConfigManager;
+    private final WifiMetrics mWifiMetrics;
     private final WifiInjector mWifiInjector;
     private final FrameworkFacade mFrameworkFacade;
 
@@ -119,6 +120,9 @@ public class WifiNetworkSuggestionsManager {
          * Whether we have shown the user a notification for this app.
          */
         public boolean hasUserApproved = false;
+
+        /** Stores the max size of the {@link #extNetworkSuggestions} list ever for this app */
+        public int maxSize = 0;
 
         public PerAppInfo(@NonNull String packageName) {
             this.packageName = packageName;
@@ -373,7 +377,8 @@ public class WifiNetworkSuggestionsManager {
                                          WifiInjector wifiInjector,
                                          WifiPermissionsUtil wifiPermissionsUtil,
                                          WifiConfigManager wifiConfigManager,
-                                         WifiConfigStore wifiConfigStore) {
+                                         WifiConfigStore wifiConfigStore,
+                                         WifiMetrics wifiMetrics) {
         mContext = context;
         mResources = context.getResources();
         mHandler = handler;
@@ -385,6 +390,7 @@ public class WifiNetworkSuggestionsManager {
         mFrameworkFacade = mWifiInjector.getFrameworkFacade();
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mWifiConfigManager = wifiConfigManager;
+        mWifiMetrics = wifiMetrics;
 
         // register the data store for serializing/deserializing data.
         wifiConfigStore.registerStoreData(
@@ -498,7 +504,7 @@ public class WifiNetworkSuggestionsManager {
             if (mActiveNetworkSuggestionsMatchingConnection.isEmpty()) {
                 Log.i(TAG, "Only network suggestion matching the connected network removed. "
                         + "Disconnecting...");
-                mWifiInjector.getClientModeImpl().disconnectCommand();
+                mWifiInjector.getClientModeImpl().disconnectCommandInternal();
             }
         }
     }
@@ -578,8 +584,12 @@ public class WifiNetworkSuggestionsManager {
             startTrackingAppOpsChange(packageName, networkSuggestions.get(0).suggestorUid);
         }
         perAppInfo.extNetworkSuggestions.addAll(extNetworkSuggestions);
+        // Update the max size for this app.
+        perAppInfo.maxSize = Math.max(perAppInfo.extNetworkSuggestions.size(), perAppInfo.maxSize);
         addToScanResultMatchInfoMap(extNetworkSuggestions);
         saveToStore();
+        mWifiMetrics.incrementNetworkSuggestionApiNumModification();
+        mWifiMetrics.noteNetworkSuggestionApiListSizeHistogram(getAllMaxSizes());
         return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
     }
 
@@ -641,6 +651,8 @@ public class WifiNetworkSuggestionsManager {
         }
         removeInternal(extNetworkSuggestions, packageName, perAppInfo);
         saveToStore();
+        mWifiMetrics.incrementNetworkSuggestionApiNumModification();
+        mWifiMetrics.noteNetworkSuggestionApiListSizeHistogram(getAllMaxSizes());
         return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
     }
 
@@ -712,6 +724,13 @@ public class WifiNetworkSuggestionsManager {
                 .collect(Collectors.toSet());
     }
 
+    private List<Integer> getAllMaxSizes() {
+        return mActiveNetworkSuggestionsPerApp.values()
+                .stream()
+                .map(e -> e.maxSize)
+                .collect(Collectors.toList());
+    }
+
     private PendingIntent getPrivateBroadcast(@NonNull String action, @NonNull String packageName,
                                               int uid) {
         Intent intent = new Intent(action)
@@ -752,8 +771,8 @@ public class WifiNetworkSuggestionsManager {
         Notification notification = new Notification.Builder(
                 mContext, SystemNotificationChannels.NETWORK_STATUS)
                 .setSmallIcon(R.drawable.stat_notify_wifi_in_range)
-                .setTicker(mResources.getString(R.string.wifi_suggestion_title, appName))
-                .setContentTitle(mResources.getString(R.string.wifi_suggestion_title, appName))
+                .setTicker(mResources.getString(R.string.wifi_suggestion_title))
+                .setContentTitle(mResources.getString(R.string.wifi_suggestion_title))
                 .setContentText(mResources.getString(R.string.wifi_suggestion_content, appName))
                 .setDeleteIntent(getPrivateBroadcast(NOTIFICATION_USER_DISMISSED_INTENT_ACTION,
                         packageName, uid))
@@ -786,12 +805,15 @@ public class WifiNetworkSuggestionsManager {
 
     private @Nullable Set<ExtendedWifiNetworkSuggestion>
             getNetworkSuggestionsForScanResultMatchInfo(
-            @NonNull ScanResultMatchInfo scanResultMatchInfo, @NonNull MacAddress bssid) {
+            @NonNull ScanResultMatchInfo scanResultMatchInfo, @Nullable MacAddress bssid) {
         Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions = new HashSet<>();
-        Set<ExtendedWifiNetworkSuggestion> matchingExtNetworkSuggestionsWithBssid =
-                mActiveScanResultMatchInfoWithBssid.get(Pair.create(scanResultMatchInfo, bssid));
-        if (matchingExtNetworkSuggestionsWithBssid != null) {
-            extNetworkSuggestions.addAll(matchingExtNetworkSuggestionsWithBssid);
+        if (bssid != null) {
+            Set<ExtendedWifiNetworkSuggestion> matchingExtNetworkSuggestionsWithBssid =
+                    mActiveScanResultMatchInfoWithBssid.get(
+                            Pair.create(scanResultMatchInfo, bssid));
+            if (matchingExtNetworkSuggestionsWithBssid != null) {
+                extNetworkSuggestions.addAll(matchingExtNetworkSuggestionsWithBssid);
+            }
         }
         Set<ExtendedWifiNetworkSuggestion> matchingNetworkSuggestionsWithNoBssid =
                 mActiveScanResultMatchInfoWithNoBssid.get(scanResultMatchInfo);
@@ -858,13 +880,13 @@ public class WifiNetworkSuggestionsManager {
      * Returns a set of all network suggestions matching the provided the WifiConfiguration.
      */
     private @Nullable Set<ExtendedWifiNetworkSuggestion> getNetworkSuggestionsForWifiConfiguration(
-            @NonNull WifiConfiguration wifiConfiguration, @NonNull String bssid) {
+            @NonNull WifiConfiguration wifiConfiguration, @Nullable String bssid) {
         Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions = null;
         try {
             ScanResultMatchInfo scanResultMatchInfo =
                     ScanResultMatchInfo.fromWifiConfiguration(wifiConfiguration);
             extNetworkSuggestions = getNetworkSuggestionsForScanResultMatchInfo(
-                    scanResultMatchInfo,  MacAddress.fromString(bssid));
+                    scanResultMatchInfo,  bssid == null ? null : MacAddress.fromString(bssid));
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Failed to lookup network from scan result match info map", e);
         }
@@ -935,6 +957,8 @@ public class WifiNetworkSuggestionsManager {
         if (matchingExtNetworkSuggestions == null
                 || matchingExtNetworkSuggestions.isEmpty()) return;
 
+        mWifiMetrics.incrementNetworkSuggestionApiNumConnectSuccess();
+
         // Store the set of matching network suggestions.
         mActiveNetworkSuggestionsMatchingConnection = new HashSet<>(matchingExtNetworkSuggestions);
 
@@ -954,6 +978,28 @@ public class WifiNetworkSuggestionsManager {
                     matchingExtNetworkSuggestion.perAppInfo.packageName,
                     matchingExtNetworkSuggestion.wns);
         }
+    }
+
+    /**
+     * Handle connection failure.
+     *
+     * @param network {@link WifiConfiguration} representing the network that connection failed to.
+     * @param bssid BSSID of the network connection failed to if known, else null.
+     */
+    private void handleConnectionFailure(@NonNull WifiConfiguration network,
+                                         @Nullable String bssid) {
+        Set<ExtendedWifiNetworkSuggestion> matchingExtNetworkSuggestions =
+                getNetworkSuggestionsForWifiConfiguration(network, bssid);
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Network suggestions matching the connection failure "
+                    + matchingExtNetworkSuggestions);
+        }
+        if (matchingExtNetworkSuggestions == null
+                || matchingExtNetworkSuggestions.isEmpty()) return;
+
+        mWifiMetrics.incrementNetworkSuggestionApiNumConnectFailure();
+        // TODO (b/115504887, b/112196799): Blacklist the corresponding network suggestion if
+        // the connection failed.
     }
 
     private void resetConnectionState() {
@@ -976,8 +1022,7 @@ public class WifiNetworkSuggestionsManager {
         if (failureCode == WifiMetrics.ConnectionEvent.FAILURE_NONE) {
             handleConnectionSuccess(network, bssid);
         } else {
-            // TODO (b/115504887, b/112196799): Blacklist the corresponding network suggestion if
-            // the connection failed.
+            handleConnectionFailure(network, bssid);
         }
     }
 
