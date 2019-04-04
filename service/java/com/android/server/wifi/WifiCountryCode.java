@@ -25,6 +25,8 @@ import android.util.Log;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 
 /**
@@ -39,6 +41,7 @@ public class WifiCountryCode {
     private boolean DBG = false;
     private boolean mReady = false;
     private Context mContext;
+    private static final SimpleDateFormat FORMATTER = new SimpleDateFormat("MM-dd HH:mm:ss.SSS");
 
     /** config option that indicate whether or not to reset country code to default when
      * cellular radio indicates country code loss
@@ -46,7 +49,10 @@ public class WifiCountryCode {
     private boolean mRevertCountryCodeOnCellularLoss;
     private String mDefaultCountryCode = null;
     private String mTelephonyCountryCode = null;
-    private String mCurrentCountryCode = null;
+    private String mDriverCountryCode = null;
+    private String mTelephonyCountryTimestamp = null;
+    private String mDriverCountryTimestamp = null;
+    private String mReadyTimestamp = null;
 
     public WifiCountryCode(
             Context context,
@@ -65,14 +71,11 @@ public class WifiCountryCode {
                 Log.w(TAG, "config_wifi_revert_country_code_on_cellular_loss is set, "
                          + "but there is no default country code.");
                 mRevertCountryCodeOnCellularLoss = false;
-                return;
             }
         }
 
-        if (mRevertCountryCodeOnCellularLoss) {
-            Log.d(TAG, "Country code will be reverted to " + mDefaultCountryCode
-                    + " on MCC loss");
-        }
+        Log.d(TAG, "mDefaultCountryCode " + mDefaultCountryCode
+                + " mRevertCountryCodeOnCellularLoss " + mRevertCountryCodeOnCellularLoss);
     }
 
     public WifiCountryCode(
@@ -111,7 +114,7 @@ public class WifiCountryCode {
      * phone default one.
      */
     public synchronized void airplaneModeEnabled() {
-        if (DBG) Log.d(TAG, "Airplane Mode Enabled");
+        Log.d(TAG, "Airplane Mode Enabled");
         // Airplane mode is enabled, we need to reset the country code to phone default.
         // Country code will be set upon when wpa_supplicant starts next time.
         mTelephonyCountryCode = null;
@@ -125,8 +128,8 @@ public class WifiCountryCode {
      * started but not yet L2 connected.
      */
     public synchronized void setReadyForChange(boolean ready) {
-        if (DBG) Log.d(TAG, "Set ready: " + ready);
         mReady = ready;
+        mReadyTimestamp = FORMATTER.format(new Date(System.currentTimeMillis()));
         // We are ready to set country code now.
         // We need to post pending country code request.
         if (mReady) {
@@ -142,11 +145,13 @@ public class WifiCountryCode {
      * @return Returns true if the country code passed in is acceptable.
      */
     public synchronized boolean setCountryCode(String countryCode) {
-        if (DBG) Log.d(TAG, "Receive set country code request: " + countryCode);
+        Log.d(TAG, "Receive set country code request: " + countryCode);
+        mTelephonyCountryTimestamp = FORMATTER.format(new Date(System.currentTimeMillis()));
+
         // Empty country code.
         if (TextUtils.isEmpty(countryCode)) {
             if (mRevertCountryCodeOnCellularLoss) {
-                if (DBG) Log.d(TAG, "Received empty country code, reset to default country code");
+                Log.d(TAG, "Received empty country code, reset to default country code");
                 mTelephonyCountryCode = null;
             }
         } else {
@@ -156,6 +161,8 @@ public class WifiCountryCode {
         // set once wpa_supplicant is ready.
         if (mReady) {
             updateCountryCode();
+        } else {
+            Log.d(TAG, "skip update supplicant not ready yet");
         }
         sendCountryCodeChangedBroadcast();
         return true;
@@ -171,7 +178,7 @@ public class WifiCountryCode {
      * Returns null if no Country Code was sent to driver.
      */
     public synchronized String getCountryCodeSentToDriver() {
-        return mCurrentCountryCode;
+        return mDriverCountryCode;
     }
 
     /**
@@ -189,20 +196,21 @@ public class WifiCountryCode {
      * Method to dump the current state of this WifiCounrtyCode object.
      */
     public synchronized void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
-        if (mCurrentCountryCode != null) {
-            pw.println("CountryCode sent to driver: " + mCurrentCountryCode);
-        } else {
-            if (pickCountryCode() != null) {
-                pw.println("CountryCode: " + pickCountryCode() + " was not sent to driver");
-            } else {
-                pw.println("CountryCode was not initialized");
-            }
-        }
+
+        pw.println("mRevertCountryCodeOnCellularLoss: " + mRevertCountryCodeOnCellularLoss);
+        pw.println("mDefaultCountryCode: " + mDefaultCountryCode);
+        pw.println("mDriverCountryCode: " + mDriverCountryCode);
+        pw.println("mTelephonyCountryCode: " + mTelephonyCountryCode);
+        pw.println("mTelephonyCountryTimestamp: " + mTelephonyCountryTimestamp);
+        pw.println("mDriverCountryTimestamp: " + mDriverCountryTimestamp);
+        pw.println("mReadyTimestamp: " + mReadyTimestamp);
+        pw.println("mReady: " + mReady);
     }
 
     private void updateCountryCode() {
-        if (DBG) Log.d(TAG, "Update country code");
         String country = pickCountryCode();
+        Log.d(TAG, "updateCountryCode to " + country);
+
         // We do not check if the country code equals the current one.
         // There are two reasons:
         // 1. Wpa supplicant may silently modify the country code.
@@ -228,9 +236,10 @@ public class WifiCountryCode {
     }
 
     private boolean setCountryCodeNative(String country) {
+        mDriverCountryTimestamp = FORMATTER.format(new Date(System.currentTimeMillis()));
         if (mWifiNative.setCountryCode(mWifiNative.getClientInterfaceName(), country)) {
             Log.d(TAG, "Succeeded to set country code to: " + country);
-            mCurrentCountryCode = country;
+            mDriverCountryCode = country;
             return true;
         }
         Log.d(TAG, "Failed to set country code to: " + country);

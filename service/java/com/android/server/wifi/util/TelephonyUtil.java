@@ -16,6 +16,7 @@
 
 package com.android.server.wifi.util;
 
+import android.annotation.NonNull;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.telephony.ImsiEncryptionInfo;
@@ -33,6 +34,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.util.HashMap;
 
+import javax.annotation.Nonnull;
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
@@ -43,10 +45,13 @@ import javax.crypto.NoSuchPaddingException;
  */
 public class TelephonyUtil {
     public static final String TAG = "TelephonyUtil";
-
     public static final String DEFAULT_EAP_PREFIX = "\0";
 
-    private static final String THREE_GPP_NAI_REALM_FORMAT = "wlan.mnc%s.mcc%s.3gppnetwork.org";
+    public static final int CARRIER_INVALID_TYPE = -1;
+    public static final int CARRIER_MNO_TYPE = 0; // Mobile Network Operator
+    public static final int CARRIER_MVNO_TYPE = 1; // Mobile Virtual Network Operator
+    public static final String ANONYMOUS_IDENTITY = "anonymous";
+    public static final String THREE_GPP_NAI_REALM_FORMAT = "wlan.mnc%s.mcc%s.3gppnetwork.org";
 
     // IMSI encryption method: RSA-OAEP with SHA-256 hash function
     private static final String IMSI_CIPHER_TRANSFORMATION =
@@ -111,11 +116,8 @@ public class TelephonyUtil {
             return null;
         }
 
-        int base64EncodingFlag = carrierNetworkConfig.getBase64EncodingFlag(config.SSID);
-        if (base64EncodingFlag == -1) {
-            // no encrypted IMSI identity.
-            return Pair.create(identity, "");
-        }
+        int base64EncodingFlag = carrierNetworkConfig.getBase64EncodingFlag();
+
         String encryptedIdentity = buildEncryptedIdentity(telephonyUtil,
                 getSimMethodForConfig(config), imsi, mccMnc, imsiEncryptionInfo,
                 base64EncodingFlag);
@@ -123,6 +125,34 @@ public class TelephonyUtil {
         // In case of failure for encryption, set empty string
         if (encryptedIdentity == null) encryptedIdentity = "";
         return Pair.create(identity, encryptedIdentity);
+    }
+
+    /**
+     * Gets Anonymous identity for current active SIM.
+     *
+     * @param tm TelephonyManager instance
+     * @return anonymous identity@realm which is based on current MCC/MNC, {@code null} if SIM is
+     * not ready or absent.
+     */
+    public static String getAnonymousIdentityWith3GppRealm(@Nonnull TelephonyManager tm) {
+        if (tm == null || tm.getSimState() != TelephonyManager.SIM_STATE_READY) {
+            return null;
+        }
+        String mccMnc = tm.getSimOperator();
+        if (mccMnc == null || mccMnc.isEmpty()) {
+            return null;
+        }
+
+        // Extract mcc & mnc from mccMnc
+        String mcc = mccMnc.substring(0, 3);
+        String mnc = mccMnc.substring(3);
+
+        if (mnc.length() == 2) {
+            mnc = "0" + mnc;
+        }
+
+        String realm = String.format(THREE_GPP_NAI_REALM_FORMAT, mnc, mcc);
+        return ANONYMOUS_IDENTITY + "@" + realm;
     }
 
     /**
@@ -455,7 +485,7 @@ public class TelephonyUtil {
             byte[] result = Base64.decode(tmResponse, Base64.DEFAULT);
             Log.v(TAG, "Hex Response -" + makeHex(result));
             int sresLen = result[0];
-            if (sresLen >= result.length) {
+            if (sresLen < 0 || sresLen >= result.length) {
                 Log.e(TAG, "malformed response - " + tmResponse);
                 return null;
             }
@@ -466,7 +496,7 @@ public class TelephonyUtil {
                 return null;
             }
             int kcLen = result[kcOffset];
-            if (kcOffset + kcLen > result.length) {
+            if (kcLen < 0 || kcOffset + kcLen > result.length) {
                 Log.e(TAG, "malformed response - " + tmResponse);
                 return null;
             }
@@ -639,5 +669,24 @@ public class TelephonyUtil {
         } else {
             return null;
         }
+    }
+
+    /**
+     * Get the carrier type of current SIM.
+     *
+     * @param tm {@link TelephonyManager} instance
+     * @return carrier type of current active sim, {{@link #CARRIER_INVALID_TYPE}} if sim is not
+     * ready or {@code tm} is {@code null}
+     */
+    public static int getCarrierType(@NonNull TelephonyManager tm) {
+        if (tm == null || tm.getSimState() != TelephonyManager.SIM_STATE_READY) {
+            return CARRIER_INVALID_TYPE;
+        }
+
+        // If two APIs return the same carrier ID, then is considered as MNO, otherwise MVNO
+        if (tm.getCarrierIdFromSimMccMnc() == tm.getSimCarrierId()) {
+            return CARRIER_MNO_TYPE;
+        }
+        return CARRIER_MVNO_TYPE;
     }
 }
