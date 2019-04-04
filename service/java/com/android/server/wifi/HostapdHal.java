@@ -63,6 +63,8 @@ public class HostapdHal {
     private final boolean mEnableIeee80211AC;
     private final List<android.hardware.wifi.hostapd.V1_1.IHostapd.AcsChannelRange>
             mAcsChannelRanges;
+    private final List<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange>
+            mVendorAcsChannelRanges;
     private String mCountryCode = null;
 
     // Hostapd HAL interface objects
@@ -73,6 +75,7 @@ public class HostapdHal {
     private HostapdDeathEventHandler mDeathEventHandler;
     private ServiceManagerDeathRecipient mServiceManagerDeathRecipient;
     private HostapdDeathRecipient mHostapdDeathRecipient;
+    private HostapdVendorDeathRecipient mHostapdVendorDeathRecipient;
     // Death recipient cookie registered for current supplicant instance.
     private long mDeathRecipientCookie = 0;
 
@@ -117,14 +120,17 @@ public class HostapdHal {
         }
     }
 
-    private final HwRemoteBinder.DeathRecipient mHostapdVendorDeathRecipient =
-            cookie -> {
+    private class HostapdVendorDeathRecipient implements HwRemoteBinder.DeathRecipient {
+        @Override
+        public void serviceDied(long cookie) {
+            mEventHandler.post(() -> {
                 synchronized (mLock) {
                     Log.w(TAG, "IHostapdVendor died: cookie=" + cookie);
                     hostapdServiceDiedHandler(cookie);
                 }
-            };
-
+            });
+        }
+    }
 
     public HostapdHal(Context context, Looper looper) {
         mEventHandler = new Handler(looper);
@@ -136,6 +142,10 @@ public class HostapdHal {
 
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mHostapdDeathRecipient = new HostapdDeathRecipient();
+        mHostapdVendorDeathRecipient = new HostapdVendorDeathRecipient();
+
+        mVendorAcsChannelRanges = toVendorAcsChannelRanges(context.getResources().getString(
+                R.string.config_wifi_softap_acs_supported_channel_list));
     }
 
     /**
@@ -146,6 +156,7 @@ public class HostapdHal {
     void enableVerboseLogging(boolean enable) {
         synchronized (mLock) {
             mVerboseLoggingEnabled = enable;
+            setLogLevel(enable);
         }
     }
 
@@ -690,6 +701,30 @@ public class HostapdHal {
     // Keep hostapd vendor changes below this line to have minimal conflicts during merge/upgrade
 
     /**
+     * Uses the IServiceManager to check if the device is running V1_1 of the hostapd vendor HAL from
+     * the VINTF for the device.
+     * @return true if supported, false otherwise.
+     */
+    private boolean isVendorV1_1() {
+        synchronized (mLock) {
+            if (mIServiceManager == null) {
+                Log.e(TAG, "isVendorV1_1: called but mServiceManager is null!?");
+                return false;
+            }
+            try {
+                return (mIServiceManager.getTransport(
+                        vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.kInterfaceName,
+                        HAL_INSTANCE_NAME)
+                        != IServiceManager.Transport.EMPTY);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Exception while operating on IServiceManager: " + e);
+                handleRemoteException(e, "getTransport");
+                return false;
+            }
+        }
+    }
+
+    /**
      * Link to death for IHostapdVendor object.
      * @return true on success, false otherwise.
      */
@@ -727,6 +762,7 @@ public class HostapdHal {
                 return false;
             }
             if (!linkToHostapdVendorDeath()) {
+                mIHostapdVendor = null;
                 return false;
             }
         }
@@ -787,18 +823,51 @@ public class HostapdHal {
                     vendorIfaceParams.bridgeIfaceName = (bridgeIfaceName != null) ? bridgeIfaceName : "";
                 }
 
-                HostapdStatus status = mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams, nwParams);
-                if (checkVendorStatusAndLogFailure(status, methodStr) && (mIHostapdVendor != null)) {
-                    IHostapdVendorIfaceCallback vendorcallback = new HostapdVendorIfaceHalCallback(ifaceName, listener);
-                    if (vendorcallback != null) {
-                        if (!registerVendorCallback(ifaceParams.ifaceName, mIHostapdVendor, vendorcallback)) {
-                            Log.e(TAG, "Failed to register Hostapd Vendor callback");
-                            return false;
-                        }
-                    } else {
-                        Log.e(TAG, "Failed to create vendorcallback instance");
+                if (isVendorV1_1()) {
+                    vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor iHostapdVendorV1_1 =
+                        getHostapdVendorMockableV1_1();
+                    if (iHostapdVendorV1_1 == null) {
+                        Log.e(TAG, "Failed to get V1_1.IHostapdVendor");
+                        return false;
                     }
-                    return true;
+                    setLogLevel(mVerboseLoggingEnabled);
+                    vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams
+                         vendorIfaceParams1_1 =
+                            new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams();
+                    vendorIfaceParams1_1.VendorV1_0 = vendorIfaceParams;
+                    vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
+                    if (mEnableAcs) {
+                        vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(mVendorAcsChannelRanges);
+                    }
+                    HostapdStatus status =
+                        iHostapdVendorV1_1.addVendorAccessPoint_1_1(vendorIfaceParams1_1, nwParams);
+                    if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                        HostapdVendorIfaceHalCallbackV1_1 vendorcallback_1_1 =
+                            new HostapdVendorIfaceHalCallbackV1_1(ifaceName, listener);
+                        if (vendorcallback_1_1 != null) {
+                            if (!registerVendorCallback_1_1(ifaceParams.ifaceName, vendorcallback_1_1)) {
+                                Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                                return false;
+                            }
+                        } else {
+                            Log.e(TAG, "Failed to create vendorcallback instance");
+                        }
+                        return true;
+                    }
+                } else {
+                    HostapdStatus status = mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams, nwParams);
+                    if (checkVendorStatusAndLogFailure(status, methodStr) && (mIHostapdVendor != null)) {
+                        IHostapdVendorIfaceCallback vendorcallback = new HostapdVendorIfaceHalCallback(ifaceName, listener);
+                        if (vendorcallback != null) {
+                            if (!registerVendorCallback(ifaceParams.ifaceName, mIHostapdVendor, vendorcallback)) {
+                                Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                                return false;
+                            }
+                        } else {
+                            Log.e(TAG, "Failed to create vendorcallback instance");
+                        }
+                        return true;
+                    }
                 }
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -858,6 +927,59 @@ public class HostapdHal {
         synchronized (mLock) {
             return IHostapdVendor.getService();
         }
+    }
+
+    @VisibleForTesting
+    protected vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor getHostapdVendorMockableV1_1()
+            throws RemoteException {
+        synchronized (mLock) {
+            try {
+                return vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.castFrom(mIHostapdVendor);
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "Failed to get IHostapdVendorV1_1", e);
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Convert channel list string like '1-6,11' to list of AcsChannelRanges
+     */
+    private List<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange>
+            toVendorAcsChannelRanges(String channelListStr) {
+        ArrayList<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange> acsChannelRanges =
+                new ArrayList<>();
+        String[] channelRanges = channelListStr.split(",");
+        for (String channelRange : channelRanges) {
+            vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange acsChannelRange =
+                    new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange();
+            try {
+                if (channelRange.contains("-")) {
+                    String[] channels  = channelRange.split("-");
+                    if (channels.length != 2) {
+                        Log.e(TAG, "Unrecognized channel range, length is " + channels.length);
+                        continue;
+                    }
+                    int start = Integer.parseInt(channels[0]);
+                    int end = Integer.parseInt(channels[1]);
+                    if (start > end) {
+                        Log.e(TAG, "Invalid channel range, from " + start + " to " + end);
+                        continue;
+                    }
+                    acsChannelRange.start = start;
+                    acsChannelRange.end = end;
+                } else {
+                    acsChannelRange.start = Integer.parseInt(channelRange);
+                    acsChannelRange.end = acsChannelRange.start;
+                }
+            } catch (NumberFormatException e) {
+                // Ignore malformed value
+                Log.e(TAG, "Malformed channel value detected: " + e);
+                continue;
+            }
+            acsChannelRanges.add(acsChannelRange);
+        }
+        return acsChannelRanges;
     }
 
     /**
@@ -936,6 +1058,83 @@ public class HostapdHal {
             if (service == null) return false;
             try {
                 HostapdStatus status =  service.registerVendorCallback(ifaceName, callback);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    private class HostapdVendorIfaceHalCallbackV1_1 extends
+            vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendorIfaceCallback.Stub {
+        private SoftApListener mSoftApListener;
+
+        HostapdVendorIfaceHalCallbackV1_1(@NonNull String ifaceName, SoftApListener listener) {
+           mSoftApListener = listener;
+        }
+
+        @Override
+        public void onStaConnected(byte[/* 6 */] bssid) {
+                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
+                mSoftApListener.onStaConnected(bssidStr);
+        }
+
+        @Override
+        public void onStaDisconnected(byte[/* 6 */] bssid) {
+                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
+                mSoftApListener.onStaDisconnected(bssidStr);
+        }
+        @Override
+        public void onFailure(String ifaceName) {
+            Log.w(TAG, "Failure on iface " + ifaceName);
+            mSoftApListener.onFailure();
+        }
+    }
+
+    private boolean registerVendorCallback_1_1(@NonNull String ifaceName,
+            vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendorIfaceCallback callback) {
+        synchronized (mLock) {
+            String methodStr = "registerVendorCallback_1_1";
+            try {
+                vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor iHostapdVendorV1_1 =
+                    getHostapdVendorMockableV1_1();
+                if (iHostapdVendorV1_1 == null) return false;
+                HostapdStatus status =  iHostapdVendorV1_1.registerVendorCallback_1_1(
+                    ifaceName, callback);
+                return checkVendorStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Set the debug log level for hostapd
+     *
+     * @param turnOnVerbose Whether to turn on verbose logging or not.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean setLogLevel(boolean turnOnVerbose) {
+        synchronized (mLock) {
+            if (!isVendorV1_1()) return false;
+            int logLevel = turnOnVerbose
+                    ? vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.DebugLevel.DEBUG
+                    : vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.DebugLevel.INFO;
+            return setDebugParams(logLevel, false, false);
+        }
+    }
+
+    /** See IHostapdVendor.hal for documentation */
+    private boolean setDebugParams(int level, boolean showTimestamp, boolean showKeys) {
+        synchronized (mLock) {
+            final String methodStr = "setDebugParams";
+            try {
+                vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor iHostapdVendorV1_1 =
+                    getHostapdVendorMockableV1_1();
+                if (iHostapdVendorV1_1 == null) return false;
+                HostapdStatus status =  iHostapdVendorV1_1.setDebugParams(level, false, false);
                 return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
