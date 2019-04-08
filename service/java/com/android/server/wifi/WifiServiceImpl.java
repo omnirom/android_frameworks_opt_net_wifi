@@ -725,6 +725,8 @@ public class WifiServiceImpl extends BaseWifiService {
                 return false;
             }
         } catch (SecurityException e) {
+            Slog.e(TAG, "Permission violation - startScan not allowed for"
+                    + " uid=" + callingUid + ", packageName=" + packageName + ", reason=" + e);
             return false;
         } finally {
             Binder.restoreCallingIdentity(ident);
@@ -2402,6 +2404,8 @@ public class WifiServiceImpl extends BaseWifiService {
             }
             return scanResults;
         } catch (SecurityException e) {
+            Slog.e(TAG, "Permission violation - getScanResults not allowed for uid="
+                    + uid + ", packageName=" + callingPackage + ", reason=" + e);
             return new ArrayList<ScanResult>();
         } finally {
             Binder.restoreCallingIdentity(ident);
