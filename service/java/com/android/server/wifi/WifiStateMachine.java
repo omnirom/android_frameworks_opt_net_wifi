@@ -1888,6 +1888,11 @@ public class WifiStateMachine extends StateMachine {
         }
     }
 
+    // set Latency level
+    public boolean setLatencyLevel(int level) {
+       return mWifiNative.setLatencyLevel(mInterfaceName, level);
+    }
+
     /**
      * Enable TDLS for a specific MAC address
      */

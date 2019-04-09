@@ -3128,6 +3128,22 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         return mWifiStateMachine.syncDppConfiguratorGetKey(mWifiStateMachineChannel, id);
     }
 
+    /**
+     * Set Latency level
+     *
+     * @return 0 if request was success else -1 on failure.
+     */
+    @Override
+    public int setLatencyLevel(int level, String packageName) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return -1;
+        }
+        mLog.info("setLatencyLevel uid=% level=%")
+                .c(Binder.getCallingUid())
+                .c(level).flush();
+        return mWifiStateMachine.setLatencyLevel(level) ? 0 : -1;
+    }
+
     private WifiConfiguration setDualSapMode(WifiConfiguration apConfig) {
         WifiConfiguration newApConfig;
         boolean bandUpdated = false;
