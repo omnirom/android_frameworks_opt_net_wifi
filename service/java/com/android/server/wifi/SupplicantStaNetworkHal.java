@@ -414,24 +414,12 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, "failed to set Group Cipher");
                 return false;
             }
-            /** Vendor Group Cipher */
-            if (config.allowedGroupCiphers.cardinality() != 0
-                    && (!setVendorGroupCipher(wifiConfigurationToSupplicantVendorGroupCipherMask(
-                    config.allowedGroupCiphers)))) {
-                Log.e(TAG, "failed to set Vendor Group Cipher");
-            }
             /** Pairwise Cipher*/
             if (config.allowedPairwiseCiphers.cardinality() != 0
                     && !setPairwiseCipher(wifiConfigurationToSupplicantPairwiseCipherMask(
                     config.allowedPairwiseCiphers))) {
                 Log.e(TAG, "failed to set PairwiseCipher");
                 return false;
-            }
-            /** Vendor Pairwise Cipher */
-            if (config.allowedPairwiseCiphers.cardinality() != 0
-                    && (!setVendorPairwiseCipher(wifiConfigurationToSupplicantVendorPairwiseCipherMask(
-                    config.allowedPairwiseCiphers)))) {
-                Log.e(TAG, "failed to set Vendor Group Cipher");
             }
             /** metadata: FQDN + ConfigKey + CreatorUid */
             final Map<String, String> metadata = new HashMap<String, String>();
@@ -878,17 +866,10 @@ public class SupplicantStaNetworkHal {
                 case WifiConfiguration.KeyMgmt.DPP:
                     mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.DPP;
                     break;
-                case WifiConfiguration.KeyMgmt.OWE:
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.OWE;
-                    break;
+                case WifiConfiguration.KeyMgmt.OWE: //This is now supported with V1_2.ISupplicantStaNetwork.KeyMgmtMask
                 case WifiConfiguration.KeyMgmt.SAE:
-                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: SAE: " + WifiConfiguration.KeyMgmt.SAE);
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.SAE;
-                    break;
                 case WifiConfiguration.KeyMgmt.SUITE_B_192:
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.IEEE8021X_SUITEB_192;
                     break;
-                case WifiConfiguration.KeyMgmt.WPA2_PSK: // This should never happen
                 default:
                     Log.e(TAG, "Invalid VendorKeyMgmtMask bit in keyMgmt: " + bit);
             }
@@ -1011,40 +992,6 @@ public class SupplicantStaNetworkHal {
         return mask;
     }
 
-    private static int wifiConfigurationToSupplicantVendorGroupCipherMask(BitSet groupCipherMask) {
-        int mask = 0;
-        for (int bit = groupCipherMask.nextSetBit(0); bit != -1; bit =
-                groupCipherMask.nextSetBit(bit + 1)) {
-            switch (bit) {
-                case WifiConfiguration.GroupCipher.GCMP_256:
-                    mask |= ISupplicantVendorStaNetwork.VendorGroupCipherMask.GCMP_256;
-                    break;
-                default:
-                    Log.e(TAG, "Invalid VendorGroupCipherMask bit in wificonfig:: " + bit);
-            }
-        }
-        return mask;
-    };
-
-    private static int wifiConfigurationToSupplicantVendorGroupMgmtCipherMask(BitSet groupMgmtCipherMask) {
-        int mask = 0;
-        for (int bit = groupMgmtCipherMask.nextSetBit(0); bit != -1; bit =
-                groupMgmtCipherMask.nextSetBit(bit + 1)) {
-            switch (bit) {
-                case WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256:
-                    mask |= ISupplicantVendorStaNetwork.VendorGroupMgmtCipherMask.BIP_CMAC_256;
-                    break;
-                case WifiConfiguration.GroupMgmtCipher.BIP_GMAC_256:
-                    mask |= ISupplicantVendorStaNetwork.VendorGroupMgmtCipherMask.BIP_GMAC_256;
-                    break;
-                default:
-                    throw new IllegalArgumentException(
-                            "Invalid GroupMgmtCipherMask bit in wificonfig: " + bit);
-            }
-        }
-        return mask;
-    };
-
     private static int wifiConfigurationToSupplicantPairwiseCipherMask(BitSet pairwiseCipherMask) {
         int mask = 0;
         for (int bit = pairwiseCipherMask.nextSetBit(0); bit != -1;
@@ -1070,21 +1017,6 @@ public class SupplicantStaNetworkHal {
         }
         return mask;
     }
-
-    private static int wifiConfigurationToSupplicantVendorPairwiseCipherMask(BitSet pairwiseCipherMask) {
-        int mask = 0;
-        for (int bit = pairwiseCipherMask.nextSetBit(0); bit != -1; bit =
-                pairwiseCipherMask.nextSetBit(bit + 1)) {
-            switch (bit) {
-                case WifiConfiguration.PairwiseCipher.GCMP_256:
-                    mask |= ISupplicantVendorStaNetwork.VendorPairwiseCipherMask.GCMP_256;
-                    break;
-                default:
-                    Log.e(TAG, "Invalid VendorPairwiseCipherMask bit in wificonfig:: " + bit);
-            }
-        }
-        return mask;
-    };
 
     private static int supplicantToWifiConfigurationEapMethod(int value) {
         switch (value) {
@@ -1568,36 +1500,6 @@ public class SupplicantStaNetworkHal {
                             groupCipherMask);
                 }
                 return checkStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-    /** See ISupplicantVendorStaNetwork.hal for documentation */
-    private boolean setVendorGroupCipher(int groupCipherMask) {
-        synchronized (mLock) {
-            final String methodStr = "setVendorGroupCipher";
-            Log.e(TAG, "Vendor group cipher " + groupCipherMask);
-            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
-            try {
-                SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorGroupCipher(groupCipherMask);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-    /** See ISupplicantVendorStaNetwork.hal for documentation */
-    private boolean setVendorPairwiseCipher(int pairwiseCipherMask) {
-        synchronized (mLock) {
-            final String methodStr = "setVendorPairwiseCipher";
-            Log.e(TAG, "Vendor Pairwise cipher " + pairwiseCipherMask);
-            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
-            try {
-                SupplicantStatus status =  mISupplicantVendorStaNetwork.setVendorPairwiseCipher(pairwiseCipherMask);
-                return checkVendorStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
