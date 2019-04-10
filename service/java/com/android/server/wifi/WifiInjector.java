@@ -199,7 +199,7 @@ public class WifiInjector {
         mWifiP2pNative = new WifiP2pNative(mSupplicantP2pIfaceHal, mHalDeviceManager);
 
         // Now get instances of all the objects that depend on the HandlerThreads
-        mTrafficPoller = new WifiTrafficPoller(mContext, mWifiServiceHandlerThread.getLooper(),
+        mTrafficPoller = new WifiTrafficPoller(mContext, mWifiStateMachineHandlerThread.getLooper(),
                 mWifiNative);
         mCountryCode = new WifiCountryCode(mContext, mWifiNative,
                 SystemProperties.get(BOOT_DEFAULT_WIFI_COUNTRY_CODE),
