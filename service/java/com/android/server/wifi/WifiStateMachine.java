@@ -4467,8 +4467,14 @@ public class WifiStateMachine extends StateMachine {
                                 // TODO(b/36576642): clear addresses and disable IPv6
                                 // to simplify obtainingIpState.
                                 mWifiNative.disconnect(mInterfaceName);
-                                handleNetworkDisconnect();
-                                startConnectToNetwork(netId,message.sendingUid, SUPPLICANT_BSSID_ANY);
+                                transitionTo(mDisconnectingState);
+                                // reconnect to the same network
+                                if (mWifiNative.reconnect(mInterfaceName)) {
+                                    log("Reconnecting after IP reconfiguration");
+                                } else {
+                                    loge("Failed to reconnect after IP reconfiguration");
+                                    // we will transition to disconnected state by previous code
+                                }
                             }
                         }
                     }
