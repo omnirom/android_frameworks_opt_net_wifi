@@ -476,6 +476,59 @@ public class WifiServiceImplTest {
     }
 
     /**
+     * Verify that metrics is incremented correctly for Privileged Apps.
+     */
+    @Test
+    public void testSetWifiEnabledMetricsPrivilegedApp() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mSettingsStore.handleWifiToggled(anyBoolean())).thenReturn(true);
+        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
+
+        InOrder inorder = inOrder(mWifiMetrics);
+        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
+        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
+        inorder.verify(mWifiMetrics).incrementNumWifiToggles(eq(true), eq(true));
+        inorder.verify(mWifiMetrics).incrementNumWifiToggles(eq(true), eq(false));
+    }
+
+    /**
+     * Verify that metrics is incremented correctly for normal Apps targeting pre-Q.
+     */
+    @Test
+    public void testSetWifiEnabledMetricsNormalAppBelowQSDK() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.Q))).thenReturn(true);
+        when(mSettingsStore.handleWifiToggled(anyBoolean())).thenReturn(true);
+        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
+
+        InOrder inorder = inOrder(mWifiMetrics);
+        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
+        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
+        inorder.verify(mWifiMetrics).incrementNumWifiToggles(eq(false), eq(true));
+        inorder.verify(mWifiMetrics).incrementNumWifiToggles(eq(false), eq(false));
+    }
+
+    /**
+     * Verify that metrics is not incremented by apps targeting Q SDK.
+     */
+    @Test
+    public void testSetWifiEnabledMetricsNormalAppTargetingQSDKNoIncrement() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.Q))).thenReturn(false);
+        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
+        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
+
+        assertFalse(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
+        assertFalse(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
+        verify(mWifiMetrics, never()).incrementNumWifiToggles(anyBoolean(), anyBoolean());
+    }
+
+    /**
      * Verify that wifi can be enabled by a caller with NETWORK_SETTINGS permission.
      */
     @Test
@@ -2705,28 +2758,31 @@ public class WifiServiceImplTest {
 
     /**
      * Verify that the call to removePasspointConfiguration is not redirected to specific API
-     * syncRemovePasspointConfig when the caller doesn't have NETWORK_SETTINGS permission.
+     * syncRemovePasspointConfig when the caller doesn't have NETWORK_SETTINGS and
+     * NETWORK_CARRIER_PROVISIONING permission.
      */
     @Test(expected = SecurityException.class)
     public void testRemovePasspointConfigurationWithOutPermissions() {
-        when(mContext.checkCallingOrSelfPermission(
-                eq(android.Manifest.permission.NETWORK_SETTINGS))).thenReturn(
-                PackageManager.PERMISSION_DENIED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(anyInt())).thenReturn(
+                false);
 
         mWifiServiceImpl.removePasspointConfiguration(null, null);
     }
 
     /**
      * Verify that the call to removePasspointConfiguration for apps targeting below Q SDK will
-     * return false if the caller doesn't have NETWORK_SETTINGS permission.
+     * return false if the caller doesn't have NETWORK_SETTINGS and NETWORK_CARRIER_PROVISIONING
+     * permission.
      */
     @Test
     public void testRemovePasspointConfigurationForAppsTargetingBelowQSDK() {
-        when(mContext.checkCallingOrSelfPermission(
-                eq(android.Manifest.permission.NETWORK_SETTINGS))).thenReturn(
-                PackageManager.PERMISSION_DENIED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(anyInt())).thenReturn(
+                false);
         when(mWifiPermissionsUtil.isTargetSdkLessThan(isNull(),
                 eq(Build.VERSION_CODES.Q))).thenReturn(true);
+
         assertFalse(mWifiServiceImpl.removePasspointConfiguration(null, null));
     }
 
@@ -3505,6 +3561,7 @@ public class WifiServiceImplTest {
 
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         final String fqdn = "example.com";
         WifiConfiguration network = WifiConfigurationTestUtil.createOpenNetwork();
         PasspointConfiguration config = new PasspointConfiguration();
@@ -3586,6 +3643,7 @@ public class WifiServiceImplTest {
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl, never()).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics, never()).incrementNumAddOrUpdateNetworkCalls();
     }
 
     /**
@@ -3605,6 +3663,7 @@ public class WifiServiceImplTest {
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }
 
     /**
@@ -3627,6 +3686,7 @@ public class WifiServiceImplTest {
         verify(mAppOpsManager, never()).noteOp(
                 AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }
 
     /**
@@ -3645,6 +3705,7 @@ public class WifiServiceImplTest {
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }
 
     /**
@@ -3669,6 +3730,7 @@ public class WifiServiceImplTest {
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }
 
     /**
@@ -3689,6 +3751,7 @@ public class WifiServiceImplTest {
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }
 
     /**
@@ -3709,6 +3772,58 @@ public class WifiServiceImplTest {
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
+    }
+
+    /**
+     * Verify that enableNetwork is allowed for privileged Apps
+     */
+    @Test
+    public void testEnableNetworkAllowedForPrivilegedApps() throws Exception {
+        mLooper.dispatchAll();
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+
+        mWifiServiceImpl.enableNetwork(TEST_NETWORK_ID, true, TEST_PACKAGE_NAME);
+
+        verify(mClientModeImpl).syncEnableNetwork(eq(mAsyncChannel), eq(TEST_NETWORK_ID),
+                eq(true));
+        verify(mWifiMetrics).incrementNumEnableNetworkCalls();
+    }
+
+    /**
+     * Verify that enableNetwork is allowed for Apps targeting a SDK version less than Q
+     */
+    @Test
+    public void testEnabledNetworkAllowedForAppsTargetingLessThanQ() throws Exception {
+        mLooper.dispatchAll();
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.Q))).thenReturn(true);
+
+        mWifiServiceImpl.enableNetwork(TEST_NETWORK_ID, true, TEST_PACKAGE_NAME);
+
+        verify(mClientModeImpl).syncEnableNetwork(eq(mAsyncChannel), eq(TEST_NETWORK_ID),
+                eq(true));
+        verify(mWifiMetrics).incrementNumEnableNetworkCalls();
+    }
+
+    /**
+     * Verify that enableNetwork is not allowed for Apps targeting Q SDK
+     */
+    @Test
+    public void testEnableNetworkNotAllowedForAppsTargetingQ() throws Exception {
+        mLooper.dispatchAll();
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+
+        mWifiServiceImpl.enableNetwork(TEST_NETWORK_ID, true, TEST_PACKAGE_NAME);
+
+        verify(mClientModeImpl, never()).syncEnableNetwork(anyObject(), anyInt(), anyBoolean());
+        verify(mWifiMetrics, never()).incrementNumEnableNetworkCalls();
     }
 
     /**
