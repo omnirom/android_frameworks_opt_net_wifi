@@ -795,12 +795,10 @@ public class WifiController extends StateMachine {
                      deferMessage(msg);
                      break;
                 case CMD_DELAY_DISCONNECT:
-                    if (! mSettingsStore.isWifiToggleEnabled()) {
-                        if (checkScanOnlyModeAvailable()) {
-                            transitionTo(mStaDisabledWithScanState);
-                        } else {
-                            transitionTo(mStaDisabledState);
-                        }
+                    if (! mSettingsStore.isWifiToggleEnabled() && checkScanOnlyModeAvailable()) {
+                        transitionTo(mStaDisabledWithScanState);
+                    } else {
+                        transitionTo(mStaDisabledState);
                     }
                     break;
                 default:
