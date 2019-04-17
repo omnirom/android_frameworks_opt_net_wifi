@@ -546,7 +546,6 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
                 final ProvisioningConfiguration config =
                         new ProvisioningConfiguration.Builder()
-                                .withoutIPv6()
                                 .withoutIpReachabilityMonitor()
                                 .withPreDhcpAction(30 * 1000)
                                 .withProvisioningTimeoutMs(36 * 1000)

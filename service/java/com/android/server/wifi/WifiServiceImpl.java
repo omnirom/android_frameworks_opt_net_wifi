@@ -988,6 +988,7 @@ public class WifiServiceImpl extends BaseWifiService {
             return false;
         }
 
+        mWifiMetrics.incrementNumWifiToggles(isPrivileged, enable);
         mWifiController.sendMessage(CMD_WIFI_TOGGLED);
         return true;
     }
@@ -2179,6 +2180,12 @@ public class WifiServiceImpl extends BaseWifiService {
         }
         mLog.info("addOrUpdateNetwork uid=%").c(Binder.getCallingUid()).flush();
 
+        if (config == null) {
+            Slog.e(TAG, "bad network configuration");
+            return -1;
+        }
+        mWifiMetrics.incrementNumAddOrUpdateNetworkCalls();
+
         // Previously, this API is overloaded for installing Passpoint profiles.  Now
         // that we have a dedicated API for doing it, redirect the call to the dedicated API.
         if (config.isPasspoint()) {
@@ -2208,24 +2215,19 @@ public class WifiServiceImpl extends BaseWifiService {
             return 0;
         }
 
-        if (config != null) {
-            //TODO: pass the Uid the ClientModeImpl as a message parameter
-            Slog.i("addOrUpdateNetwork", " uid = " + Integer.toString(Binder.getCallingUid())
-                    + " SSID " + config.SSID
-                    + " nid=" + Integer.toString(config.networkId));
-            if (config.networkId == WifiConfiguration.INVALID_NETWORK_ID) {
-                config.creatorUid = Binder.getCallingUid();
-            } else {
-                config.lastUpdateUid = Binder.getCallingUid();
-            }
-            if (mClientModeImplChannel != null) {
-                return mClientModeImpl.syncAddOrUpdateNetwork(mClientModeImplChannel, config);
-            } else {
-                Slog.e(TAG, "mClientModeImplChannel is not initialized");
-                return -1;
-            }
+        //TODO: pass the Uid the ClientModeImpl as a message parameter
+        Slog.i("addOrUpdateNetwork", " uid = " + Integer.toString(Binder.getCallingUid())
+                + " SSID " + config.SSID
+                + " nid=" + Integer.toString(config.networkId));
+        if (config.networkId == WifiConfiguration.INVALID_NETWORK_ID) {
+            config.creatorUid = Binder.getCallingUid();
         } else {
-            Slog.e(TAG, "bad network configuration");
+            config.lastUpdateUid = Binder.getCallingUid();
+        }
+        if (mClientModeImplChannel != null) {
+            return mClientModeImpl.syncAddOrUpdateNetwork(mClientModeImplChannel, config);
+        } else {
+            Slog.e(TAG, "mClientModeImplChannel is not initialized");
             return -1;
         }
     }
@@ -2294,6 +2296,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(Binder.getCallingUid())
                 .c(disableOthers).flush();
 
+        mWifiMetrics.incrementNumEnableNetworkCalls();
         if (mClientModeImplChannel != null) {
             return mClientModeImpl.syncEnableNetwork(mClientModeImplChannel, netId,
                     disableOthers);
@@ -2441,8 +2444,9 @@ public class WifiServiceImpl extends BaseWifiService {
      */
     @Override
     public boolean removePasspointConfiguration(String fqdn, String packageName) {
-        if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
-                != PERMISSION_GRANTED) {
+        final int uid = Binder.getCallingUid();
+        if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)
+                && !mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(uid)) {
             if (mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)) {
                 return false;
             }
@@ -2951,25 +2955,47 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("acquireWifiLock uid=% lockMode=%")
                 .c(Binder.getCallingUid())
                 .c(lockMode).flush();
-        if (mWifiLockManager.acquireWifiLock(lockMode, tag, binder, ws)) {
-            return true;
+
+        Mutable<Boolean> lockSuccess = new Mutable<>();
+        boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
+                () -> {
+                    lockSuccess.value = mWifiLockManager.acquireWifiLock(lockMode, tag, binder, ws);
+                }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
+        if (!runWithScissorsSuccess) {
+            Log.e(TAG, "Failed to post runnable to acquireWifiLock");
+            return false;
         }
-        return false;
+
+        return lockSuccess.value;
     }
 
     @Override
     public void updateWifiLockWorkSource(IBinder binder, WorkSource ws) {
         mLog.info("updateWifiLockWorkSource uid=%").c(Binder.getCallingUid()).flush();
-        mWifiLockManager.updateWifiLockWorkSource(binder, ws);
+
+        boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
+                () -> {
+                    mWifiLockManager.updateWifiLockWorkSource(binder, ws);
+                }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
+        if (!runWithScissorsSuccess) {
+            Log.e(TAG, "Failed to post runnable to updateWifiLockWorkSource");
+        }
     }
 
     @Override
     public boolean releaseWifiLock(IBinder binder) {
         mLog.info("releaseWifiLock uid=%").c(Binder.getCallingUid()).flush();
-        if (mWifiLockManager.releaseWifiLock(binder)) {
-            return true;
+
+        Mutable<Boolean> lockSuccess = new Mutable<>();
+        boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
+                () -> {
+                    lockSuccess.value = mWifiLockManager.releaseWifiLock(binder);
+                }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
+        if (!runWithScissorsSuccess) {
+            Log.e(TAG, "Failed to post runnable to releaseWifiLock");
+            return false;
         }
-        return false;
+        return lockSuccess.value;
     }
 
     @Override
