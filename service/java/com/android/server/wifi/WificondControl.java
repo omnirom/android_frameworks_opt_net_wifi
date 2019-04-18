@@ -789,9 +789,10 @@ public class WificondControl implements IBinder.DeathRecipient {
                     PnoNetwork condNetwork2 = new PnoNetwork();
                     condNetwork2.isHidden = condNetwork.isHidden;
                     condNetwork2.ssid = WifiGbk.toGbk(condNetwork.ssid);
+                    condNetwork2.frequencies = condNetwork.frequencies;
                     if (condNetwork2.ssid != null) {
                         settings.pnoNetworks.add(condNetwork2);
-                        Log.i(TAG, "WifiGbk - pnoScan add extra Gbk ssid for " + network.ssid);
+                        Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for " + network.ssid);
                     }
                 }
                 //wifigbk--
