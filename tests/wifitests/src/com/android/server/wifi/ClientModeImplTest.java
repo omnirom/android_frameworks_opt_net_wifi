@@ -496,6 +496,7 @@ public class ClientModeImplTest {
         mOsuProvider = PasspointProvisioningTestUtil.generateOsuProvider(true);
         mConnectedNetwork = spy(WifiConfigurationTestUtil.createOpenNetwork());
         when(mNullAsyncChannel.sendMessageSynchronously(any())).thenReturn(null);
+        when(mWifiScoreCard.getL2KeyAndGroupHint(any())).thenReturn(new Pair<>(null, null));
     }
 
     private void registerAsyncChannel(Consumer<AsyncChannel> consumer, Messenger messenger) {
@@ -1024,8 +1025,7 @@ public class ClientModeImplTest {
         triggerConnect();
 
         when(mCarrierNetworkConfig.isCarrierEncryptionInfoAvailable()).thenReturn(true);
-        when(mCarrierNetworkConfig.getEapIdentitySequence()).thenReturn(
-                CarrierNetworkConfig.IDENTITY_SEQUENCE_ANONYMOUS_THEN_IMSI);
+        when(mCarrierNetworkConfig.isSupportAnonymousIdentity()).thenReturn(true);
         when(mWifiConfigManager.getScanDetailCacheForNetwork(FRAMEWORK_NETWORK_ID))
                 .thenReturn(mScanDetailCache);
 
@@ -2818,9 +2818,12 @@ public class ClientModeImplTest {
      */
     @Test
     public void testScoreCardNoteConnectionComplete() throws Exception {
+        Pair<String, String> l2KeyAndGroupHint = Pair.create("Wad", "Gab");
+        when(mWifiScoreCard.getL2KeyAndGroupHint(any())).thenReturn(l2KeyAndGroupHint);
         connect();
         mLooper.dispatchAll();
         verify(mWifiScoreCard).noteIpConfiguration(any());
+        verify(mIpClient).setL2KeyAndGroupHint(eq("Wad"), eq("Gab"));
     }
 
     /**
@@ -3271,7 +3274,8 @@ public class ClientModeImplTest {
 
         connect();
         // reset() should be called when RSSI polling is enabled and entering L2ConnectedState
-        verify(mLinkProbeManager).reset();
+        verify(mLinkProbeManager).resetOnNewConnection(); // called first time here
+        verify(mLinkProbeManager, never()).resetOnScreenTurnedOn(); // not called
         verify(mLinkProbeManager).updateConnectionStats(any(), any());
 
         mCmi.enableRssiPolling(false);
@@ -3280,7 +3284,8 @@ public class ClientModeImplTest {
         // becomes enabled
         mCmi.enableRssiPolling(true);
         mLooper.dispatchAll();
-        verify(mLinkProbeManager, times(2)).reset();
+        verify(mLinkProbeManager, times(1)).resetOnNewConnection(); // verify not called again
+        verify(mLinkProbeManager).resetOnScreenTurnedOn(); // verify called here
     }
 
     /**

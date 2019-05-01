@@ -2953,10 +2953,18 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(Binder.getCallingUid())
                 .c(lockMode).flush();
 
+        // Check on permission to make this call
+        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.WAKE_LOCK, null);
+
+        // If no UID is provided in worksource, use the calling UID
+        WorkSource updatedWs = (ws == null || ws.isEmpty())
+                ? new WorkSource(Binder.getCallingUid()) : ws;
+
         Mutable<Boolean> lockSuccess = new Mutable<>();
         boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
                 () -> {
-                    lockSuccess.value = mWifiLockManager.acquireWifiLock(lockMode, tag, binder, ws);
+                    lockSuccess.value = mWifiLockManager.acquireWifiLock(
+                            lockMode, tag, binder, updatedWs);
                 }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
         if (!runWithScissorsSuccess) {
             Log.e(TAG, "Failed to post runnable to acquireWifiLock");
@@ -2970,9 +2978,17 @@ public class WifiServiceImpl extends BaseWifiService {
     public void updateWifiLockWorkSource(IBinder binder, WorkSource ws) {
         mLog.info("updateWifiLockWorkSource uid=%").c(Binder.getCallingUid()).flush();
 
+        // Check on permission to make this call
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.UPDATE_DEVICE_STATS, null);
+
+        // If no UID is provided in worksource, use the calling UID
+        WorkSource updatedWs = (ws == null || ws.isEmpty())
+                ? new WorkSource(Binder.getCallingUid()) : ws;
+
         boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
                 () -> {
-                    mWifiLockManager.updateWifiLockWorkSource(binder, ws);
+                    mWifiLockManager.updateWifiLockWorkSource(binder, updatedWs);
                 }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
         if (!runWithScissorsSuccess) {
             Log.e(TAG, "Failed to post runnable to updateWifiLockWorkSource");
@@ -2983,6 +2999,8 @@ public class WifiServiceImpl extends BaseWifiService {
     public boolean releaseWifiLock(IBinder binder) {
         mLog.info("releaseWifiLock uid=%").c(Binder.getCallingUid()).flush();
 
+        // Check on permission to make this call
+        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.WAKE_LOCK, null);
         Mutable<Boolean> lockSuccess = new Mutable<>();
         boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
                 () -> {
