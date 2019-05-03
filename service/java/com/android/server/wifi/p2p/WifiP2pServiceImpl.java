@@ -778,8 +778,6 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         private final WifiP2pInfo mWifiP2pInfo = new WifiP2pInfo();
         private WifiP2pGroup mGroup;
         private boolean mIsBTCoexDisabled = false;
-        // Is the P2P interface available for use.
-        private boolean mIsInterfaceAvailable = false;
         // Is the HAL (HIDL) interface available for use.
         private boolean mIsHalInterfaceAvailable = false;
         // Is wifi on or off.
@@ -1431,7 +1429,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             break;
                         }
                         mInterfaceName = mWifiNative.setupInterface((String ifaceName) -> {
-                            mIsInterfaceAvailable = false;
+                            mIsHalInterfaceAvailable = false;
                             sendMessage(DISABLE_P2P);
                             checkAndSendP2pStateChangedBroadcast();
                         }, getHandler());
