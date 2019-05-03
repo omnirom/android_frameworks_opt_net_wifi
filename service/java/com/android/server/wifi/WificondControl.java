@@ -271,6 +271,16 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
+    * Disable hostapd via Property Service.
+    */
+    public void disableHostapd() {
+        Log.i(TAG, "Terminate hostapd/hostapd_fst service if the service is running");
+        mWifiInjector.getPropertyService().set("ctl.stop", "hostapd");
+        mWifiInjector.getPropertyService().set("ctl.stop", "hostapd_fst");
+    }
+
+
+    /**
      * Initializes wificond & registers a death notification for wificond.
      * This method clears any existing state in wificond daemon.
      *
@@ -281,6 +291,8 @@ public class WificondControl implements IBinder.DeathRecipient {
             Log.e(TAG, "Death handler already present");
         }
         mDeathEventHandler = handler;
+        Log.i(TAG, "Make sure hostapd service is stopped to avoid failure on first SoftAP start");
+        disableHostapd();
         tearDownInterfaces();
         return true;
     }
