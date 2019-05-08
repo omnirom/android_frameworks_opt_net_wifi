@@ -514,7 +514,7 @@ public class InformationElementUtil {
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_OWE);
                             break;
                         case WPA2_AKM_DPP:
-                            rsnKeyManagement.add(ScanResult.KEY_MGMT_EAP_SUITE_B_192);
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_DPP);
                             break;
                         case WPA2_AKM_SAE:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_SAE);
@@ -784,6 +784,8 @@ public class InformationElementUtil {
                     return "SAE";
                 case ScanResult.KEY_MGMT_EAP_SUITE_B_192:
                     return "EAP_SUITE_B_192";
+                case ScanResult.KEY_MGMT_DPP:
+                    return "DPP";
                 default:
                     return "?";
             }
