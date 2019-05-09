@@ -61,6 +61,7 @@ public class WifiNetworkSelector {
     private final int mStayOnNetworkMinimumTxRate;
     private final int mStayOnNetworkMinimumRxRate;
     private final boolean mEnableAutoJoinWhenAssociated;
+    private final boolean mWpa3Support;
 
     /**
      * WiFi Network Selector supports various types of networks. Each type can
@@ -350,6 +351,9 @@ public class WifiNetworkSelector {
                 continue;
             }
 
+            if (!mWpa3Support && ScanResultUtil.isScanResultForOweNetwork(scanResult))
+                continue;
+
             // Skip saved networks
             if (mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail) != null) {
                 continue;
@@ -612,5 +616,7 @@ public class WifiNetworkSelector {
                 R.integer.config_wifi_framework_min_tx_rate_for_staying_on_network);
         mStayOnNetworkMinimumRxRate = context.getResources().getInteger(
                 R.integer.config_wifi_framework_min_rx_rate_for_staying_on_network);
+        mWpa3Support = context.getResources().getBoolean(
+                R.bool.config_wifi_wpa3_supported);
     }
 }

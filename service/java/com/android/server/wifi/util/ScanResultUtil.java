@@ -63,6 +63,14 @@ public class ScanResultUtil {
     }
 
     /**
+     * Helper method to check if the provided |scanResult| corresponds to a EAP network or not.
+     * This checks if the provided capabilities string contains EAP encryption type or not.
+     */
+    public static boolean isScanResultForEapSuiteBNetwork(ScanResult scanResult) {
+        return scanResult.capabilities.contains("SUITE_B_192");
+    }
+
+    /**
      * Helper method to check if the provided |scanResult| corresponds to a WEP network or not.
      * This checks if the provided capabilities string contains WEP encryption type or not.
      */
@@ -118,7 +126,8 @@ public class ScanResultUtil {
      */
     public static boolean isScanResultForOpenNetwork(ScanResult scanResult) {
         return !(isScanResultForWepNetwork(scanResult) || isScanResultForPskNetwork(scanResult)
-                || isScanResultForEapNetwork(scanResult));
+                || isScanResultForEapNetwork(scanResult) || isScanResultForSaeNetwork(scanResult)
+                || isScanResultForDppNetwork(scanResult) || isScanResultForEapSuiteBNetwork(scanResult));
     }
 
     /**
