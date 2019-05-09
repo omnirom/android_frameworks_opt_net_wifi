@@ -23,8 +23,6 @@ import static android.net.wifi.WifiManager.WIFI_STATE_ENABLED;
 import static android.net.wifi.WifiManager.WIFI_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_STATE_UNKNOWN;
 
-import static com.android.server.wifi.CarrierNetworkConfig.IDENTITY_SEQUENCE_ANONYMOUS_THEN_IMSI;
-
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
@@ -3022,6 +3020,7 @@ public class ClientModeImpl extends StateMachine {
             mWifiInfo.setBSSID(null);
             mWifiInfo.setSSID(null);
         }
+        updateL2KeyAndGroupHint();
         // SSID might have been updated, so call updateCapabilities
         updateCapabilities();
 
@@ -3066,6 +3065,25 @@ public class ClientModeImpl extends StateMachine {
           }
           return null;
     }
+
+    /**
+     * Tells IpClient what L2Key and GroupHint to use for IpMemoryStore.
+     */
+    private void updateL2KeyAndGroupHint() {
+        if (mIpClient != null) {
+            Pair<String, String> p = mWifiScoreCard.getL2KeyAndGroupHint(mWifiInfo);
+            if (!p.equals(mLastL2KeyAndGroupHint)) {
+                try {
+                    mIpClient.setL2KeyAndGroupHint(p.first, p.second);
+                    mLastL2KeyAndGroupHint = p;
+                } catch (RemoteException e) {
+                    loge("Failed setL2KeyAndGroupHint");
+                    mLastL2KeyAndGroupHint = null;
+                }
+            }
+        }
+    }
+    private @Nullable Pair<String, String> mLastL2KeyAndGroupHint = null;
 
     /**
      * Resets the Wi-Fi Connections by clearing any state, resetting any sockets
@@ -3123,6 +3141,7 @@ public class ClientModeImpl extends StateMachine {
         registerDisconnected();
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
         mWifiScoreCard.resetConnectionState();
+        updateL2KeyAndGroupHint();
     }
 
     void handlePreDhcpSetup() {
@@ -4655,9 +4674,8 @@ public class ClientModeImpl extends StateMachine {
                             } else {
                                 CarrierNetworkConfig carrierNetworkConfig =
                                         mWifiInjector.getCarrierNetworkConfig();
-                                if (carrierNetworkConfig.isCarrierEncryptionInfoAvailable() && (
-                                        carrierNetworkConfig.getEapIdentitySequence()
-                                                == IDENTITY_SEQUENCE_ANONYMOUS_THEN_IMSI)) {
+                                if (carrierNetworkConfig.isCarrierEncryptionInfoAvailable()
+                                        && carrierNetworkConfig.isSupportAnonymousIdentity()) {
                                     // In case of a carrier supporting encrypted IMSI and
                                     // anonymous identity, we need to send anonymous@realm as
                                     // EAP-IDENTITY response.
@@ -5185,7 +5203,7 @@ public class ClientModeImpl extends StateMachine {
         public void enter() {
             mRssiPollToken++;
             if (mEnableRssiPolling) {
-                mLinkProbeManager.reset();
+                mLinkProbeManager.resetOnNewConnection();
                 sendMessage(CMD_RSSI_POLL, mRssiPollToken, 0);
             }
             if (mNetworkAgent != null) {
@@ -5416,7 +5434,7 @@ public class ClientModeImpl extends StateMachine {
                     if (mEnableRssiPolling) {
                         // First poll
                         mLastSignalLevel = -1;
-                        mLinkProbeManager.reset();
+                        mLinkProbeManager.resetOnScreenTurnedOn();
                         fetchRssiLinkSpeedAndFrequencyNative();
                         sendMessageDelayed(obtainMessage(CMD_RSSI_POLL, mRssiPollToken, 0),
                                 mPollRssiIntervalMsecs);

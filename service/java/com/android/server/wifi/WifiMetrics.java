@@ -31,6 +31,7 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiUsabilityStatsEntry.ProbeStatus;
 import android.net.wifi.hotspot2.PasspointConfiguration;
+import android.net.wifi.hotspot2.ProvisioningCallback;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -59,9 +60,13 @@ import com.android.server.wifi.nano.WifiMetricsProto.ConnectToNetworkNotificatio
 import com.android.server.wifi.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
 import com.android.server.wifi.nano.WifiMetricsProto.ExperimentValues;
 import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats;
+import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats.ExperimentProbeCounts;
 import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats.LinkProbeFailureReasonCount;
 import com.android.server.wifi.nano.WifiMetricsProto.LinkSpeedCount;
 import com.android.server.wifi.nano.WifiMetricsProto.NetworkSelectionExperimentDecisions;
+import com.android.server.wifi.nano.WifiMetricsProto.PasspointProfileTypeCount;
+import com.android.server.wifi.nano.WifiMetricsProto.PasspointProvisionStats;
+import com.android.server.wifi.nano.WifiMetricsProto.PasspointProvisionStats.ProvisionFailureCount;
 import com.android.server.wifi.nano.WifiMetricsProto.PnoScanMetrics;
 import com.android.server.wifi.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
@@ -82,6 +87,7 @@ import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.IntCounter;
 import com.android.server.wifi.util.IntHistogram;
 import com.android.server.wifi.util.MetricsUtils;
+import com.android.server.wifi.util.ObjectCounter;
 import com.android.server.wifi.util.ScanResultUtil;
 
 import org.json.JSONArray;
@@ -273,7 +279,8 @@ public class WifiMetrics {
     private final SparseIntArray mAvailableSavedPasspointProviderBssidsInScanHistogram =
             new SparseIntArray();
 
-    private final SparseIntArray mInstalledPasspointProfileType = new SparseIntArray();
+    private final IntCounter mInstalledPasspointProfileTypeForR1 = new IntCounter();
+    private final IntCounter mInstalledPasspointProfileTypeForR2 = new IntCounter();
 
     /** Mapping of "Connect to Network" notifications to counts. */
     private final SparseIntArray mConnectToNetworkNotificationCount = new SparseIntArray();
@@ -315,6 +322,12 @@ public class WifiMetrics {
     private final IntHistogram mLinkProbeSuccessElapsedTimeMsHistogram = new IntHistogram(
             LINK_PROBE_ELAPSED_TIME_MS_HISTOGRAM_BUCKETS);
     private final IntCounter mLinkProbeFailureReasonCounts = new IntCounter();
+
+    /**
+     * Maps a String link probe experiment ID to the number of link probes that were sent for this
+     * experiment.
+     */
+    private final ObjectCounter<String> mLinkProbeExperimentProbeCounts = new ObjectCounter<>();
 
     private final LinkedList<WifiUsabilityStatsEntry> mWifiUsabilityStatsEntriesList =
             new LinkedList<>();
@@ -401,6 +414,12 @@ public class WifiMetrics {
      * This object should not be cleared.
      */
     private final SparseIntArray mNetworkIdToNominatorId = new SparseIntArray();
+
+    /** passpoint provision success count */
+    private int mNumProvisionSuccess = 0;
+
+    /** Mapping of failure code to the respective passpoint provision failure count. */
+    private final IntCounter mPasspointProvisionFailureCounts = new IntCounter();
 
     @VisibleForTesting
     static class NetworkSelectionExperimentResults {
@@ -2234,10 +2253,8 @@ public class WifiMetrics {
     public void logFirmwareAlert(int errorCode) {
         incrementAlertReasonCount(errorCode);
         logWifiIsUnusableEvent(WifiIsUnusableEvent.TYPE_FIRMWARE_ALERT, errorCode);
-        if (mScreenOn) {
-            addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
-                    WifiUsabilityStats.TYPE_FIRMWARE_ALERT, errorCode);
-        }
+        addToWifiUsabilityStatsList(WifiUsabilityStats.LABEL_BAD,
+                WifiUsabilityStats.TYPE_FIRMWARE_ALERT, errorCode);
     }
 
     public static final String PROTO_DUMP_ARG = "wifiMetricsProto";
@@ -2526,12 +2543,15 @@ public class WifiMetrics {
                 pw.println("mWifiLogProto.numPasspointProvidersSuccessfullyConnected="
                         + mWifiLogProto.numPasspointProvidersSuccessfullyConnected);
 
-                pw.println("mWifiLogProto.installedPasspointProfileType: ");
-                for (int i = 0; i < mInstalledPasspointProfileType.size(); i++) {
-                    int eapType = mInstalledPasspointProfileType.keyAt(i);
-                    pw.println("EAP_METHOD (" + eapType + "): "
-                            + mInstalledPasspointProfileType.valueAt(i));
-                }
+                pw.println("mWifiLogProto.installedPasspointProfileTypeForR1:"
+                        + mInstalledPasspointProfileTypeForR1);
+                pw.println("mWifiLogProto.installedPasspointProfileTypeForR2:"
+                        + mInstalledPasspointProfileTypeForR2);
+
+                pw.println("mWifiLogProto.passpointProvisionStats.numProvisionSuccess="
+                            + mNumProvisionSuccess);
+                pw.println("mWifiLogProto.passpointProvisionStats.provisionFailureCount:"
+                            + mPasspointProvisionFailureCounts);
 
                 pw.println("mWifiLogProto.numRadioModeChangeToMcc="
                         + mWifiLogProto.numRadioModeChangeToMcc);
@@ -2698,6 +2718,7 @@ public class WifiMetrics {
                 for (WifiUsabilityStats stats : mWifiUsabilityStatsListGood) {
                     pw.println("\nlabel=" + stats.label);
                     pw.println("\ntrigger_type=" + stats.triggerType);
+                    pw.println("\ntime_stamp_ms=" + stats.timeStampMs);
                     for (WifiUsabilityStatsEntry entry : stats.stats) {
                         printWifiUsabilityStatsEntry(pw, entry);
                     }
@@ -2705,6 +2726,7 @@ public class WifiMetrics {
                 for (WifiUsabilityStats stats : mWifiUsabilityStatsListBad) {
                     pw.println("\nlabel=" + stats.label);
                     pw.println("\ntrigger_type=" + stats.triggerType);
+                    pw.println("\ntime_stamp_ms=" + stats.timeStampMs);
                     for (WifiUsabilityStatsEntry entry : stats.stats) {
                         printWifiUsabilityStatsEntry(pw, entry);
                     }
@@ -2735,6 +2757,7 @@ public class WifiMetrics {
                 pw.println("mLinkProbeSuccessElapsedTimeMsHistogram:"
                         + mLinkProbeSuccessElapsedTimeMsHistogram);
                 pw.println("mLinkProbeFailureReasonCounts:" + mLinkProbeFailureReasonCounts);
+                pw.println("mLinkProbeExperimentProbeCounts:" + mLinkProbeExperimentProbeCounts);
 
                 pw.println("mNetworkSelectionExperimentPairNumChoicesCounts:"
                         + mNetworkSelectionExperimentPairNumChoicesCounts);
@@ -2760,7 +2783,6 @@ public class WifiMetrics {
                         + mWifiLogProto.numAddOrUpdateNetworkCalls);
                 pw.println("mWifiLogProto.numEnableNetworkCalls="
                         + mWifiLogProto.numEnableNetworkCalls);
-
             }
         }
     }
@@ -2893,7 +2915,8 @@ public class WifiMetrics {
         int eapType;
         PasspointConfiguration config;
         synchronized (mLock) {
-            mInstalledPasspointProfileType.clear();
+            mInstalledPasspointProfileTypeForR1.clear();
+            mInstalledPasspointProfileTypeForR2.clear();
             for (Map.Entry<String, PasspointProvider> entry : providers.entrySet()) {
                 config = entry.getValue().getConfig();
                 if (config.getCredential().getUserCredential() != null) {
@@ -2926,8 +2949,11 @@ public class WifiMetrics {
                         passpointType = WifiMetricsProto.PasspointProfileTypeCount.TYPE_UNKNOWN;
 
                 }
-                int count = mInstalledPasspointProfileType.get(passpointType);
-                mInstalledPasspointProfileType.put(passpointType, count + 1);
+                if (config.validateForR2()) {
+                    mInstalledPasspointProfileTypeForR2.increment(passpointType);
+                } else {
+                    mInstalledPasspointProfileTypeForR1.increment(passpointType);
+                }
             }
         }
     }
@@ -3143,21 +3169,10 @@ public class WifiMetrics {
                 notificationActionCountArray[i] = keyVal;
             }
 
-            /**
-             * Convert the SparseIntArray of saved Passpoint profile types and counts to proto's
-             * repeated IntKeyVal array.
-             */
-            int counts = mInstalledPasspointProfileType.size();
-            mWifiLogProto.installedPasspointProfileType =
-                    new WifiMetricsProto.PasspointProfileTypeCount[counts];
-            for (int i = 0; i < counts; i++) {
-                mWifiLogProto.installedPasspointProfileType[i] =
-                        new WifiMetricsProto.PasspointProfileTypeCount();
-                mWifiLogProto.installedPasspointProfileType[i].eapMethodType =
-                        mInstalledPasspointProfileType.keyAt(i);
-                mWifiLogProto.installedPasspointProfileType[i].count =
-                        mInstalledPasspointProfileType.valueAt(i);
-            }
+            mWifiLogProto.installedPasspointProfileTypeForR1 =
+                    convertPasspointProfilesToProto(mInstalledPasspointProfileTypeForR1);
+            mWifiLogProto.installedPasspointProfileTypeForR2 =
+                    convertPasspointProfilesToProto(mInstalledPasspointProfileTypeForR2);
 
             mWifiLogProto.connectToNetworkNotificationActionCount = notificationActionCountArray;
 
@@ -3254,14 +3269,22 @@ public class WifiMetrics {
                     mLinkProbeFailureSecondsSinceLastTxSuccessHistogram.toProto();
             linkProbeStats.successElapsedTimeMsHistogram =
                     mLinkProbeSuccessElapsedTimeMsHistogram.toProto();
-            linkProbeStats.failureReasonCounts =
-                    mLinkProbeFailureReasonCounts.toProto(LinkProbeFailureReasonCount.class,
-                            (reason, count) -> {
-                                LinkProbeFailureReasonCount c = new LinkProbeFailureReasonCount();
-                                c.failureReason = linkProbeFailureReasonToProto(reason);
-                                c.count = count;
-                                return c;
-                            });
+            linkProbeStats.failureReasonCounts = mLinkProbeFailureReasonCounts.toProto(
+                    LinkProbeFailureReasonCount.class,
+                    (reason, count) -> {
+                        LinkProbeFailureReasonCount c = new LinkProbeFailureReasonCount();
+                        c.failureReason = linkProbeFailureReasonToProto(reason);
+                        c.count = count;
+                        return c;
+                    });
+            linkProbeStats.experimentProbeCounts = mLinkProbeExperimentProbeCounts.toProto(
+                    ExperimentProbeCounts.class,
+                    (experimentId, probeCount) -> {
+                        ExperimentProbeCounts c = new ExperimentProbeCounts();
+                        c.experimentId = experimentId;
+                        c.probeCount = probeCount;
+                        return c;
+                    });
             mWifiLogProto.linkProbeStats = linkProbeStats;
 
             mWifiLogProto.networkSelectionExperimentDecisionsList =
@@ -3289,6 +3312,21 @@ public class WifiMetrics {
 
             mWifiLogProto.wifiLockStats = mWifiLockStats;
             mWifiLogProto.wifiToggleStats = mWifiToggleStats;
+
+            /**
+             * Convert the SparseIntArray of passpoint provision failure code
+             * and counts to the proto's repeated IntKeyVal array.
+             */
+            mWifiLogProto.passpointProvisionStats = new PasspointProvisionStats();
+            mWifiLogProto.passpointProvisionStats.numProvisionSuccess = mNumProvisionSuccess;
+            mWifiLogProto.passpointProvisionStats.provisionFailureCount =
+                    mPasspointProvisionFailureCounts.toProto(ProvisionFailureCount.class,
+                            (key, count) -> {
+                                ProvisionFailureCount entry = new ProvisionFailureCount();
+                                entry.failureCode = key;
+                                entry.count = count;
+                                return entry;
+                            });
         }
     }
 
@@ -3429,7 +3467,8 @@ public class WifiMetrics {
             mWifiWakeMetrics.clear();
             mObserved80211mcApInScanHistogram.clear();
             mWifiIsUnusableList.clear();
-            mInstalledPasspointProfileType.clear();
+            mInstalledPasspointProfileTypeForR1.clear();
+            mInstalledPasspointProfileTypeForR2.clear();
             mWifiUsabilityStatsListGood.clear();
             mWifiUsabilityStatsListBad.clear();
             mWifiUsabilityStatsEntriesList.clear();
@@ -3460,6 +3499,7 @@ public class WifiMetrics {
             mLinkProbeFailureSecondsSinceLastTxSuccessHistogram.clear();
             mLinkProbeSuccessElapsedTimeMsHistogram.clear();
             mLinkProbeFailureReasonCounts.clear();
+            mLinkProbeExperimentProbeCounts.clear();
             mNetworkSelectionExperimentPairNumChoicesCounts.clear();
             mWifiNetworkSuggestionApiLog.clear();
             mWifiNetworkSuggestionApiLog.clear();
@@ -3471,6 +3511,8 @@ public class WifiMetrics {
             mWifiLockLowLatencyActiveSessionDurationSecHistogram.clear();
             mWifiLockStats.clear();
             mWifiToggleStats.clear();
+            mPasspointProvisionFailureCounts.clear();
+            mNumProvisionSuccess = 0;
         }
     }
 
@@ -4413,6 +4455,7 @@ public class WifiMetrics {
         wifiUsabilityStats.label = label;
         wifiUsabilityStats.triggerType = triggerType;
         wifiUsabilityStats.firmwareAlertCode = firmwareAlertCode;
+        wifiUsabilityStats.timeStampMs = mClock.getElapsedSinceBootMillis();
         wifiUsabilityStats.stats =
                 new WifiUsabilityStatsEntry[mWifiUsabilityStatsEntriesList.size()];
         for (int i = 0; i < mWifiUsabilityStatsEntriesList.size(); i++) {
@@ -4431,7 +4474,7 @@ public class WifiMetrics {
      */
     public void addToWifiUsabilityStatsList(int label, int triggerType, int firmwareAlertCode) {
         synchronized (mLock) {
-            if (mWifiUsabilityStatsEntriesList.isEmpty()) {
+            if (mWifiUsabilityStatsEntriesList.isEmpty() || !mScreenOn) {
                 return;
             }
             if (label == WifiUsabilityStats.LABEL_GOOD) {
@@ -4497,6 +4540,22 @@ public class WifiMetrics {
                 getOrCreateDeviceMobilityStatePnoScanStats(mCurrentDeviceMobilityState);
         stats.totalDurationMs += now - mCurrentDeviceMobilityStateStartMs;
         mCurrentDeviceMobilityStateStartMs = now;
+    }
+
+    /**
+     * Convert the IntCounter of passpoint profile types and counts to proto's
+     * repeated IntKeyVal array.
+     *
+     * @param passpointProfileTypes passpoint profile types and counts.
+     */
+    private PasspointProfileTypeCount[] convertPasspointProfilesToProto(
+                IntCounter passpointProfileTypes) {
+        return passpointProfileTypes.toProto(PasspointProfileTypeCount.class, (key, count) -> {
+            PasspointProfileTypeCount entry = new PasspointProfileTypeCount();
+            entry.eapMethodType = key;
+            entry.count = count;
+            return entry;
+        });
     }
 
     /**
@@ -4688,6 +4747,15 @@ public class WifiMetrics {
             event.linkProbeFailureReason = linkProbeFailureReasonToProto(reason);
             // TODO(129958996): Cap number of link probe StaEvents
             addStaEvent(event);
+        }
+    }
+
+    /**
+     * Increments the number of probes triggered by the experiment `experimentId`.
+     */
+    public void incrementLinkProbeExperimentProbeCount(String experimentId) {
+        synchronized (mLock) {
+            mLinkProbeExperimentProbeCounts.increment(experimentId);
         }
     }
 
@@ -4909,6 +4977,116 @@ public class WifiMetrics {
             } else {
                 mWifiToggleStats.numToggleOffNormal++;
             }
+        }
+    }
+
+    /**
+     * Increment number of passpoint provision failure
+     * @param failureCode indicates error condition
+     */
+    public void incrementPasspointProvisionFailure(int failureCode) {
+        int provisionFailureCode;
+        synchronized (mLock) {
+            switch (failureCode) {
+                case ProvisioningCallback.OSU_FAILURE_AP_CONNECTION:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_AP_CONNECTION;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_SERVER_URL_INVALID:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_SERVER_URL_INVALID;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_SERVER_CONNECTION:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_SERVER_CONNECTION;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_SERVER_VALIDATION:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_SERVER_VALIDATION;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_SERVICE_PROVIDER_VERIFICATION:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_SERVICE_PROVIDER_VERIFICATION;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_PROVISIONING_ABORTED:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_PROVISIONING_ABORTED;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_PROVISIONING_NOT_AVAILABLE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_PROVISIONING_NOT_AVAILABLE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_INVALID_URL_FORMAT_FOR_OSU:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_INVALID_URL_FORMAT_FOR_OSU;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_UNEXPECTED_COMMAND_TYPE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_UNEXPECTED_COMMAND_TYPE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_TYPE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_TYPE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_SOAP_MESSAGE_EXCHANGE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_SOAP_MESSAGE_EXCHANGE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_START_REDIRECT_LISTENER:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_START_REDIRECT_LISTENER;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_TIMED_OUT_REDIRECT_LISTENER:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_TIMED_OUT_REDIRECT_LISTENER;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_NO_OSU_ACTIVITY_FOUND:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_NO_OSU_ACTIVITY_FOUND;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_STATUS:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_UNEXPECTED_SOAP_MESSAGE_STATUS;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_NO_PPS_MO:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_NO_PPS_MO;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_NO_AAA_SERVER_TRUST_ROOT_NODE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_NO_AAA_SERVER_TRUST_ROOT_NODE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_NO_REMEDIATION_SERVER_TRUST_ROOT_NODE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_NO_REMEDIATION_SERVER_TRUST_ROOT_NODE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_NO_POLICY_SERVER_TRUST_ROOT_NODE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_NO_POLICY_SERVER_TRUST_ROOT_NODE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_RETRIEVE_TRUST_ROOT_CERTIFICATES:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_RETRIEVE_TRUST_ROOT_CERTIFICATES;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_NO_AAA_TRUST_ROOT_CERTIFICATE:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_NO_AAA_TRUST_ROOT_CERTIFICATE;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_ADD_PASSPOINT_CONFIGURATION:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_ADD_PASSPOINT_CONFIGURATION;
+                    break;
+                case ProvisioningCallback.OSU_FAILURE_OSU_PROVIDER_NOT_FOUND:
+                    provisionFailureCode = PasspointProvisionStats
+                            .OSU_FAILURE_OSU_PROVIDER_NOT_FOUND;
+                    break;
+                default:
+                    provisionFailureCode = PasspointProvisionStats.OSU_FAILURE_UNKNOWN;
+            }
+            mPasspointProvisionFailureCounts.increment(provisionFailureCode);
+        }
+    }
+
+    /**
+     * Increment number of passpoint provision success
+     */
+    public void incrementPasspointProvisionSuccess() {
+        synchronized (mLock) {
+            mNumProvisionSuccess++;
         }
     }
 }
