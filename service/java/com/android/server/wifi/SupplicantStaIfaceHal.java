@@ -3032,6 +3032,17 @@ public class SupplicantStaIfaceHal {
         public void onAssociationRejected(byte[/* 6 */] bssid, int statusCode, boolean timedOut) {
             synchronized (mLock) {
                 logCallback("onAssociationRejected");
+
+                // For WEP password error: not check status code to avoid IoT issues with AP.
+                WifiConfiguration wificonfig = getCurrentNetworkLocalConfig(mIfaceName);
+                if (wificonfig != null && WifiConfigurationUtil.isConfigForWepNetwork(wificonfig)) {
+                    logCallback("WEP incorrect password");
+                    mWifiMonitor.broadcastAuthenticationFailureEvent(
+                        mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
+                    // Not broadcast ASSOC REJECT to avoid bssid get blacklisted.
+                    return;
+                }
+
                 mWifiMonitor.broadcastAssociationRejectionEvent(mIfaceName, statusCode, timedOut,
                         NativeUtil.macAddressFromByteArray(bssid));
             }
