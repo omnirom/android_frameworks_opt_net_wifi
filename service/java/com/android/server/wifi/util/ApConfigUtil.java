@@ -52,7 +52,7 @@ public class ApConfigUtil {
             return (frequency - 2412) / 5 + 1;
         } else if (frequency == 2484) {
             return 14;
-        } else if (frequency >= 5170  &&  frequency <= 5825) {
+        } else if (frequency >= 5170  &&  frequency <= 5865) {
             /* DFS is included. */
             return (frequency - 5170) / 5 + 34;
         }
