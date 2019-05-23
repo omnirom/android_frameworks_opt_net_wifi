@@ -62,11 +62,9 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
-import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.net.Uri;
 import android.net.wifi.INetworkRequestMatchCallback;
@@ -109,6 +107,7 @@ import com.android.internal.os.PowerProfile;
 import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.util.AsyncChannel;
 import com.android.server.wifi.WifiServiceImpl.LocalOnlyRequestorCallback;
+import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvisioningTestUtil;
 import com.android.server.wifi.util.WifiAsyncChannel;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -182,7 +181,6 @@ public class WifiServiceImplTest {
     private OsuProvider mOsuProvider;
     private SoftApCallback mStateMachineSoftApCallback;
     private ApplicationInfo mApplicationInfo;
-    private ResolveInfo mResolveInfo;
 
     final ArgumentCaptor<BroadcastReceiver> mBroadcastReceiverCaptor =
             ArgumentCaptor.forClass(BroadcastReceiver.class);
@@ -239,6 +237,7 @@ public class WifiServiceImplTest {
     @Mock WifiConfigManager mWifiConfigManager;
     @Mock WifiScoreReport mWifiScoreReport;
     @Mock WifiScoreCard mWifiScoreCard;
+    @Mock PasspointManager mPasspointManager;
 
     @Spy FakeWifiLog mLog;
 
@@ -311,8 +310,6 @@ public class WifiServiceImplTest {
         mAsyncChannel = spy(new AsyncChannel());
         mApplicationInfo = new ApplicationInfo();
         mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.CUR_DEVELOPMENT;
-        mResolveInfo = new ResolveInfo();
-        mResolveInfo.activityInfo = new ActivityInfo();
 
         WifiInjector.sWifiInjector = mWifiInjector;
         when(mRequestInfo.getPid()).thenReturn(mPid);
@@ -332,7 +329,6 @@ public class WifiServiceImplTest {
         when(mContext.getContentResolver()).thenReturn(mContentResolver);
         when(mContext.getPackageManager()).thenReturn(mPackageManager);
         when(mPackageManager.getApplicationInfo(any(), anyInt())).thenReturn(mApplicationInfo);
-        when(mPackageManager.resolveActivity(any(), anyInt())).thenReturn(mResolveInfo);
         when(mWifiInjector.getWifiApConfigStore()).thenReturn(mWifiApConfigStore);
         doNothing().when(mFrameworkFacade).registerContentObserver(eq(mContext), any(),
                 anyBoolean(), any());
@@ -363,6 +359,7 @@ public class WifiServiceImplTest {
                 .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiInjector.makeTelephonyManager()).thenReturn(mTelephonyManager);
         when(mWifiInjector.getWifiConfigManager()).thenReturn(mWifiConfigManager);
+        when(mWifiInjector.getPasspointManager()).thenReturn(mPasspointManager);
         when(mClientModeImpl.getWifiScoreReport()).thenReturn(mWifiScoreReport);
         when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
         when(mClientModeImpl.syncStartSubscriptionProvisioning(anyInt(),
@@ -2599,18 +2596,20 @@ public class WifiServiceImplTest {
                 eq(Build.VERSION_CODES.Q))).thenReturn(true);
 
         when(mClientModeImpl.syncAddOrUpdatePasspointConfig(any(),
-                any(PasspointConfiguration.class), anyInt())).thenReturn(true);
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME))).thenReturn(
+                true);
         assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mClientModeImpl).syncAddOrUpdatePasspointConfig(any(),
-                any(PasspointConfiguration.class), anyInt());
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME));
         reset(mClientModeImpl);
 
         when(mClientModeImpl.syncAddOrUpdatePasspointConfig(any(),
-                any(PasspointConfiguration.class), anyInt())).thenReturn(false);
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME))).thenReturn(
+                false);
         assertEquals(-1, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
         verify(mClientModeImpl).syncAddOrUpdatePasspointConfig(any(),
-                any(PasspointConfiguration.class), anyInt());
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME));
     }
 
     /**
@@ -3200,7 +3199,7 @@ public class WifiServiceImplTest {
         when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat((IntentFilter filter) ->
+                argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_PACKAGE_FULLY_REMOVED)));
 
         int uid = TEST_UID;
@@ -3217,6 +3216,7 @@ public class WifiServiceImplTest {
         verify(mScanRequestProxy).clearScanRequestTimestampsForApp(packageName, uid);
         verify(mWifiNetworkSuggestionsManager).removeApp(packageName);
         verify(mClientModeImpl).removeNetworkRequestUserApprovedAccessPointsForApp(packageName);
+        verify(mPasspointManager).removePasspointProviderWithPackage(packageName);
     }
 
     @Test
@@ -3224,7 +3224,7 @@ public class WifiServiceImplTest {
         when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat((IntentFilter filter) ->
+                argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_PACKAGE_FULLY_REMOVED)));
 
         String packageName = TEST_PACKAGE_NAME;
@@ -3240,6 +3240,7 @@ public class WifiServiceImplTest {
         verify(mWifiNetworkSuggestionsManager, never()).removeApp(anyString());
         verify(mClientModeImpl, never()).removeNetworkRequestUserApprovedAccessPointsForApp(
                 packageName);
+        verify(mPasspointManager, never()).removePasspointProviderWithPackage(anyString());
     }
 
     @Test
@@ -3247,7 +3248,7 @@ public class WifiServiceImplTest {
         when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat((IntentFilter filter) ->
+                argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_PACKAGE_FULLY_REMOVED)));
 
         int uid = TEST_UID;
@@ -3263,13 +3264,14 @@ public class WifiServiceImplTest {
         verify(mWifiNetworkSuggestionsManager, never()).removeApp(anyString());
         verify(mClientModeImpl, never()).removeNetworkRequestUserApprovedAccessPointsForApp(
                 anyString());
+        verify(mPasspointManager, never()).removePasspointProviderWithPackage(anyString());
     }
 
     @Test
     public void testUserRemovedBroadcastHandling() {
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat((IntentFilter filter) ->
+                argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_USER_REMOVED)));
 
         int userHandle = TEST_USER_HANDLE;
@@ -3285,7 +3287,7 @@ public class WifiServiceImplTest {
     public void testUserRemovedBroadcastHandlingWithWrongIntentAction() {
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat((IntentFilter filter) ->
+                argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_USER_REMOVED)));
 
         int userHandle = TEST_USER_HANDLE;
@@ -3736,26 +3738,23 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that add or update networks is allowed for default car dock app.
+     * Verify that add or update networks is allowed for apps holding system alert permission.
      */
     @Test
-    public void testAddOrUpdateNetworkIsAllowedForDefaultCarDockApp() throws Exception {
+    public void testAddOrUpdateNetworkIsAllowedForAppsWithSystemAlertPermission() throws Exception {
         mLooper.dispatchAll();
         doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
                 .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
 
-        mResolveInfo.activityInfo.packageName = TEST_PACKAGE_NAME;
+        when(mWifiPermissionsUtil.checkSystemAlertWindowPermission(
+                Process.myUid(), TEST_PACKAGE_NAME)).thenReturn(true);
         when(mClientModeImpl.syncAddOrUpdateNetwork(any(), any())).thenReturn(0);
 
         WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
         assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
 
-        ArgumentCaptor<Intent> intentArgumentCaptor = ArgumentCaptor.forClass(Intent.class);
-        verify(mPackageManager).resolveActivity(intentArgumentCaptor.capture(), anyInt());
-        assertNotNull(intentArgumentCaptor.getValue());
-        assertTrue(intentArgumentCaptor.getValue().hasCategory(Intent.CATEGORY_CAR_DOCK));
-
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mWifiPermissionsUtil).checkSystemAlertWindowPermission(anyInt(), anyString());
         verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
         verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }

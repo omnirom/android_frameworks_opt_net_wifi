@@ -55,7 +55,6 @@ import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
-import android.content.pm.ResolveInfo;
 import android.database.ContentObserver;
 import android.net.DhcpInfo;
 import android.net.DhcpResults;
@@ -144,7 +143,6 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -826,17 +824,6 @@ public class WifiServiceImpl extends BaseWifiService {
                 || dpmi.isActiveAdminWithPolicy(uid, DeviceAdminInfo.USES_POLICY_PROFILE_OWNER);
     }
 
-    // Helper method to check if the entity initiating the binder call is the default car dock app.
-    private boolean isDefaultCarDock(String packageName) {
-        final Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_CAR_DOCK);
-        final ResolveInfo ri = mContext.getPackageManager().resolveActivity(
-                intent, PackageManager.GET_META_DATA | PackageManager.MATCH_DEFAULT_ONLY);
-        if (ri == null || ri.activityInfo == null) {
-            return false;
-        }
-        return Objects.equals(packageName, ri.activityInfo.packageName);
-    }
-
     private void enforceNetworkSettingsPermission() {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS,
                 "WifiService");
@@ -917,7 +904,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 || isDeviceOrProfileOwner(uid)
                 // TODO: Remove this system app bypass once Q is released.
                 || isSystem(packageName)
-                || isDefaultCarDock(packageName);
+                || mWifiPermissionsUtil.checkSystemAlertWindowPermission(uid, packageName);
     }
 
     /**
@@ -2427,7 +2414,7 @@ public class WifiServiceImpl extends BaseWifiService {
             return false;
         }
         return mClientModeImpl.syncAddOrUpdatePasspointConfig(mClientModeImplChannel, config,
-                Binder.getCallingUid());
+                Binder.getCallingUid(), packageName);
     }
 
     /**
@@ -2843,12 +2830,19 @@ public class WifiServiceImpl extends BaseWifiService {
                     }
                     String pkgName = uri.getSchemeSpecificPart();
                     mClientModeImpl.removeAppConfigs(pkgName, uid);
+
                     // Call the method in ClientModeImpl thread.
                     mWifiInjector.getClientModeImplHandler().post(() -> {
                         mScanRequestProxy.clearScanRequestTimestampsForApp(pkgName, uid);
+
                         // Remove all suggestions from the package.
                         mWifiNetworkSuggestionsManager.removeApp(pkgName);
                         mClientModeImpl.removeNetworkRequestUserApprovedAccessPointsForApp(pkgName);
+
+                        // Remove all Passpoint profiles from package.
+                        mWifiInjector.getPasspointManager().removePasspointProviderWithPackage(
+                                pkgName);
+
                     });
                 }
             }
