@@ -32,12 +32,7 @@ import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HS
 import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HSWANMetrics;
 
 import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_AUTH_SUCCESS;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_NOT_COMPATIBLE;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_RESPONSE_PENDING;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_SCAN_PEER_QRCODE;
 import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_CONF;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_MISSING_AUTH;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_NETWORK_ID;
 
 import android.annotation.NonNull;
 import android.content.Context;
@@ -2987,37 +2982,6 @@ public class SupplicantStaIfaceHal {
         }
 
         @Override
-        public void onDppNotCompatible(byte capab, boolean initiator) {
-            logCallback("onDppNotCompatible");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.capab = capab;
-                result.initiator = initiator;
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_NOT_COMPATIBLE, result);
-            }
-        }
-
-        @Override
-        public void onDppResponsePending() {
-            logCallback("onDppResponsePending");
-            synchronized (mLock) {
-                // For now we may discard this event
-                DppResult result = new DppResult();
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_RESPONSE_PENDING, result);
-            }
-        }
-
-        @Override
-        public void onDppScanPeerQrCode(ArrayList<Byte> bootstrapData) {
-            logCallback("onDppScanPeerQrCode");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.iBootstrapData = NativeUtil.stringFromByteArrayList(bootstrapData);
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_SCAN_PEER_QRCODE, result);
-            }
-        }
-
-        @Override
         public void onDppConf(byte type, ArrayList<Byte> ssid, String connector,
                               ArrayList<Byte> cSignKey, ArrayList<Byte> netAccessKey,
                               int netAccessExpiry, String passphrase, ArrayList<Byte> psk) {
@@ -3037,24 +3001,19 @@ public class SupplicantStaIfaceHal {
         }
 
         @Override
-        public void onDppMissingAuth(byte dppAuthParam) {
-            logCallback("onDppMissingAuth");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.authMissingParam = dppAuthParam;
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_MISSING_AUTH, result);
-            }
-        }
+        public void onDppNotCompatible(byte capab, boolean initiator) {}
 
         @Override
-        public void onDppNetworkId(int netID) {
-            logCallback("onDppNetworkId");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.netID = netID;
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_NETWORK_ID, result);
-            }
-        }
+        public void onDppResponsePending() {}
+
+        @Override
+        public void onDppScanPeerQrCode(ArrayList<Byte> bootstrapData) {}
+
+        @Override
+        public void onDppMissingAuth(byte dppAuthParam) {}
+
+        @Override
+        public void onDppNetworkId(int netID) {}
         /* DPP Callbacks ends */
     }
 
