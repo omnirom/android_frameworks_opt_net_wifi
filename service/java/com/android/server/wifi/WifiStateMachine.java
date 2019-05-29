@@ -2501,6 +2501,8 @@ public class WifiStateMachine extends StateMachine {
             mWifiConnectivityManager.handleScreenStateChanged(screenOn);
         }
 
+        mSarManager.handleScreenStateChanged(screenOn);
+
         if (mVerboseLoggingEnabled) log("handleScreenStateChanged Exit: " + screenOn);
     }
 
