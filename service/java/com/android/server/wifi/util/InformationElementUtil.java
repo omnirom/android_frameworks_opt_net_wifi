@@ -509,10 +509,10 @@ public class InformationElementUtil {
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_PSK_SHA256);
                             break;
                         case WPA2_AKM_FILS_SHA256:
-                            rsnKeyManagement.add(ScanResult.KEY_MGMT_SAE);
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA256);
                             break;
                         case WPA2_AKM_FILS_SHA384:
-                            rsnKeyManagement.add(ScanResult.KEY_MGMT_OWE);
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA384);
                             break;
                         case WPA2_AKM_DPP:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_DPP);
@@ -798,6 +798,10 @@ public class InformationElementUtil {
                     return "EAP_SUITE_B_192";
                 case ScanResult.KEY_MGMT_DPP:
                     return "DPP";
+                case ScanResult.KEY_MGMT_FILS_SHA256:
+                    return "FILS-SHA256";
+                case ScanResult.KEY_MGMT_FILS_SHA384:
+                    return "FILS-SHA384";
                 default:
                     return "?";
             }

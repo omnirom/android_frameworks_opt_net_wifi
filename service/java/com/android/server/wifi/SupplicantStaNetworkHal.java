@@ -1113,6 +1113,12 @@ public class SupplicantStaNetworkHal {
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork.KeyMgmtMask
                         .WPA_EAP_SHA256, bitset, WifiConfiguration.KeyMgmt.WPA_EAP_SHA256);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA256, bitset,
+                WifiConfiguration.KeyMgmt.FILS_SHA256);
+        mask = supplicantMaskValueToWifiConfigurationBitSet(
+                mask, ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA384, bitset,
+                WifiConfiguration.KeyMgmt.FILS_SHA384);
         if (mask != 0) {
             throw new IllegalArgumentException(
                     "invalid key mgmt mask from supplicant: " + mask);
