@@ -712,7 +712,7 @@ public class ClientModeImpl extends StateMachine {
 
     /**
      * Time window in milliseconds for which we send
-     * {@link NetworkAgent#explicitlySelected(boolean)}
+     * {@link NetworkAgent#explicitlySelected(boolean, boolean)}
      * after connecting to the network which the user last selected.
      */
     @VisibleForTesting
@@ -4503,6 +4503,17 @@ public class ClientModeImpl extends StateMachine {
                         transitionTo(mFilsState);
                         break;
                     }
+
+                    if (config.enterpriseConfig != null
+                            && TelephonyUtil.isSimEapMethod(config.enterpriseConfig.getEapMethod())
+                            && mWifiInjector.getCarrierNetworkConfig()
+                                    .isCarrierEncryptionInfoAvailable()
+                            && TextUtils.isEmpty(config.enterpriseConfig.getAnonymousIdentity())) {
+                        String anonAtRealm = TelephonyUtil.getAnonymousIdentityWith3GppRealm(
+                                getTelephonyManager());
+                        config.enterpriseConfig.setAnonymousIdentity(anonAtRealm);
+                    }
+
                     if (mWifiNative.connectToNetwork(mInterfaceName, config)) {
                         mWifiMetrics.logStaEvent(StaEvent.TYPE_CMD_START_CONNECT, config);
                         mLastConnectAttemptTimestamp = mClock.getWallClockMillis();
@@ -4673,28 +4684,20 @@ public class ClientModeImpl extends StateMachine {
                         // We need to get the updated pseudonym from supplicant for EAP-SIM/AKA/AKA'
                         if (config.enterpriseConfig != null
                                 && TelephonyUtil.isSimEapMethod(
-                                        config.enterpriseConfig.getEapMethod())) {
+                                        config.enterpriseConfig.getEapMethod())
+                                // if using anonymous@<realm>, do not use pseudonym identity on
+                                // reauthentication. Instead, use full authentication using
+                                // anonymous@<realm> followed by encrypted IMSI every time.
+                                // This is because the encrypted IMSI spec does not specify its
+                                // compatibility with the pseudonym identity specified by EAP-AKA.
+                                && !TelephonyUtil.isAnonymousAtRealmIdentity(
+                                        config.enterpriseConfig.getAnonymousIdentity())) {
                             String anonymousIdentity =
                                     mWifiNative.getEapAnonymousIdentity(mInterfaceName);
-                            if (anonymousIdentity != null) {
-                                config.enterpriseConfig.setAnonymousIdentity(anonymousIdentity);
-                            } else {
-                                CarrierNetworkConfig carrierNetworkConfig =
-                                        mWifiInjector.getCarrierNetworkConfig();
-                                if (carrierNetworkConfig.isCarrierEncryptionInfoAvailable()
-                                        && carrierNetworkConfig.isSupportAnonymousIdentity()) {
-                                    // In case of a carrier supporting encrypted IMSI and
-                                    // anonymous identity, we need to send anonymous@realm as
-                                    // EAP-IDENTITY response.
-                                    config.enterpriseConfig.setAnonymousIdentity(
-                                            TelephonyUtil.getAnonymousIdentityWith3GppRealm(
-                                                    getTelephonyManager()));
-                                } else {
-                                    Log.d(TAG, "Failed to get updated anonymous identity"
-                                            + " from supplicant, reset it in WifiConfiguration.");
-                                    config.enterpriseConfig.setAnonymousIdentity(null);
-                                }
+                            if (mVerboseLoggingEnabled) {
+                                log("EAP Pseudonym: " + anonymousIdentity);
                             }
+                            config.enterpriseConfig.setAnonymousIdentity(anonymousIdentity);
                             mWifiConfigManager.addOrUpdateNetwork(config, Process.WIFI_UID);
                         }
                         sendNetworkStateChangeBroadcast(mLastBssid);
@@ -5722,8 +5725,8 @@ public class ClientModeImpl extends StateMachine {
 
     /**
      * Helper function to check if we need to invoke
-     * {@link NetworkAgent#explicitlySelected(boolean)} to indicate that we connected to a network
-     * which the user just chose
+     * {@link NetworkAgent#explicitlySelected(boolean, boolean)} to indicate that we connected to a
+     * network which the user just chose
      * (i.e less than {@link #LAST_SELECTED_NETWORK_EXPIRATION_AGE_MILLIS) before).
      */
     @VisibleForTesting
@@ -5739,26 +5742,31 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void sendConnectedState() {
-        // If this network was explicitly selected by the user, evaluate whether to call
-        // explicitlySelected() so the system can treat it appropriately.
+        // If this network was explicitly selected by the user, evaluate whether to inform
+        // ConnectivityService of that fact so the system can treat it appropriately.
         WifiConfiguration config = getCurrentWifiConfiguration();
+
+        boolean explicitlySelected = false;
         if (shouldEvaluateWhetherToSendExplicitlySelected(config)) {
-            boolean prompt =
+            // If explicitlySelected is true, the network was selected by the user via Settings or
+            // QuickSettings. If this network has Internet access, switch to it. Otherwise, switch
+            // to it only if the user confirms that they really want to switch, or has already
+            // confirmed and selected "Don't ask again".
+            explicitlySelected =
                     mWifiPermissionsUtil.checkNetworkSettingsPermission(config.lastConnectUid);
             if (mVerboseLoggingEnabled) {
-                log("Network selected by UID " + config.lastConnectUid + " prompt=" + prompt);
+                log("Network selected by UID " + config.lastConnectUid + " explicitlySelected="
+                        + explicitlySelected);
             }
-            if (prompt) {
-                // Selected by the user via Settings or QuickSettings. If this network has Internet
-                // access, switch to it. Otherwise, switch to it only if the user confirms that they
-                // really want to switch, or has already confirmed and selected "Don't ask again".
-                if (mVerboseLoggingEnabled) {
-                    log("explictlySelected acceptUnvalidated=" + config.noInternetAccessExpected);
-                }
-                if (mNetworkAgent != null) {
-                    mNetworkAgent.explicitlySelected(config.noInternetAccessExpected);
-                }
-            }
+        }
+
+        if (mVerboseLoggingEnabled) {
+            log("explictlySelected=" + explicitlySelected + " acceptUnvalidated="
+                    + config.noInternetAccessExpected);
+        }
+
+        if (mNetworkAgent != null) {
+            mNetworkAgent.explicitlySelected(explicitlySelected, config.noInternetAccessExpected);
         }
 
         setNetworkDetailedState(DetailedState.CONNECTED);
