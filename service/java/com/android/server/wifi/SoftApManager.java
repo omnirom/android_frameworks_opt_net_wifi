@@ -93,6 +93,7 @@ public class SoftApManager implements ActiveModeManager {
     private int mQCNumAssociatedStations = 0;
     private boolean mTimeoutEnabled = false;
     private String[] mdualApInterfaces;
+    private boolean expectedStop = false;
 
     private final SarManager mSarManager;
 
@@ -174,6 +175,7 @@ public class SoftApManager implements ActiveModeManager {
      */
     public void stop() {
         Log.d(TAG, " currentstate: " + getCurrentStateName());
+        expectedStop = true;
         if (mApInterfaceName != null) {
             if (mIfaceIsUp) {
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
@@ -363,7 +365,19 @@ public class SoftApManager implements ActiveModeManager {
 
         private final InterfaceCallback mWifiNativeDualIfaceCallback = new InterfaceCallback() {
             @Override
-            public void onDestroyed(String ifaceName) { }
+            public void onDestroyed(String ifaceName) {
+                // one of the dual interface is destroyed by native layers. trigger full cleanup.
+                if (!expectedStop) {
+                    Log.e(TAG, "One of Dual interface ("+ifaceName+") destroyed. trigger cleanup");
+                    // Avoid cleaning the interface which is already destroyed.
+                    if (ifaceName.equals(mdualApInterfaces[0]))
+                        mdualApInterfaces[0] = "";
+                    else if (ifaceName.equals(mdualApInterfaces[1]))
+                        mdualApInterfaces[1] = "";
+
+                    stop();
+                }
+            }
 
             @Override
             public void onUp(String ifaceName) { }
@@ -389,6 +403,7 @@ public class SoftApManager implements ActiveModeManager {
                     TextUtils.isEmpty(mdualApInterfaces[1]) ||
                     TextUtils.isEmpty(mApInterfaceName)) {
                 Log.e(TAG, "setup failure when creating dual ap interface(s).");
+                stopSoftAp();
                 updateApState(WifiManager.WIFI_AP_STATE_FAILED,
                         WifiManager.WIFI_AP_STATE_DISABLED,
                         WifiManager.SAP_START_FAILURE_GENERAL);

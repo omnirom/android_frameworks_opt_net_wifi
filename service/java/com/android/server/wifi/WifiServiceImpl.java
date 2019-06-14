@@ -37,7 +37,6 @@ import static com.android.server.wifi.WifiController.CMD_EMERGENCY_CALL_STATE_CH
 import static com.android.server.wifi.WifiController.CMD_EMERGENCY_MODE_CHANGED;
 import static com.android.server.wifi.WifiController.CMD_SCAN_ALWAYS_MODE_CHANGED;
 import static com.android.server.wifi.WifiController.CMD_SET_AP;
-import static com.android.server.wifi.WifiController.CMD_SET_DUAL_AP;
 import static com.android.server.wifi.WifiController.CMD_WIFI_TOGGLED;
 
 import android.Manifest;
@@ -950,15 +949,13 @@ public class WifiServiceImpl extends BaseWifiService {
             Binder.restoreCallingIdentity(ident);
         }
 
-        if (enable && mWifiApConfigStore.getDualSapStatus())
-            stopSoftAp();
-
         if (!mIsControllerStarted) {
             Slog.e(TAG,"WifiController is not yet started, abort setWifiEnabled");
             return false;
         }
 
         mWifiMetrics.incrementNumWifiToggles(isPrivileged, enable);
+
         mWifiController.sendMessage(CMD_WIFI_TOGGLED);
         return true;
     }
@@ -1126,8 +1123,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(mode).flush();
 
-        // This will internally check for DUAL_BAND and take action.
-        startDualSapMode(wifiConfig, true);
+        setDualSapMode(wifiConfig);
 
         mSoftApExtendingWifi = isCurrentStaShareThisAp();
         if (mSoftApExtendingWifi) {
@@ -1179,9 +1175,6 @@ public class WifiServiceImpl extends BaseWifiService {
      */
     private boolean stopSoftApInternal(int mode) {
         mLog.trace("stopSoftApInternal uid=%").c(Binder.getCallingUid()).flush();
-
-        if (mWifiApConfigStore.getDualSapStatus())
-            startDualSapMode(null, false);
 
         mSoftApExtendingWifi = false;
         mWifiController.sendMessage(CMD_SET_AP, 0, mode);
@@ -3748,41 +3741,16 @@ public class WifiServiceImpl extends BaseWifiService {
         return mClientModeImpl.syncDppConfiguratorGetKey(mClientModeImplChannel, id);
     }
 
-    private boolean startDualSapMode(WifiConfiguration apConfig, boolean enable) {
+    private void setDualSapMode(WifiConfiguration apConfig) {
         if (apConfig == null)
             apConfig = mWifiApConfigStore.getApConfiguration();
 
-        // If dual sap property is set, enable/disable softap for dual sap.
-        if (enable && SystemProperties.get("persist.vendor.wifi.softap.dualband", "0").equals("1")) {
-            mPrevApBand = apConfig.apBand;
-            apConfig.apBand = WifiConfiguration.AP_BAND_DUAL;
-        } else if(apConfig.apBand == WifiConfiguration.AP_BAND_DUAL) {
-            apConfig.apBand = mPrevApBand;
+        if (apConfig.apBand == WifiConfiguration.AP_BAND_DUAL) {
+            mLog.trace("setDualSapMode uid=%").c(Binder.getCallingUid()).flush();
+            mWifiApConfigStore.setDualSapStatus(true);
+        } else {
+            mWifiApConfigStore.setDualSapStatus(false);
         }
-
-        // Check if this request is for DUAL sap mode.
-        if (enable && (apConfig.apBand != WifiConfiguration.AP_BAND_DUAL)) {
-            Slog.e(TAG, "Continue with Single SAP Mode.");
-            return false;
-        }
-
-        mLog.trace("startDualSapMode uid=% enable=%").c(Binder.getCallingUid()).c(enable).flush();
-
-        if (enable && mWifiApConfigStore.getDualSapStatus()) {
-            Slog.d(TAG, "DUAL Sap Mode already enabled. Do nothing!!");
-            return true;
-        }
-
-        boolean apEnabled = mWifiApState != WifiManager.WIFI_AP_STATE_DISABLED;
-
-        // Reset StateMachine(s) to Appropriate State(s)
-        if (enable && apEnabled)
-            mWifiController.sendMessage(CMD_SET_AP, 0, 0);
-
-        if (enable)
-            mWifiController.sendMessage(CMD_SET_DUAL_AP);
-
-        return true;
     }
 
     /* API to check whether SoftAp extending current sta connected AP network*/

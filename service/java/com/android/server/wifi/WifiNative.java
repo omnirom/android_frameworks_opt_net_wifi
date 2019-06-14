@@ -112,6 +112,7 @@ public class WifiNative {
         mWificondControl.enableVerboseLogging(mVerboseLoggingEnabled);
         mSupplicantStaIfaceHal.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiVendorHal.enableVerboseLogging(mVerboseLoggingEnabled);
+        mHostapdHal.enableVerboseLogging(mVerboseLoggingEnabled);
     }
 
     public static class WifiGenerationStatus {
@@ -146,8 +147,10 @@ public class WifiNative {
         public static final int IFACE_TYPE_STA_FOR_CONNECTIVITY = 1;
         public static final int IFACE_TYPE_STA_FOR_SCAN = 2;
         public static final int IFACE_TYPE_FST = 3;
+        public static final int IFACE_TYPE_BRIDGE = 4;
 
-       @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA_FOR_CONNECTIVITY, IFACE_TYPE_STA_FOR_SCAN, IFACE_TYPE_FST})
+       @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA_FOR_CONNECTIVITY, IFACE_TYPE_STA_FOR_SCAN, IFACE_TYPE_FST,
+                IFACE_TYPE_BRIDGE})
         @Retention(RetentionPolicy.SOURCE)
         public @interface IfaceType{}
 
@@ -187,6 +190,9 @@ public class WifiNative {
                     break;
                 case IFACE_TYPE_FST:
                     typeString = "FST";
+                    break;
+                case IFACE_TYPE_BRIDGE:
+                    typeString = "BRIDGE";
                     break;
                 default:
                     typeString = "<UNKNOWN>";
@@ -538,6 +544,16 @@ public class WifiNative {
         }
     }
 
+    /** Helper method invoked to teardown softAp iface and perform necessary cleanup */
+    private void onBridgeInterfaceDestroyed(@NonNull Iface iface) {
+        synchronized (mLock) {
+            if (!unregisterNetworkObserver(iface.networkObserver)) {
+                Log.e(TAG, "Failed to unregister network observer on " + iface);
+            }
+            stopHalAndWificondIfNecessary();
+        }
+    }
+
     /** Helper method invoked to teardown iface and perform necessary cleanup */
     private void onInterfaceDestroyed(@NonNull Iface iface) {
         synchronized (mLock) {
@@ -547,6 +563,8 @@ public class WifiNative {
                 onClientInterfaceForScanDestroyed(iface);
             } else if (iface.type == Iface.IFACE_TYPE_AP) {
                 onSoftApInterfaceDestroyed(iface);
+            } else if (iface.type == Iface.IFACE_TYPE_BRIDGE) {
+                onBridgeInterfaceDestroyed(iface);
             }
             // Invoke the external callback.
             iface.externalListener.onDestroyed(iface.name);
@@ -662,7 +680,8 @@ public class WifiNative {
                 if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY
                         || iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
                     mWifiMetrics.incrementNumClientInterfaceDown();
-                } else if (iface.type == Iface.IFACE_TYPE_AP) {
+                } else if (iface.type == Iface.IFACE_TYPE_AP
+                        || iface.type == Iface.IFACE_TYPE_BRIDGE) {
                     mWifiMetrics.incrementNumSoftApInterfaceDown();
                 }
             }
@@ -1218,7 +1237,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
                 return null;
             }
-            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_AP);
+            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_BRIDGE);
             if (iface == null) {
                 Log.e(TAG, "Failed to allocate new bridge iface");
                 return null;
@@ -1301,6 +1320,9 @@ public class WifiNative {
                     Log.e(TAG, "Failed to remove iface in vendor HAL=" + ifaceName);
                     return;
                 }
+            } else if (iface.type == Iface.IFACE_TYPE_BRIDGE) {
+                 mIfaceMgr.removeIface(iface.id);
+                 onInterfaceDestroyed(iface);
             }
             Log.i(TAG, "Successfully initiated teardown for iface=" + ifaceName);
         }
