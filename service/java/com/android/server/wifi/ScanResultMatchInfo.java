@@ -59,6 +59,10 @@ public class ScanResultMatchInfo {
             return WifiConfiguration.SECURITY_TYPE_WEP;
         } else if (WifiConfigurationUtil.isConfigForOweNetwork(config)) {
             return WifiConfiguration.SECURITY_TYPE_OWE;
+        } else if (WifiConfigurationUtil.isConfigForSha256Network(config)) {
+            return WifiConfiguration.SECURITY_TYPE_FILS_SHA256;
+        } else if (WifiConfigurationUtil.isConfigForSha384Network(config)) {
+            return WifiConfiguration.SECURITY_TYPE_FILS_SHA384;
         } else if (WifiConfigurationUtil.isConfigForOpenNetwork(config)) {
             return WifiConfiguration.SECURITY_TYPE_OPEN;
         }
@@ -91,6 +95,10 @@ public class ScanResultMatchInfo {
             return WifiConfiguration.SECURITY_TYPE_WEP;
         } else if (ScanResultUtil.isScanResultForOweNetwork(scanResult)) {
             return WifiConfiguration.SECURITY_TYPE_OWE;
+        } else if (ScanResultUtil.isScanResultForFilsSha256Network(scanResult)) {
+            return WifiConfiguration.SECURITY_TYPE_FILS_SHA256;
+        } else if (ScanResultUtil.isScanResultForFilsSha384Network(scanResult)) {
+            return WifiConfiguration.SECURITY_TYPE_FILS_SHA384;
         } else if (ScanResultUtil.isScanResultForOpenNetwork(scanResult)) {
             return WifiConfiguration.SECURITY_TYPE_OPEN;
         } else {
