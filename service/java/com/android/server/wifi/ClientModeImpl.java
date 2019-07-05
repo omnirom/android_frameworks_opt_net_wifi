@@ -4171,6 +4171,7 @@ public class ClientModeImpl extends StateMachine {
             int reasonCode;
             boolean timedOut;
             boolean handleStatus = HANDLED;
+            String device_capability;
 
             switch (message.what) {
                 case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
@@ -4497,7 +4498,20 @@ public class ClientModeImpl extends StateMachine {
                     String currentMacAddress = mWifiNative.getMacAddress(mInterfaceName);
                     mWifiInfo.setMacAddress(currentMacAddress);
                     Log.i(TAG, "Connecting with " + currentMacAddress + " as the mac address");
-
+                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
+                         config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
+                        device_capability = getCapabilities("key_mgmt");
+                        if (!device_capability.contains("FILS-SHA256")) {
+                             Log.d(TAG, "FILS_SHA256 not supported, device capability: " +
+                                                                             device_capability);
+                             config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA256);
+                        }
+                        if (!device_capability.contains("FILS-SHA384")) {
+                             Log.d(TAG, "FILS_SHA384 not supported, device capability: " +
+                                                                             device_capability);
+                             config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA384);
+                        }
+                    }
                     if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
                          config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
                         /*
