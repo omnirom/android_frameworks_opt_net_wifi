@@ -1130,6 +1130,12 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(mode).flush();
 
+        if (wifiConfig == null && mSettingsStore.isAirplaneModeOn()) {
+            Log.d(TAG, "Starting softap in airplane mode. Fallback to 2G band");
+            wifiConfig = new WifiConfiguration(mWifiApConfigStore.getApConfiguration());
+            wifiConfig.apBand = WifiConfiguration.AP_BAND_2GHZ;
+        }
+
         setDualSapMode(wifiConfig);
 
         mSoftApExtendingWifi = isCurrentStaShareThisAp();
