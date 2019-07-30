@@ -2246,6 +2246,16 @@ public class WifiConfigManager {
                 Log.v(TAG, "getSavedNetworkFromScanDetail Found " + config.configKey()
                         + " for " + scanResult.SSID + "[" + scanResult.capabilities + "]");
             }
+            if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X)) {
+                if (scanResult.capabilities.contains("FILS-SHA256"))
+                   config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA256);
+                else
+                   config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA256);
+                if (scanResult.capabilities.contains("FILS-SHA384"))
+                   config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA384);
+                else
+                   config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA384);
+            }
         }
         return config;
     }
