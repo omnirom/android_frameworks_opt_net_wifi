@@ -585,6 +585,33 @@ public class HostapdHal {
         return encryptionType;
     }
 
+    private static int getVendorEncryptionType(WifiConfiguration localConfig) {
+        int encryptionType;
+        switch (localConfig.getAuthType()) {
+            case WifiConfiguration.KeyMgmt.NONE:
+                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.NONE;
+                break;
+            case WifiConfiguration.KeyMgmt.WPA_PSK:
+                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA;
+                break;
+            case WifiConfiguration.KeyMgmt.WPA2_PSK:
+                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA2;
+                break;
+            case WifiConfiguration.KeyMgmt.SAE:
+                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.SAE;
+                break;
+            case WifiConfiguration.KeyMgmt.OWE:
+                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.OWE;
+                break;
+            default:
+                // We really shouldn't default to None, but this was how NetworkManagementService
+                // used to do this.
+                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.NONE;
+                break;
+        }
+        return encryptionType;
+    }
+
     private static int getBand(WifiConfiguration localConfig) {
         int bandType;
         switch (localConfig.apBand) {
@@ -836,6 +863,8 @@ public class HostapdHal {
                             new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams();
                     vendorIfaceParams1_1.VendorV1_0 = vendorIfaceParams;
                     vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
+                    vendorIfaceParams1_1.vendorEncryptionType = getVendorEncryptionType(config);
+                    vendorIfaceParams1_1.oweTransIfaceName = (config.oweTransIfaceName != null) ? config.oweTransIfaceName : "";
                     if (mEnableAcs) {
                         vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(mVendorAcsChannelRanges);
                     }
