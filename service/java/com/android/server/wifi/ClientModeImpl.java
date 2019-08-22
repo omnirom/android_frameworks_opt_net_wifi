@@ -3570,20 +3570,25 @@ public class ClientModeImpl extends StateMachine {
             Log.e(TAG, "No config to change MAC address to");
             return;
         }
-        MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
-        MacAddress newMac = config.getOrCreateRandomizedMacAddress();
-        mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
-        if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
-            Log.wtf(TAG, "Config generated an invalid MAC address");
-        } else if (currentMac.equals(newMac)) {
-            Log.d(TAG, "No changes in MAC address");
-        } else {
-            mWifiMetrics.logStaEvent(StaEvent.TYPE_MAC_CHANGE, config);
-            boolean setMacSuccess =
-                    mWifiNative.setMacAddress(mInterfaceName, newMac);
-            Log.d(TAG, "ConnectedMacRandomization SSID(" + config.getPrintableSsid()
-                    + "). setMacAddress(" + newMac.toString() + ") from "
-                    + currentMac.toString() + " = " + setMacSuccess);
+
+        try {
+            MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
+            MacAddress newMac = config.getOrCreateRandomizedMacAddress();
+            mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
+            if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
+                Log.wtf(TAG, "Config generated an invalid MAC address");
+            } else if (currentMac.equals(newMac)) {
+                Log.d(TAG, "No changes in MAC address");
+            } else {
+                mWifiMetrics.logStaEvent(StaEvent.TYPE_MAC_CHANGE, config);
+                boolean setMacSuccess =
+                        mWifiNative.setMacAddress(mInterfaceName, newMac);
+                Log.d(TAG, "ConnectedMacRandomization SSID(" + config.getPrintableSsid()
+                        + "). setMacAddress(" + newMac.toString() + ") from "
+                        + currentMac.toString() + " = " + setMacSuccess);
+            }
+        } catch (NullPointerException | IllegalArgumentException e) {
+            Log.e(TAG, "Exception in configureRandomizedMacAddress: " + e.toString());
         }
     }
 
