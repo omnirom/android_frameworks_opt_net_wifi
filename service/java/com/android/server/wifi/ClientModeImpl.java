@@ -3570,20 +3570,25 @@ public class ClientModeImpl extends StateMachine {
             Log.e(TAG, "No config to change MAC address to");
             return;
         }
-        MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
-        MacAddress newMac = config.getOrCreateRandomizedMacAddress();
-        mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
-        if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
-            Log.wtf(TAG, "Config generated an invalid MAC address");
-        } else if (currentMac.equals(newMac)) {
-            Log.d(TAG, "No changes in MAC address");
-        } else {
-            mWifiMetrics.logStaEvent(StaEvent.TYPE_MAC_CHANGE, config);
-            boolean setMacSuccess =
-                    mWifiNative.setMacAddress(mInterfaceName, newMac);
-            Log.d(TAG, "ConnectedMacRandomization SSID(" + config.getPrintableSsid()
-                    + "). setMacAddress(" + newMac.toString() + ") from "
-                    + currentMac.toString() + " = " + setMacSuccess);
+
+        try {
+            MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
+            MacAddress newMac = config.getOrCreateRandomizedMacAddress();
+            mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
+            if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
+                Log.wtf(TAG, "Config generated an invalid MAC address");
+            } else if (currentMac.equals(newMac)) {
+                Log.d(TAG, "No changes in MAC address");
+            } else {
+                mWifiMetrics.logStaEvent(StaEvent.TYPE_MAC_CHANGE, config);
+                boolean setMacSuccess =
+                        mWifiNative.setMacAddress(mInterfaceName, newMac);
+                Log.d(TAG, "ConnectedMacRandomization SSID(" + config.getPrintableSsid()
+                        + "). setMacAddress(" + newMac.toString() + ") from "
+                        + currentMac.toString() + " = " + setMacSuccess);
+            }
+        } catch (NullPointerException | IllegalArgumentException e) {
+            Log.e(TAG, "Exception in configureRandomizedMacAddress: " + e.toString());
         }
     }
 
@@ -3709,8 +3714,6 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_INITIALIZE:
                     ok = mWifiNative.initialize();
-                    mPasspointManager.initializeProvisioner(
-                            mWifiInjector.getWifiServiceHandlerThread().getLooper());
                     replyToMessage(message, message.what, ok ? SUCCESS : FAILURE);
                     break;
                 case CMD_BOOT_COMPLETED:
@@ -3720,6 +3723,8 @@ public class ClientModeImpl extends StateMachine {
                     if (!mWifiConfigManager.loadFromStore()) {
                         Log.e(TAG, "Failed to load from config store");
                     }
+                    mPasspointManager.initializeProvisioner(
+                            mWifiInjector.getWifiServiceHandlerThread().getLooper());
                     registerNetworkFactory();
                     break;
                 case CMD_SCREEN_STATE_CHANGED:
@@ -4171,6 +4176,7 @@ public class ClientModeImpl extends StateMachine {
             int reasonCode;
             boolean timedOut;
             boolean handleStatus = HANDLED;
+            String device_capability;
 
             switch (message.what) {
                 case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
@@ -4497,7 +4503,20 @@ public class ClientModeImpl extends StateMachine {
                     String currentMacAddress = mWifiNative.getMacAddress(mInterfaceName);
                     mWifiInfo.setMacAddress(currentMacAddress);
                     Log.i(TAG, "Connecting with " + currentMacAddress + " as the mac address");
-
+                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
+                         config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
+                        device_capability = getCapabilities("key_mgmt");
+                        if (!device_capability.contains("FILS-SHA256")) {
+                             Log.d(TAG, "FILS_SHA256 not supported, device capability: " +
+                                                                             device_capability);
+                             config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA256);
+                        }
+                        if (!device_capability.contains("FILS-SHA384")) {
+                             Log.d(TAG, "FILS_SHA384 not supported, device capability: " +
+                                                                             device_capability);
+                             config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA384);
+                        }
+                    }
                     if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
                          config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
                         /*

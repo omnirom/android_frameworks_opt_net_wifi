@@ -504,6 +504,7 @@ public class WifiNative {
             }
             stopSupplicantIfNecessary();
             stopHalAndWificondIfNecessary();
+            removeFstInterface();
         }
     }
 

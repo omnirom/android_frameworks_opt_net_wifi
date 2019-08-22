@@ -1130,6 +1130,12 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(mode).flush();
 
+        if (wifiConfig == null && mSettingsStore.isAirplaneModeOn()) {
+            Log.d(TAG, "Starting softap in airplane mode. Fallback to 2G band");
+            wifiConfig = new WifiConfiguration(mWifiApConfigStore.getApConfiguration());
+            wifiConfig.apBand = WifiConfiguration.AP_BAND_2GHZ;
+        }
+
         setDualSapMode(wifiConfig);
 
         mSoftApExtendingWifi = isCurrentStaShareThisAp();
@@ -3728,7 +3734,8 @@ public class WifiServiceImpl extends BaseWifiService {
         if (apConfig == null)
             apConfig = mWifiApConfigStore.getApConfiguration();
 
-        if (apConfig.apBand == WifiConfiguration.AP_BAND_DUAL) {
+        if (apConfig.apBand == WifiConfiguration.AP_BAND_DUAL
+                || apConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.OWE)) {
             mLog.trace("setDualSapMode uid=%").c(Binder.getCallingUid()).flush();
             mWifiApConfigStore.setDualSapStatus(true);
         } else {
