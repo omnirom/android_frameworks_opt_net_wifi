@@ -842,7 +842,14 @@ public class SoftApManager implements ActiveModeManager {
                         transitionTo(mIdleState);
                         break;
                     case CMD_INTERFACE_DESTROYED:
-                        Log.d(TAG, "Interface was cleanly destroyed.");
+                        //teardown Dual SAP interfaces if required
+                        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+                            Log.d(TAG, "Bridge inteface destroyed, Teardown dual intefaces");
+                            mDualSapIfacesDestroyed = true;
+                            mWifiNative.teardownInterface(mdualApInterfaces[0]);
+                            mWifiNative.teardownInterface(mdualApInterfaces[1]);
+                        }
+                        Log.d(TAG, "Interface(s) was cleanly destroyed.");
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
                         mIfaceIsDestroyed = true;
