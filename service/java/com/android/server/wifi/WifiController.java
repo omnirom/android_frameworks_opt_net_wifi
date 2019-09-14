@@ -289,8 +289,10 @@ public class WifiController extends StateMachine {
                     // note: CMD_SET_AP is handled/dropped in ECM mode - will not start here
 
                     // If request is to start dual sap, turn off sta.
-                    if (msg.arg1 == 1 && mWifiApConfigStore.getDualSapStatus())
+                    if (msg.arg1 == 1 && mWifiApConfigStore.getDualSapStatus()) {
+                        mActiveModeWarden.disableWifi();
                         transitionTo(mStaDisabledState);
+                    }
 
                     if (msg.arg1 == 1) {
                         SoftApModeConfiguration config = (SoftApModeConfiguration) msg.obj;
