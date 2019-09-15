@@ -3880,4 +3880,18 @@ public class WifiServiceImpl extends BaseWifiService {
                 () -> mClientModeImpl.updateWifiUsabilityScore(seqNum, score,
                         predictionHorizonSec));
     }
+
+    /**
+     * Gets SoftAP Wi-Fi Generation
+     * @return Wi-Fi generation if SoftAp enabled or -1.
+     */
+    @Override
+    public int getSoftApWifiGeneration() {
+        enforceAccessPermission();
+        if (mSoftApState == WifiManager.WIFI_AP_STATE_ENABLED) {
+            return mWifiApConfigStore.getWifiGeneration();
+        } else {
+            return -1;
+        }
+    }
 }

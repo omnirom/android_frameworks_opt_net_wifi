@@ -16,6 +16,11 @@
 
 package com.android.server.wifi;
 
+import static android.net.wifi.WifiManager.WIFI_GENERATION_4;
+import static android.net.wifi.WifiManager.WIFI_GENERATION_5;
+import static android.net.wifi.WifiManager.WIFI_GENERATION_6;
+import static android.net.wifi.WifiManager.WIFI_GENERATION_DEFAULT;
+
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.net.InterfaceConfiguration;
@@ -135,6 +140,21 @@ public class WifiNative {
             this.twtSupport = twtSupport;
         }
 
+    }
+
+    public static class WifiGenerationCapabilities {
+
+        public boolean htSupport2g = false;
+        public boolean vhtSupport2g = false;
+        public boolean staHeSupport2g = false;
+        public boolean sapHeSupport2g = false;
+        public boolean htSupport5g = false;
+        public boolean vhtSupport5g = false;
+        public boolean staHeSupport5g = false;
+        public boolean sapHeSupport5g = false;
+
+        public WifiGenerationCapabilities() {
+        }
     }
 
     /********************************************************
@@ -1786,6 +1806,24 @@ public class WifiNative {
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
         }
+
+        WifiGenerationCapabilities wifiGenerationCapabilities = mWificondControl.getWifiGenerationCapabilities();
+        int wifiGeneration = WIFI_GENERATION_DEFAULT;
+
+        if (wifiGenerationCapabilities != null) {
+            if (config.apBand == WifiConfiguration.AP_BAND_2GHZ)
+                wifiGeneration = wifiGenerationCapabilities.sapHeSupport2g ? WIFI_GENERATION_6 :
+                                 (wifiGenerationCapabilities.vhtSupport2g ? WIFI_GENERATION_5 :
+                                 (wifiGenerationCapabilities.htSupport2g ? WIFI_GENERATION_4 : WIFI_GENERATION_DEFAULT));
+            else {
+                wifiGeneration = wifiGenerationCapabilities.sapHeSupport5g ? WIFI_GENERATION_6 :
+                                 (wifiGenerationCapabilities.vhtSupport5g ? WIFI_GENERATION_5 :
+                                 (wifiGenerationCapabilities.htSupport5g ? WIFI_GENERATION_4 : WIFI_GENERATION_DEFAULT));
+           }
+        }
+
+        WifiInjector.getInstance().getWifiApConfigStore().setWifiGeneration(wifiGeneration);
+
         return true;
     }
 
