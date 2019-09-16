@@ -1494,6 +1494,28 @@ public class WifiServiceImpl extends BaseWifiService {
         public void onNumClientsChanged(int numClients) {
             // Nothing to do
         }
+
+        /**
+         * Called when station connected to soft AP changes.
+         *
+         * @param Macaddr Mac Address of connected Stations to soft AP
+         * @param numClients number of connected clients to soft AP
+         */
+        @Override
+        public void onStaConnected(String Macaddr,int numClients) {
+          // Not implemented.
+        }
+
+        /**
+         * Called when station disconnected to soft AP changes.
+         *
+         * @param Macaddr Mac Address of Disconnected Stations to soft AP
+         * @param numClients number of connected clients to soft AP
+         */
+        @Override
+        public void onStaDisconnected(String Macaddr, int numClients) {
+          // Not implemented.
+        }
     }
 
     /**
