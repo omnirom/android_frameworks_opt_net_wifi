@@ -65,6 +65,7 @@ public class WifiController extends StateMachine {
     static final int CMD_WIFI_TOGGLED                           = BASE + 8;
     static final int CMD_AIRPLANE_TOGGLED                       = BASE + 9;
     static final int CMD_SET_AP                                 = BASE + 10;
+    static final int CMD_AP_START_FAILURE                       = BASE + 13;
     static final int CMD_EMERGENCY_CALL_STATE_CHANGED           = BASE + 14;
     static final int CMD_AP_STOPPED                             = BASE + 15;
     static final int CMD_STA_START_FAILURE                      = BASE + 16;
