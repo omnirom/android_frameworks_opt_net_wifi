@@ -174,7 +174,6 @@ public class HalDeviceManager {
      */
     public void stop() {
         stopWifi();
-        mWifi = null;
     }
 
     /**
