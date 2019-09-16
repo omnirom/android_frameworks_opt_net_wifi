@@ -294,14 +294,20 @@ public class ActiveModeWarden {
             switch(message.what) {
                 case ModeStateMachine.CMD_START_CLIENT_MODE:
                     Log.d(TAG, "Switching from " + getCurrentMode() + " to ClientMode");
+                    if (getCurrentMode().equals(mClientModeActiveState.getName()))
+                        return NOT_HANDLED;
                     mModeStateMachine.transitionTo(mClientModeActiveState);
                     break;
                 case ModeStateMachine.CMD_START_SCAN_ONLY_MODE:
                     Log.d(TAG, "Switching from " + getCurrentMode() + " to ScanOnlyMode");
+                    if (getCurrentMode().equals(mScanOnlyModeActiveState.getName()))
+                        return NOT_HANDLED;
                     mModeStateMachine.transitionTo(mScanOnlyModeActiveState);
                     break;
                 case ModeStateMachine.CMD_DISABLE_WIFI:
                     Log.d(TAG, "Switching from " + getCurrentMode() + " to WifiDisabled");
+                    if (getCurrentMode().equals(mWifiDisabledState.getName()))
+                        return NOT_HANDLED;
                     mModeStateMachine.transitionTo(mWifiDisabledState);
                     break;
                 default:
