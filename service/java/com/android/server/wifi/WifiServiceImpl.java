@@ -3902,7 +3902,7 @@ public class WifiServiceImpl extends BaseWifiService {
     @Override
     public int getSoftApWifiGeneration() {
         enforceAccessPermission();
-        if (mSoftApState == WifiManager.WIFI_AP_STATE_ENABLED) {
+        if (getWifiApEnabledState() == WifiManager.WIFI_AP_STATE_ENABLED) {
             return mWifiApConfigStore.getWifiGeneration();
         } else {
             return -1;
