@@ -35,7 +35,6 @@ import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.WifiScanner.PnoSettings;
 import android.net.wifi.WifiScanner.ScanSettings;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.Process;
 import android.os.WorkSource;
 import android.util.LocalLog;
@@ -144,7 +143,6 @@ public class WifiConnectivityManager {
     private final WifiNetworkSelector mNetworkSelector;
     private final WifiLastResortWatchdog mWifiLastResortWatchdog;
     private final OpenNetworkNotifier mOpenNetworkNotifier;
-    private final CarrierNetworkNotifier mCarrierNetworkNotifier;
     private final CarrierNetworkConfig mCarrierNetworkConfig;
     private final WifiMetrics mWifiMetrics;
     private final AlarmManager mAlarmManager;
@@ -305,11 +303,6 @@ public class WifiConnectivityManager {
             if (mWifiState == WIFI_STATE_DISCONNECTED) {
                 mOpenNetworkNotifier.handleScanResults(
                         mNetworkSelector.getFilteredScanDetailsForOpenUnsavedNetworks());
-                if (mCarrierNetworkConfig.isCarrierEncryptionInfoAvailable()) {
-                    mCarrierNetworkNotifier.handleScanResults(
-                            mNetworkSelector.getFilteredScanDetailsForCarrierUnsavedNetworks(
-                                    mCarrierNetworkConfig));
-                }
             }
             return false;
         }
@@ -608,8 +601,7 @@ public class WifiConnectivityManager {
             WifiInjector injector, WifiConfigManager configManager, WifiInfo wifiInfo,
             WifiNetworkSelector networkSelector, WifiConnectivityHelper connectivityHelper,
             WifiLastResortWatchdog wifiLastResortWatchdog, OpenNetworkNotifier openNetworkNotifier,
-            CarrierNetworkNotifier carrierNetworkNotifier,
-            CarrierNetworkConfig carrierNetworkConfig, WifiMetrics wifiMetrics, Looper looper,
+            CarrierNetworkConfig carrierNetworkConfig, WifiMetrics wifiMetrics, Handler handler,
             Clock clock, LocalLog localLog) {
         mStateMachine = stateMachine;
         mWifiInjector = injector;
@@ -620,11 +612,10 @@ public class WifiConnectivityManager {
         mLocalLog = localLog;
         mWifiLastResortWatchdog = wifiLastResortWatchdog;
         mOpenNetworkNotifier = openNetworkNotifier;
-        mCarrierNetworkNotifier = carrierNetworkNotifier;
         mCarrierNetworkConfig = carrierNetworkConfig;
         mWifiMetrics = wifiMetrics;
         mAlarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-        mEventHandler = new Handler(looper);
+        mEventHandler = handler;
         mClock = clock;
         mScoringParams = scoringParams;
         mConnectionAttemptTimeStamps = new LinkedList<>();
@@ -943,11 +934,14 @@ public class WifiConnectivityManager {
         settings.reportEvents = WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT
                             | WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN;
         settings.numBssidsPerScan = 0;
-
+        // retrieve the list of hidden network SSIDs from saved network to scan for
         List<ScanSettings.HiddenNetwork> hiddenNetworkList =
-                mConfigManager.retrieveHiddenNetworkList();
+                new ArrayList<>(mConfigManager.retrieveHiddenNetworkList());
+        // retrieve the list of hidden network SSIDs from Network suggestion to scan for
+        hiddenNetworkList.addAll(
+                mWifiInjector.getWifiNetworkSuggestionsManager().retrieveHiddenNetworkList());
         settings.hiddenNetworks =
-                hiddenNetworkList.toArray(new ScanSettings.HiddenNetwork[hiddenNetworkList.size()]);
+                hiddenNetworkList.toArray(new ScanSettings.HiddenNetwork[0]);
 
         SingleScanListener singleScanListener =
                 new SingleScanListener(isFullBandScan);
@@ -1170,7 +1164,6 @@ public class WifiConnectivityManager {
         mScreenOn = screenOn;
 
         mOpenNetworkNotifier.handleScreenStateChanged(screenOn);
-        mCarrierNetworkNotifier.handleScreenStateChanged(screenOn);
 
         startConnectivityScan(SCAN_ON_SCHEDULE);
     }
@@ -1230,10 +1223,8 @@ public class WifiConnectivityManager {
                     ? null
                     : mWifiInfo.getWifiSsid().toString();
             mOpenNetworkNotifier.handleWifiConnected(ssid);
-            mCarrierNetworkNotifier.handleWifiConnected(ssid);
         } else {
             mOpenNetworkNotifier.handleConnectionFailure();
-            mCarrierNetworkNotifier.handleConnectionFailure();
         }
     }
 
@@ -1518,7 +1509,6 @@ public class WifiConnectivityManager {
         clearBssidBlacklist();
         resetLastPeriodicSingleScanTimeStamp();
         mOpenNetworkNotifier.clearPendingNotification(true /* resetRepeatDelay */);
-        mCarrierNetworkNotifier.clearPendingNotification(true /* resetRepeatDelay */);
         mLastConnectionAttemptBssid = null;
         mWaitForFullBandScanResults = false;
     }
@@ -1578,7 +1568,6 @@ public class WifiConnectivityManager {
         mLocalLog.dump(fd, pw, args);
         pw.println("WifiConnectivityManager - Log End ----");
         mOpenNetworkNotifier.dump(fd, pw, args);
-        mCarrierNetworkNotifier.dump(fd, pw, args);
         mCarrierNetworkConfig.dump(fd, pw, args);
     }
 }

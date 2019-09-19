@@ -21,7 +21,6 @@ import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
 import android.os.RemoteException;
 import android.util.Log;
 
@@ -45,9 +44,8 @@ public class WifiTrafficPoller {
     private final ExternalCallbackTracker<ITrafficStateCallback> mRegisteredCallbacks;
     private String mInterface;
 
-    WifiTrafficPoller(@NonNull Looper looper) {
-        mRegisteredCallbacks = new ExternalCallbackTracker<ITrafficStateCallback>(
-                new Handler(looper));
+    WifiTrafficPoller(@NonNull Handler handler) {
+        mRegisteredCallbacks = new ExternalCallbackTracker<>(handler);
     }
 
     /**

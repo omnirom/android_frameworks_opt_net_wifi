@@ -38,7 +38,6 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.Process;
 import android.os.UserHandle;
 import android.os.UserManager;
@@ -271,6 +270,7 @@ public class WifiConfigManager {
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
     private final WifiInjector mWifiInjector;
+    private boolean mConnectedMacRandomzationSupported;
 
     /**
      * Local log used for debugging any WifiConfigManager issues.
@@ -387,7 +387,7 @@ public class WifiConfigManager {
             NetworkListUserStoreData networkListUserStoreData,
             DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData,
             RandomizedMacStoreData randomizedMacStoreData,
-            FrameworkFacade frameworkFacade, Looper looper) {
+            FrameworkFacade frameworkFacade, Handler handler) {
         mContext = context;
         mClock = clock;
         mUserManager = userManager;
@@ -421,7 +421,7 @@ public class WifiConfigManager {
         mFrameworkFacade = frameworkFacade;
         mFrameworkFacade.registerContentObserver(mContext, Settings.Global.getUriFor(
                 Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED), false,
-                new ContentObserver(new Handler(looper)) {
+                new ContentObserver(handler) {
                     @Override
                     public void onChange(boolean selfChange) {
                         updatePnoFrequencyCullingSetting();
@@ -430,13 +430,15 @@ public class WifiConfigManager {
         updatePnoFrequencyCullingSetting();
         mFrameworkFacade.registerContentObserver(mContext, Settings.Global.getUriFor(
                 Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED), false,
-                new ContentObserver(new Handler(looper)) {
+                new ContentObserver(handler) {
                     @Override
                     public void onChange(boolean selfChange) {
                         updatePnoRecencySortingSetting();
                     }
                 });
         updatePnoRecencySortingSetting();
+        mConnectedMacRandomzationSupported = mContext.getResources()
+                .getBoolean(R.bool.config_wifi_connected_mac_randomization_supported);
         try {
             mSystemUiUid = mContext.getPackageManager().getPackageUidAsUser(SYSUI_PACKAGE_NAME,
                     PackageManager.MATCH_SYSTEM_ONLY, UserHandle.USER_SYSTEM);
@@ -459,6 +461,17 @@ public class WifiConfigManager {
         c.setTimeInMillis(wallClockMillis);
         sb.append(String.format("%tm-%td %tH:%tM:%tS.%tL", c, c, c, c, c, c));
         return sb.toString();
+    }
+
+    /**
+     * Determine if the framework should perform "aggressive" MAC randomization when connecting
+     * to the SSID in the input WifiConfiguration.
+     * @param config
+     * @return
+     */
+    public boolean shouldUseAggressiveMode(WifiConfiguration config) {
+        // TODO: b/137795359 add logic for classifying network as safe for aggressive mode.
+        return false;
     }
 
     /**
@@ -540,6 +553,9 @@ public class WifiConfigManager {
         if (targetUid != Process.WIFI_UID && targetUid != Process.SYSTEM_UID
                 && targetUid != configuration.creatorUid) {
             maskRandomizedMacAddressInWifiConfiguration(network);
+        }
+        if (!mConnectedMacRandomzationSupported) {
+            network.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         }
         return network;
     }
@@ -1906,22 +1922,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Set randomized MAC address for the provided network.
-     *
-     * @param networkId network ID corresponding to the network.
-     * @param macAddress Randomized MAC address to be used for network connection.
-     * @return true if the network was found, false otherwise.
-    */
-    public boolean setNetworkRandomizedMacAddress(int networkId, MacAddress macAddress) {
-        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
-        if (config == null) {
-            return false;
-        }
-        config.setRandomizedMacAddress(macAddress);
-        return true;
-    }
-
-    /**
      * Clear the {@link NetworkSelectionStatus#mCandidate},
      * {@link NetworkSelectionStatus#mCandidateScore} &
      * {@link NetworkSelectionStatus#mSeenInLastQualifiedNetworkSelection} for the provided network.
@@ -2711,7 +2711,7 @@ public class WifiConfigManager {
     }
 
     /**
-     * Retrieves a list of all the saved hidden networks for scans.
+     * Retrieves a list of all the saved hidden networks for scans
      *
      * Hidden network list sent to the firmware has limited size. If there are a lot of saved
      * networks, this list will be truncated and we might end up not sending the networks
@@ -2724,19 +2724,12 @@ public class WifiConfigManager {
     public List<WifiScanner.ScanSettings.HiddenNetwork> retrieveHiddenNetworkList() {
         List<WifiScanner.ScanSettings.HiddenNetwork> hiddenList = new ArrayList<>();
         List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
-        // Remove any permanently disabled networks or non hidden networks.
-        Iterator<WifiConfiguration> iter = networks.iterator();
-        while (iter.hasNext()) {
-            WifiConfiguration config = iter.next();
-            if (!config.hiddenSSID) {
-                iter.remove();
-            }
-        }
-        Collections.sort(networks, sScanListComparator);
+        // Remove any non hidden networks.
+        networks.removeIf(config -> !config.hiddenSSID);
+        networks.sort(sScanListComparator);
         // The most frequently connected network has the highest priority now.
         for (WifiConfiguration config : networks) {
-            hiddenList.add(
-                    new WifiScanner.ScanSettings.HiddenNetwork(config.SSID));
+            hiddenList.add(new WifiScanner.ScanSettings.HiddenNetwork(config.SSID));
         }
         return hiddenList;
     }
@@ -3130,7 +3123,7 @@ public class WifiConfigManager {
         }
         try {
             mWifiConfigStore.read();
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             Log.wtf(TAG, "Reading from new store failed. All saved networks are lost!", e);
             return false;
         } catch (XmlPullParserException e) {
@@ -3165,7 +3158,7 @@ public class WifiConfigManager {
                 return false;
             }
             mWifiConfigStore.switchUserStoresAndRead(userStoreFiles);
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             Log.wtf(TAG, "Reading from new store failed. All saved private networks are lost!", e);
             return false;
         } catch (XmlPullParserException e) {
@@ -3240,7 +3233,7 @@ public class WifiConfigManager {
 
         try {
             mWifiConfigStore.write(forceWrite);
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             Log.wtf(TAG, "Writing to store failed. Saved networks maybe lost!", e);
             return false;
         } catch (XmlPullParserException e) {

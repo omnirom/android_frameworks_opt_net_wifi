@@ -32,6 +32,7 @@ import com.android.server.wifi.WifiGbk;
 import com.android.server.wifi.WifiMonitor;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
+import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.ScanResultUtil;
 
 import java.io.FileDescriptor;
@@ -501,6 +502,14 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                     return r.getScanResult();
                 }).collect(Collectors.toList());
                 ScanResultUtil.dumpScanResults(pw, pnoScanResults, nowMs);
+            }
+            pw.println("Latest native scan results IEs:");
+            if (mNativeScanResults != null) {
+                for (ScanDetail detail : mNativeScanResults) {
+                    pw.println(NativeUtil.hexStringFromByteArray(
+                            detail.getInformationElementRawData()));
+                }
+                pw.println("");
             }
         }
     }
