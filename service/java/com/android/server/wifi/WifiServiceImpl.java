@@ -1120,8 +1120,10 @@ public class WifiServiceImpl extends BaseWifiService {
                 }
             }
             // Notify WifiController so it has a chance to turn wifi back on
-            if (state == WIFI_AP_STATE_FAILED || state == WIFI_AP_STATE_DISABLED) {
+            if (state == WIFI_AP_STATE_DISABLED) {
                 mWifiController.sendMessage(WifiController.CMD_AP_STOPPED);
+            } else if (state == WIFI_AP_STATE_FAILED) {
+                mWifiController.sendMessage(WifiController.CMD_AP_START_FAILURE);
             }
         }
 
