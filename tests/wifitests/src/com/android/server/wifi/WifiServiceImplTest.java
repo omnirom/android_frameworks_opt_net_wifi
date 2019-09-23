@@ -820,7 +820,6 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiEnabledNoToggle() throws Exception {
-        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         // Set false because setWifiEnabled() avoids being called in checkAndStartWifi().
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
