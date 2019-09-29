@@ -705,6 +705,10 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
             if (mDbg) Log.d(TAG, "enableUsage(): while Wi-Fi is disabled - ignoring");
             return;
         }
+        if (!mWifiAwareNativeManager.isAwareNativeAvailable()) {
+            if (mDbg) Log.d(TAG, "enableUsage(): while Aware Native isn't Available - ignoring");
+            return;
+        }
         Message msg = mSm.obtainMessage(MESSAGE_TYPE_COMMAND);
         msg.arg1 = COMMAND_TYPE_ENABLE_USAGE;
         mSm.sendMessage(msg);
@@ -2573,6 +2577,10 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         }
 
         if (completedCommand.arg1 == COMMAND_TYPE_CONNECT) {
+            if (mCurrentAwareConfiguration == null) { // enabled (as opposed to re-configured)
+                createAllDataPathInterfaces();
+            }
+
             Bundle data = completedCommand.getData();
 
             int clientId = completedCommand.arg2;
@@ -2611,9 +2619,6 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
             return;
         }
 
-        if (mCurrentAwareConfiguration == null) { // enabled (as opposed to re-configured)
-            createAllDataPathInterfaces();
-        }
         mCurrentAwareConfiguration = mergeConfigRequests(null);
         if (mCurrentAwareConfiguration == null) {
             Log.wtf(TAG, "onConfigCompletedLocal: got a null merged configuration after config!?");

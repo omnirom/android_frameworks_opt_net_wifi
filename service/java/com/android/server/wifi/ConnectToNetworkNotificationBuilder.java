@@ -53,13 +53,16 @@ public class ConnectToNetworkNotificationBuilder {
             "com.android.server.wifi.ConnectToNetworkNotification.AVAILABLE_NETWORK_NOTIFIER_TAG";
 
     private Context mContext;
+    private WifiInjector mWifiInjector;
     private Resources mResources;
     private FrameworkFacade mFrameworkFacade;
 
     public ConnectToNetworkNotificationBuilder(
             Context context,
+            WifiInjector wifiInjector,
             FrameworkFacade framework) {
         mContext = context;
+        mWifiInjector = wifiInjector;
         mResources = context.getResources();
         mFrameworkFacade = framework;
     }
@@ -80,9 +83,6 @@ public class ConnectToNetworkNotificationBuilder {
         switch (notifierTag) {
             case OpenNetworkNotifier.TAG:
                 title = mContext.getText(R.string.wifi_available_title);
-                break;
-            case CarrierNetworkNotifier.TAG:
-                title = mContext.getText(R.string.wifi_available_carrier_network_title);
                 break;
             default:
                 Log.wtf("ConnectToNetworkNotificationBuilder", "Unknown network notifier."
@@ -153,8 +153,6 @@ public class ConnectToNetworkNotificationBuilder {
         switch (notifierTag) {
             case OpenNetworkNotifier.TAG:
                 return 1;
-            case CarrierNetworkNotifier.TAG:
-                return 2;
         }
         return 0;
     }
@@ -175,7 +173,8 @@ public class ConnectToNetworkNotificationBuilder {
     }
 
     private PendingIntent getPrivateBroadcast(String action, String extraData) {
-        Intent intent = new Intent(action).setPackage("android");
+        Intent intent = new Intent(action)
+                .setPackage(mWifiInjector.getWifiStackPackageName());
         int requestCode = 0;  // Makes the different kinds of notifications distinguishable
         if (extraData != null) {
             intent.putExtra(AVAILABLE_NETWORK_NOTIFIER_TAG, extraData);

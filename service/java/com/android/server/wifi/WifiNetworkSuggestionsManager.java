@@ -37,6 +37,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkSuggestion;
+import android.net.wifi.WifiScanner;
 import android.os.Handler;
 import android.os.UserHandle;
 import android.text.TextUtils;
@@ -51,6 +52,7 @@ import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -90,6 +92,10 @@ public class WifiNetworkSuggestionsManager {
     @VisibleForTesting
     public static final String EXTRA_UID =
             "com.android.server.wifi.extra.NetworkSuggestion.UID";
+    /**
+     * Limit number of hidden networks attach to scan
+     */
+    private static final int NUMBER_OF_HIDDEN_NETWORK_FOR_ONE_SCAN = 100;
 
     private final Context mContext;
     private final Resources mResources;
@@ -564,6 +570,8 @@ public class WifiNetworkSuggestionsManager {
             if (mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(uid)) {
                 Log.i(TAG, "Setting the carrier provisioning app approved");
                 perAppInfo.hasUserApproved = true;
+            } else {
+                sendUserApprovalNotification(packageName, uid);
             }
         }
         Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions =
@@ -607,6 +615,10 @@ public class WifiNetworkSuggestionsManager {
         mAppOps.stopWatchingMode(appOpsChangedListener);
     }
 
+    /**
+     * Remove provided list from that App active list. If provided list is empty, will remove all.
+     * Will disconnect network if current connected network is in the remove list.
+     */
     private void removeInternal(
             @NonNull Collection<ExtendedWifiNetworkSuggestion> extNetworkSuggestions,
             @NonNull String packageName,
@@ -626,6 +638,8 @@ public class WifiNetworkSuggestionsManager {
             // Stop tracking app-op changes from the app if they don't have active suggestions.
             stopTrackingAppOpsChange(packageName);
         }
+        // Disconnect suggested network if connected
+        triggerDisconnectIfServingNetworkSuggestionRemoved(extNetworkSuggestions);
         // Clear the scan cache.
         removeFromScanResultMatchInfoMap(extNetworkSuggestions);
     }
@@ -634,7 +648,7 @@ public class WifiNetworkSuggestionsManager {
      * Remove the provided list of network suggestions from the corresponding app's active list.
      */
     public @WifiManager.NetworkSuggestionsStatusCode int remove(
-            List<WifiNetworkSuggestion> networkSuggestions, String packageName) {
+            List<WifiNetworkSuggestion> networkSuggestions, int uid, String packageName) {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Removing " + networkSuggestions.size() + " networks from " + packageName);
         }
@@ -666,8 +680,6 @@ public class WifiNetworkSuggestionsManager {
     public void removeApp(@NonNull String packageName) {
         PerAppInfo perAppInfo = mActiveNetworkSuggestionsPerApp.get(packageName);
         if (perAppInfo == null) return;
-        // Disconnect from the current network, if the only suggestion for it was removed.
-        triggerDisconnectIfServingNetworkSuggestionRemoved(perAppInfo.extNetworkSuggestions);
         removeInternal(Collections.EMPTY_LIST, packageName, perAppInfo);
         // Remove the package fully from the internal database.
         mActiveNetworkSuggestionsPerApp.remove(packageName);
@@ -676,14 +688,27 @@ public class WifiNetworkSuggestionsManager {
     }
 
     /**
+     * Get all network suggestion for target App
+     * @return List of WifiNetworkSuggestions
+     */
+    public @NonNull List<WifiNetworkSuggestion> get(@NonNull String packageName) {
+        List<WifiNetworkSuggestion> networkSuggestionList = new ArrayList<>();
+        PerAppInfo perAppInfo = mActiveNetworkSuggestionsPerApp.get(packageName);
+        // if App never suggested return empty list.
+        if (perAppInfo == null) return networkSuggestionList;
+        for (ExtendedWifiNetworkSuggestion extendedSuggestion : perAppInfo.extNetworkSuggestions) {
+            networkSuggestionList.add(extendedSuggestion.wns);
+        }
+        return networkSuggestionList;
+    }
+
+
+    /**
      * Clear all internal state (for network settings reset).
      */
     public void clear() {
         Iterator<Map.Entry<String, PerAppInfo>> iter =
                 mActiveNetworkSuggestionsPerApp.entrySet().iterator();
-        // Disconnect if we're connected to one of the suggestions.
-        triggerDisconnectIfServingNetworkSuggestionRemoved(
-                mActiveNetworkSuggestionsMatchingConnection);
         while (iter.hasNext()) {
             Map.Entry<String, PerAppInfo> entry = iter.next();
             removeInternal(Collections.EMPTY_LIST, entry.getKey(), entry.getValue());
@@ -739,7 +764,7 @@ public class WifiNetworkSuggestionsManager {
     private PendingIntent getPrivateBroadcast(@NonNull String action, @NonNull String packageName,
                                               int uid) {
         Intent intent = new Intent(action)
-                .setPackage("android")
+                .setPackage(mWifiInjector.getWifiStackPackageName())
                 .putExtra(EXTRA_PACKAGE_NAME, packageName)
                 .putExtra(EXTRA_UID, uid);
         return mFrameworkFacade.getBroadcast(mContext, 0, intent,
@@ -912,6 +937,28 @@ public class WifiNetworkSuggestionsManager {
                     + "[" + wifiConfiguration.allowedKeyManagement + "]");
         }
         return approvedExtNetworkSuggestions;
+    }
+
+    /**
+     * Get hidden network from active network suggestions.
+     * Todo(): Now limit by a fixed number, maybe we can try rotation?
+     * @return set of WifiConfigurations
+     */
+    public List<WifiScanner.ScanSettings.HiddenNetwork> retrieveHiddenNetworkList() {
+        List<WifiScanner.ScanSettings.HiddenNetwork> hiddenNetworks = new ArrayList<>();
+        for (PerAppInfo appInfo : mActiveNetworkSuggestionsPerApp.values()) {
+            if (!appInfo.hasUserApproved) continue;
+            for (ExtendedWifiNetworkSuggestion ewns : appInfo.extNetworkSuggestions) {
+                if (!ewns.wns.wifiConfiguration.hiddenSSID) continue;
+                hiddenNetworks.add(
+                        new WifiScanner.ScanSettings.HiddenNetwork(
+                                ewns.wns.wifiConfiguration.SSID));
+                if (hiddenNetworks.size() >= NUMBER_OF_HIDDEN_NETWORK_FOR_ONE_SCAN) {
+                    return hiddenNetworks;
+                }
+            }
+        }
+        return hiddenNetworks;
     }
 
     /**

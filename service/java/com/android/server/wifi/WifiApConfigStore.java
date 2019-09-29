@@ -30,7 +30,6 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
 import android.os.Environment;
 import android.os.Handler;
-import android.os.Looper;
 import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
@@ -88,6 +87,7 @@ public class WifiApConfigStore {
     private ArrayList<Integer> mAllowed2GChannel = null;
 
     private final Context mContext;
+    private final WifiInjector mWifiInjector;
     private final Handler mHandler;
     private final String mApConfigFile;
     private final BackupManagerProxy mBackupManagerProxy;
@@ -100,18 +100,21 @@ public class WifiApConfigStore {
 
     private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
 
-    WifiApConfigStore(Context context, Looper looper,
+    WifiApConfigStore(Context context, WifiInjector wifiInjector, Handler handler,
             BackupManagerProxy backupManagerProxy, FrameworkFacade frameworkFacade) {
-        this(context, looper, backupManagerProxy, frameworkFacade, DEFAULT_AP_CONFIG_FILE);
+        this(context, wifiInjector, handler, backupManagerProxy, frameworkFacade,
+                DEFAULT_AP_CONFIG_FILE);
     }
 
     WifiApConfigStore(Context context,
-                      Looper looper,
+                      WifiInjector wifiInjector,
+                      Handler handler,
                       BackupManagerProxy backupManagerProxy,
                       FrameworkFacade frameworkFacade,
                       String apConfigFile) {
         mContext = context;
-        mHandler = new Handler(looper);
+        mWifiInjector = wifiInjector;
+        mHandler = handler;
         mBackupManagerProxy = backupManagerProxy;
         mFrameworkFacade = frameworkFacade;
         mApConfigFile = apConfigFile;
@@ -522,7 +525,8 @@ public class WifiApConfigStore {
     }
 
     private PendingIntent getPrivateBroadcast(String action) {
-        Intent intent = new Intent(action).setPackage("android");
+        Intent intent = new Intent(action)
+                .setPackage(mWifiInjector.getWifiStackPackageName());
         return mFrameworkFacade.getBroadcast(
                 mContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
     }
