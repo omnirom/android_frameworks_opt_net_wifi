@@ -34,7 +34,6 @@ import android.net.wifi.WifiSsid;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
 import android.os.RemoteException;
 import android.util.Log;
 
@@ -131,13 +130,13 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     WificondControl(WifiInjector wifiInjector, WifiMonitor wifiMonitor,
-            CarrierNetworkConfig carrierNetworkConfig, AlarmManager alarmManager, Looper looper,
+            CarrierNetworkConfig carrierNetworkConfig, AlarmManager alarmManager, Handler handler,
             Clock clock) {
         mWifiInjector = wifiInjector;
         mWifiMonitor = wifiMonitor;
         mCarrierNetworkConfig = carrierNetworkConfig;
         mAlarmManager = alarmManager;
-        mEventHandler = new Handler(looper);
+        mEventHandler = handler;
         mClock = clock;
     }
 
@@ -613,6 +612,7 @@ public class WificondControl implements IBinder.DeathRecipient {
             } else {
                 nativeResults = scannerImpl.getPnoScanResults();
             }
+            WifiNative.WifiGenerationCapabilities wifiGenerationCapa = getWifiGenerationCapabilities();
             for (NativeScanResult result : nativeResults) {
                 WifiSsid wifiSsid = WifiSsid.createFromByteArray(result.ssid);
                 String bssid;
@@ -630,6 +630,15 @@ public class WificondControl implements IBinder.DeathRecipient {
                         InformationElementUtil.parseInformationElements(result.infoElement);
                 InformationElementUtil.Capabilities capabilities =
                         new InformationElementUtil.Capabilities();
+                if (wifiGenerationCapa != null && result.frequency < 3000) {
+                    capabilities.reportHt = wifiGenerationCapa.htSupport2g;
+                    capabilities.reportVht = wifiGenerationCapa.vhtSupport2g;
+                    capabilities.reportHe = wifiGenerationCapa.staHeSupport2g;
+                } else if (wifiGenerationCapa != null) {
+                    capabilities.reportHt = wifiGenerationCapa.htSupport5g;
+                    capabilities.reportVht = wifiGenerationCapa.vhtSupport5g;
+                    capabilities.reportHe = wifiGenerationCapa.staHeSupport5g;
+                }
                 capabilities.from(ies, result.capability, isEnhancedOpenSupported());
                 String flags = capabilities.generateCapabilitiesString();
                 NetworkDetail networkDetail;
@@ -641,7 +650,8 @@ public class WificondControl implements IBinder.DeathRecipient {
                 }
 
                 ScanDetail scanDetail = new ScanDetail(networkDetail, wifiSsid, bssid, flags,
-                        result.signalMbm / 100, result.frequency, result.tsf, ies, null);
+                        result.signalMbm / 100, result.frequency, result.tsf, ies, null,
+                        result.infoElement);
                 ScanResult scanResult = scanDetail.getScanResult();
                 // Update carrier network info if this AP's SSID is associated with a carrier Wi-Fi
                 // network and it uses EAP.
@@ -1005,5 +1015,58 @@ public class WificondControl implements IBinder.DeathRecipient {
         mIsEnhancedOpenSupported = (mWifiNative.getSupportedFeatureSet(iface)
                 & WIFI_FEATURE_OWE) != 0;
         return mIsEnhancedOpenSupported;
+    }
+
+    /**
+     * Query the Wi-Fi generation capabilities for 2G and 5G bands.
+     *
+     * @return WifiNative.WifiGenerationCapabilities object, or null for error.
+     */
+    public WifiNative.WifiGenerationCapabilities getWifiGenerationCapabilities() {
+        if (!retrieveWificondAndRegisterForDeath()) {
+            return null;
+        }
+
+        int wifiGenerationCapaMask = 0;
+        try {
+            wifiGenerationCapaMask = mWificond.QcGetWifiGenerationCapabilities();
+        } catch (RemoteException e1) {
+            Log.e(TAG, "Failed to request getWifiGenerationCapabilities due to remote exception");
+            return null;
+        }
+
+        if (wifiGenerationCapaMask == -1) {
+            Log.e(TAG, "Failed to get Wifi generation capabilities.");
+            return null;
+        }
+
+	WifiNative.WifiGenerationCapabilities wifiGenerationCapa = new WifiNative.WifiGenerationCapabilities();
+
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_2G_HT_SUPPORT)) != 0) {
+            wifiGenerationCapa.htSupport2g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_2G_VHT_SUPPORT)) != 0) {
+            wifiGenerationCapa.vhtSupport2g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_2G_STA_HE_SUPPORT)) != 0) {
+            wifiGenerationCapa.staHeSupport2g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_2G_SAP_HE_SUPPORT)) != 0) {
+            wifiGenerationCapa.sapHeSupport2g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_5G_HT_SUPPORT)) != 0) {
+            wifiGenerationCapa.htSupport5g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_5G_VHT_SUPPORT)) != 0) {
+            wifiGenerationCapa.vhtSupport5g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_5G_STA_HE_SUPPORT)) != 0) {
+            wifiGenerationCapa.staHeSupport5g = true;
+        }
+        if ((wifiGenerationCapaMask & (1 << IWificond.QC_5G_SAP_HE_SUPPORT)) != 0) {
+            wifiGenerationCapa.sapHeSupport5g = true;
+        }
+
+        return wifiGenerationCapa;
     }
 }

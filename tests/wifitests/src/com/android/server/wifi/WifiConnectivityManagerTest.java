@@ -45,6 +45,7 @@ import android.net.wifi.WifiScanner.ScanData;
 import android.net.wifi.WifiScanner.ScanListener;
 import android.net.wifi.WifiScanner.ScanSettings;
 import android.net.wifi.WifiSsid;
+import android.os.Handler;
 import android.os.Process;
 import android.os.SystemClock;
 import android.os.WorkSource;
@@ -96,6 +97,10 @@ public class WifiConnectivityManagerTest {
         mWifiConnectivityHelper = mockWifiConnectivityHelper();
         mWifiNS = mockWifiNetworkSelector();
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
+        when(mWifiInjector.getWifiNetworkSuggestionsManager())
+                .thenReturn(mWifiNetworkSuggestionsManager);
+        when(mWifiNetworkSuggestionsManager.retrieveHiddenNetworkList())
+                .thenReturn(new ArrayList<>());
         mWifiConnectivityManager = createConnectivityManager();
         verify(mWifiConfigManager).setOnSavedNetworkUpdateListener(anyObject());
         mWifiConnectivityManager.setTrustedConnectionAllowed(true);
@@ -136,10 +141,10 @@ public class WifiConnectivityManagerTest {
     @Mock private Clock mClock;
     @Mock private WifiLastResortWatchdog mWifiLastResortWatchdog;
     @Mock private OpenNetworkNotifier mOpenNetworkNotifier;
-    @Mock private CarrierNetworkNotifier mCarrierNetworkNotifier;
     @Mock private CarrierNetworkConfig mCarrierNetworkConfig;
     @Mock private WifiMetrics mWifiMetrics;
     @Mock private WifiNetworkScoreCache mScoreCache;
+    @Mock private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
     @Captor ArgumentCaptor<ScanResult> mCandidateScanResultCaptor;
     @Captor ArgumentCaptor<ArrayList<String>> mBssidBlacklistCaptor;
     @Captor ArgumentCaptor<ArrayList<String>> mSsidWhitelistCaptor;
@@ -321,8 +326,9 @@ public class WifiConnectivityManagerTest {
                 new ScoringParams(mContext),
                 mClientModeImpl, mWifiInjector,
                 mWifiConfigManager, mWifiInfo, mWifiNS, mWifiConnectivityHelper,
-                mWifiLastResortWatchdog, mOpenNetworkNotifier, mCarrierNetworkNotifier,
-                mCarrierNetworkConfig, mWifiMetrics, mLooper.getLooper(), mClock, mLocalLog);
+                mWifiLastResortWatchdog, mOpenNetworkNotifier,
+                mCarrierNetworkConfig, mWifiMetrics, new Handler(mLooper.getLooper()), mClock,
+                mLocalLog);
     }
 
     /**
@@ -749,150 +755,6 @@ public class WifiConnectivityManagerTest {
         mWifiConnectivityManager.handleScreenStateChanged(true);
 
         verify(mOpenNetworkNotifier).handleScreenStateChanged(true);
-    }
-
-    /**
-     * {@link CarrierNetworkNotifier} handles scan results on network selection.
-     *
-     * Expected behavior: CarrierNetworkNotifier handles scan results
-     */
-    @Test
-    public void wifiDisconnected_noConnectionCandidate_CarrierNetworkNotifierScanResultsHandled() {
-        // no connection candidate selected
-        when(mWifiNS.selectNetwork(anyObject(), anyObject(), anyObject(), anyBoolean(),
-                anyBoolean(), anyBoolean())).thenReturn(null);
-
-        List<ScanDetail> expectedCarrierNetworks = new ArrayList<>();
-        expectedCarrierNetworks.add(
-                new ScanDetail(
-                        new ScanResult(WifiSsid.createFromAsciiEncoded(CANDIDATE_SSID),
-                                CANDIDATE_SSID, CANDIDATE_BSSID, 1245, 0, "[EAP][ESS]", -78, 2450,
-                                1025, 22, 33, 20, 0, 0, true), null));
-
-        when(mWifiNS.getFilteredScanDetailsForCarrierUnsavedNetworks(any()))
-                .thenReturn(expectedCarrierNetworks);
-
-        // Set WiFi to disconnected state to trigger PNO scan
-        mWifiConnectivityManager.handleConnectionStateChanged(
-                WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
-
-        verify(mCarrierNetworkNotifier).handleScanResults(expectedCarrierNetworks);
-    }
-
-    /**
-     * {@link CarrierNetworkNotifier} does not handle scan results on network selection if carrier
-     * encryption info is not available.
-     *
-     * Expected behavior: CarrierNetworkNotifier does not handle scan results
-     */
-    @Test
-    public void whenNoEncryptionInfoAvailable_CarrierNetworkNotifierDoesNotHandleScanResults() {
-        // no connection candidate selected
-        when(mWifiNS.selectNetwork(anyObject(), anyObject(), anyObject(), anyBoolean(),
-                anyBoolean(), anyBoolean())).thenReturn(null);
-
-        List<ScanDetail> expectedCarrierNetworks = new ArrayList<>();
-        expectedCarrierNetworks.add(
-                new ScanDetail(
-                        new ScanResult(WifiSsid.createFromAsciiEncoded(CANDIDATE_SSID),
-                                CANDIDATE_SSID, CANDIDATE_BSSID, 1245, 0, "[EAP][ESS]", -78, 2450,
-                                1025, 22, 33, 20, 0, 0, true), null));
-
-        when(mWifiNS.getFilteredScanDetailsForCarrierUnsavedNetworks(any()))
-                .thenReturn(expectedCarrierNetworks);
-        when(mCarrierNetworkConfig.isCarrierEncryptionInfoAvailable()).thenReturn(false);
-
-        // Set WiFi to disconnected state to trigger PNO scan
-        mWifiConnectivityManager.handleConnectionStateChanged(
-                WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
-
-        verify(mCarrierNetworkNotifier, never()).handleScanResults(expectedCarrierNetworks);
-    }
-
-    /**
-     * When wifi is connected, {@link CarrierNetworkNotifier} handles the Wi-Fi connected behavior.
-     *
-     * Expected behavior: CarrierNetworkNotifier handles connected behavior
-     */
-    @Test
-    public void wifiConnected_carrierNetworkNotifierHandlesConnection() {
-        // Set WiFi to connected state
-        mWifiInfo.setSSID(WifiSsid.createFromAsciiEncoded(CANDIDATE_SSID));
-        mWifiConnectivityManager.handleConnectionAttemptEnded(
-                WifiMetrics.ConnectionEvent.FAILURE_NONE);
-        verify(mCarrierNetworkNotifier).handleWifiConnected(CANDIDATE_SSID);
-    }
-
-    /**
-     * When wifi is connected, {@link CarrierNetworkNotifier} handles connection state
-     * change.
-     *
-     * Expected behavior: CarrierNetworkNotifer does not clear pending notification.
-     */
-    @Test
-    public void wifiDisconnected_carrierNetworkNotifierDoesNotClearPendingNotification() {
-        // Set WiFi to disconnected state
-        mWifiConnectivityManager.handleConnectionStateChanged(
-                WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
-
-        verify(mCarrierNetworkNotifier, never()).clearPendingNotification(anyBoolean());
-    }
-
-    /**
-     * When a Wi-Fi connection attempt ends, {@link CarrierNetworkNotifier} handles the connection
-     * failure. A failure code that is not {@link WifiMetrics.ConnectionEvent#FAILURE_NONE}
-     * represents a connection failure.
-     *
-     * Expected behavior: CarrierNetworkNotifier handles connection failure.
-     */
-    @Test
-    public void wifiConnectionEndsWithFailure_carrierNetworkNotifierHandlesConnectionFailure() {
-        mWifiConnectivityManager.handleConnectionAttemptEnded(
-                WifiMetrics.ConnectionEvent.FAILURE_CONNECT_NETWORK_FAILED);
-
-        verify(mCarrierNetworkNotifier).handleConnectionFailure();
-    }
-
-    /**
-     * When a Wi-Fi connection attempt ends, {@link CarrierNetworkNotifier} does not handle
-     * connection failure after a successful connection.
-     * {@link WifiMetrics.ConnectionEvent#FAILURE_NONE} represents a successful connection.
-     *
-     * Expected behavior: CarrierNetworkNotifier does nothing.
-     */
-    @Test
-    public void
-            wifiConnectionEndsWithSuccess_carrierNetworkNotifierDoesNotHandleConnectionFailure() {
-        mWifiConnectivityManager.handleConnectionAttemptEnded(
-                WifiMetrics.ConnectionEvent.FAILURE_NONE);
-
-        verify(mCarrierNetworkNotifier, never()).handleConnectionFailure();
-    }
-
-    /**
-     * When Wi-Fi is disabled, clear the pending notification and reset notification repeat delay.
-     *
-     * Expected behavior: clear pending notification and reset notification repeat delay
-     * */
-    @Test
-    public void carrierNetworkNotifierClearsPendingNotificationOnWifiDisabled() {
-        mWifiConnectivityManager.setWifiEnabled(false);
-
-        verify(mCarrierNetworkNotifier).clearPendingNotification(true /* resetRepeatDelay */);
-    }
-
-    /**
-     * Verify that the CarrierNetworkNotifier tracks screen state changes.
-     */
-    @Test
-    public void carrierNetworkNotifierTracksScreenStateChanges() {
-        mWifiConnectivityManager.handleScreenStateChanged(false);
-
-        verify(mCarrierNetworkNotifier).handleScreenStateChanged(false);
-
-        mWifiConnectivityManager.handleScreenStateChanged(true);
-
-        verify(mCarrierNetworkNotifier).handleScreenStateChanged(true);
     }
 
     /**

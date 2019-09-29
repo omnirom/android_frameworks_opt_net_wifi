@@ -95,13 +95,16 @@ public class SoftApManager implements ActiveModeManager {
     private int mQCNumAssociatedStations = 0;
     private boolean mTimeoutEnabled = false;
     private String[] mdualApInterfaces;
-    private boolean expectedStop = false;
+    private boolean mDualSapIfacesDestroyed = false;
+    private String mSoftApStartFailureDesc;
 
     private final SarManager mSarManager;
 
     private String mStartTimestamp;
 
     private static final SimpleDateFormat FORMATTER = new SimpleDateFormat("MM-dd HH:mm:ss.SSS");
+
+    private BaseWifiDiagnostics mWifiDiagnostics;
 
     /**
      * Listener for soft AP events.
@@ -147,7 +150,8 @@ public class SoftApManager implements ActiveModeManager {
                          @NonNull WifiApConfigStore wifiApConfigStore,
                          @NonNull SoftApModeConfiguration apConfig,
                          @NonNull WifiMetrics wifiMetrics,
-                         @NonNull SarManager sarManager) {
+                         @NonNull SarManager sarManager,
+                         @NonNull BaseWifiDiagnostics wifiDiagnostics) {
         mContext = context;
         mFrameworkFacade = framework;
         mWifiNative = wifiNative;
@@ -164,6 +168,7 @@ public class SoftApManager implements ActiveModeManager {
         mWifiMetrics = wifiMetrics;
         mSarManager = sarManager;
         mdualApInterfaces = new String[2];
+        mWifiDiagnostics = wifiDiagnostics;
         mStateMachine = new SoftApStateMachine(looper);
     }
 
@@ -179,7 +184,6 @@ public class SoftApManager implements ActiveModeManager {
      */
     public void stop() {
         Log.d(TAG, " currentstate: " + getCurrentStateName());
-        expectedStop = true;
         if (mApInterfaceName != null) {
             if (mIfaceIsUp) {
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
@@ -252,6 +256,9 @@ public class SoftApManager implements ActiveModeManager {
         if (newState == WifiManager.WIFI_AP_STATE_FAILED) {
             //only set reason number when softAP start failed
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_REASON, reason);
+            if (mSoftApStartFailureDesc != null) {
+                intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_DESCRIPTION, mSoftApStartFailureDesc);
+            }
         }
 
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mDataInterfaceName);
@@ -294,6 +301,15 @@ public class SoftApManager implements ActiveModeManager {
             // Failure to set country code is not fatal for 2Ghz & Any band options.
         }
 
+        if (config.apBand == WifiConfiguration.AP_BAND_5GHZ
+                && !mWifiNative.is5GhzBandSupported()) {
+            mSoftApStartFailureDesc = WifiManager.WIFI_AP_FAILURE_DESC_NO_5GHZ_SUPPORT;
+            Log.e(TAG, "Failed to start soft AP as 5Ghz band not supported");
+            return ERROR_NO_CHANNEL;
+        } else {
+            mSoftApStartFailureDesc = "";
+        }
+
         // Make a copy of configuration for updating AP band and channel.
         WifiConfiguration localConfig = new WifiConfiguration(config);
 
@@ -314,6 +330,7 @@ public class SoftApManager implements ActiveModeManager {
             Log.e(TAG, "Soft AP start failed");
             return ERROR_GENERIC;
         }
+        mWifiDiagnostics.startLogging(mApInterfaceName);
         mStartTimestamp = FORMATTER.format(new Date(System.currentTimeMillis()));
         Log.d(TAG, "Soft AP is started ");
 
@@ -324,10 +341,12 @@ public class SoftApManager implements ActiveModeManager {
      * Teardown soft AP and teardown the interface.
      */
     private void stopSoftAp() {
-        if (mWifiApConfigStore.getDualSapStatus()) {
+        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+            mDualSapIfacesDestroyed = true;
             mWifiNative.teardownInterface(mdualApInterfaces[0]);
             mWifiNative.teardownInterface(mdualApInterfaces[1]);
         }
+        mWifiDiagnostics.stopLogging(mApInterfaceName);
         mWifiNative.teardownInterface(mApInterfaceName);
         Log.d(TAG, "Soft AP is stopped");
     }
@@ -345,6 +364,7 @@ public class SoftApManager implements ActiveModeManager {
         public static final int CMD_SOFT_AP_CHANNEL_SWITCHED = 9;
         public static final int CMD_CONNECTED_STATIONS = 10;
         public static final int CMD_DISCONNECTED_STATIONS = 11;
+        public static final int CMD_DUAL_SAP_INTERFACE_DESTROYED = 50;
 
         private final State mIdleState = new IdleState();
         private final State mStartedState = new StartedState();
@@ -375,17 +395,7 @@ public class SoftApManager implements ActiveModeManager {
         private final InterfaceCallback mWifiNativeDualIfaceCallback = new InterfaceCallback() {
             @Override
             public void onDestroyed(String ifaceName) {
-                // one of the dual interface is destroyed by native layers. trigger full cleanup.
-                if (!expectedStop) {
-                    Log.e(TAG, "One of Dual interface ("+ifaceName+") destroyed. trigger cleanup");
-                    // Avoid cleaning the interface which is already destroyed.
-                    if (ifaceName.equals(mdualApInterfaces[0]))
-                        mdualApInterfaces[0] = "";
-                    else if (ifaceName.equals(mdualApInterfaces[1]))
-                        mdualApInterfaces[1] = "";
-
-                    stop();
-                }
+                sendMessage(CMD_DUAL_SAP_INTERFACE_DESTROYED, ifaceName);
             }
 
             @Override
@@ -860,11 +870,33 @@ public class SoftApManager implements ActiveModeManager {
                         transitionTo(mIdleState);
                         break;
                     case CMD_INTERFACE_DESTROYED:
-                        Log.d(TAG, "Interface was cleanly destroyed.");
+                        //teardown Dual SAP interfaces if required
+                        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+                            Log.d(TAG, "Bridge inteface destroyed, Teardown dual intefaces");
+                            mDualSapIfacesDestroyed = true;
+                            mWifiNative.teardownInterface(mdualApInterfaces[0]);
+                            mWifiNative.teardownInterface(mdualApInterfaces[1]);
+                        }
+                        Log.d(TAG, "Interface(s) was cleanly destroyed.");
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
                         mIfaceIsDestroyed = true;
                         transitionTo(mIdleState);
+                        break;
+                    case CMD_DUAL_SAP_INTERFACE_DESTROYED:
+                        // one of the dual interface is destroyed by native layers. trigger full cleanup.
+                        if (!mDualSapIfacesDestroyed) {
+                            String ifaceName = (String) message.obj;
+                            Log.d(TAG, "One of Dual interface ("+ifaceName+") destroyed. trigger cleanup");
+                            // teardown other dual interface and bridge interface.
+                            mDualSapIfacesDestroyed = true;
+                            if (ifaceName.equals(mdualApInterfaces[0])) {
+                               mWifiNative.teardownInterface(mdualApInterfaces[1]);
+                            } else if (ifaceName.equals(mdualApInterfaces[1])) {
+                               mWifiNative.teardownInterface(mdualApInterfaces[0]);
+                            }
+                            mWifiNative.teardownInterface(mApInterfaceName);
+                        }
                         break;
                     case CMD_FAILURE:
                         Log.w(TAG, "hostapd failure, stop and report failure");

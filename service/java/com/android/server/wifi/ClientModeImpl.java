@@ -225,6 +225,8 @@ public class ClientModeImpl extends StateMachine {
     private final PasspointManager mPasspointManager;
     private final WifiDataStall mWifiDataStall;
     private final LinkProbeManager mLinkProbeManager;
+    @VisibleForTesting
+    protected static final long AGGRESSIVE_MAC_REFRESH_MS = 10 * 60 * 1000; //10 minutes
 
     private final McastLockManagerFilterController mMcastLockManagerFilterController;
 
@@ -809,6 +811,8 @@ public class ClientModeImpl extends StateMachine {
     private final WrongPasswordNotifier mWrongPasswordNotifier;
     private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
     private boolean mConnectedMacRandomzationSupported;
+    private MacAddress mAggressiveMac;
+    private long mLastAggressiveMacUpdateSinceBootInMs = -1;
 
     public ClientModeImpl(Context context, FrameworkFacade facade, Looper looper,
                             UserManager userManager, WifiInjector wifiInjector,
@@ -955,6 +959,7 @@ public class ClientModeImpl extends StateMachine {
 
         setLogRecSize(NUM_LOG_RECS_NORMAL);
         setLogOnlyTransitions(false);
+        considerUpdateAggressiveMac();
     }
 
     @Override
@@ -1011,6 +1016,8 @@ public class ClientModeImpl extends StateMachine {
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.FILS_NETWORK_CONNECTION_EVENT,
                 getHandler());
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.DPP_EVENT, getHandler());
+        mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.NETWORK_CONNECTION_EVENT,
+                mWifiInjector.getWifiLastResortWatchdog().getHandler());
     }
 
     private void setMulticastFilter(boolean enabled) {
@@ -1170,7 +1177,7 @@ public class ClientModeImpl extends StateMachine {
         setSupplicantLogLevel();
         mCountryCode.enableVerboseLogging(verbose);
         mWifiScoreReport.enableVerboseLogging(mVerboseLoggingEnabled);
-        mWifiDiagnostics.startLogging(mVerboseLoggingEnabled);
+        mWifiDiagnostics.enableVerboseLogging(mVerboseLoggingEnabled);
         if (wifiP2pServiceImpl != null)
             wifiP2pServiceImpl.enableVerboseLogging(verbose);
         mWifiMonitor.enableVerboseLogging(verbose);
@@ -1235,6 +1242,16 @@ public class ClientModeImpl extends StateMachine {
 
         logd("Setting OUI to " + oui);
         return mWifiNative.setScanningMacOui(mInterfaceName, ouiBytes);
+    }
+
+    private void considerUpdateAggressiveMac() {
+        boolean shouldUpdateMac = mLastAggressiveMacUpdateSinceBootInMs == -1
+                || mLastAggressiveMacUpdateSinceBootInMs + AGGRESSIVE_MAC_REFRESH_MS
+                < mClock.getElapsedSinceBootMillis();
+        if (shouldUpdateMac) {
+            mAggressiveMac = MacAddress.createRandomUnicastAddress();
+            mLastAggressiveMacUpdateSinceBootInMs = mClock.getElapsedSinceBootMillis();
+        }
     }
 
     /**
@@ -3240,6 +3257,10 @@ public class ClientModeImpl extends StateMachine {
                 mInterfaceName, WifiNative.BLUETOOTH_COEXISTENCE_MODE_SENSE);
     }
 
+    public boolean is5GhzBandSupported() {
+        return mWifiNative.is5GhzBandSupported();
+    }
+
     public String getCapabilities(String capaType) {
 
         return mWifiNative.getCapabilities(mInterfaceName, capaType);
@@ -3572,9 +3593,10 @@ public class ClientModeImpl extends StateMachine {
         }
 
         try {
+            considerUpdateAggressiveMac();
             MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
-            MacAddress newMac = config.getOrCreateRandomizedMacAddress();
-            mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
+            MacAddress newMac = mWifiConfigManager.shouldUseAggressiveMode(config) ? mAggressiveMac
+                    : config.getRandomizedMacAddress();
             if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
                 Log.wtf(TAG, "Config generated an invalid MAC address");
             } else if (currentMac.equals(newMac)) {
@@ -3724,7 +3746,7 @@ public class ClientModeImpl extends StateMachine {
                         Log.e(TAG, "Failed to load from config store");
                     }
                     mPasspointManager.initializeProvisioner(
-                            mWifiInjector.getWifiServiceHandlerThread().getLooper());
+                            mWifiInjector.getWifiHandlerThread().getLooper());
                     registerNetworkFactory();
                     break;
                 case CMD_SCREEN_STATE_CHANGED:
@@ -3985,7 +4007,9 @@ public class ClientModeImpl extends StateMachine {
         setRandomMacOui();
         mCountryCode.setReadyForChange(true);
 
-        mWifiDiagnostics.startLogging(mVerboseLoggingEnabled);
+        mWifiDiagnostics.startPktFateMonitoring(mInterfaceName);
+        mWifiDiagnostics.startLogging(mInterfaceName);
+
         mIsRunning = true;
         updateBatteryWorkSource(null);
 
@@ -4023,7 +4047,7 @@ public class ClientModeImpl extends StateMachine {
      */
     private void stopClientMode() {
         // exiting supplicant started state is now only applicable to client mode
-        mWifiDiagnostics.stopLogging();
+        mWifiDiagnostics.stopLogging(mInterfaceName);
 
         mIsRunning = false;
         updateBatteryWorkSource(null);
@@ -4275,7 +4299,8 @@ public class ClientModeImpl extends StateMachine {
                     if (reasonCode != WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD) {
                         mWifiInjector.getWifiLastResortWatchdog()
                                 .noteConnectionFailureAndTriggerIfNeeded(
-                                        getTargetSsid(), mTargetRoamBSSID,
+                                        getTargetSsid(),
+                                        (mLastBssid == null) ? mTargetRoamBSSID : mLastBssid,
                                         WifiLastResortWatchdog.FAILURE_CODE_AUTHENTICATION);
                     }
                     break;
@@ -4536,10 +4561,12 @@ public class ClientModeImpl extends StateMachine {
                             && TextUtils.isEmpty(config.enterpriseConfig.getAnonymousIdentity())) {
                         String anonAtRealm = TelephonyUtil.getAnonymousIdentityWith3GppRealm(
                                 getTelephonyManager());
+                        // Use anonymous@<realm> when pseudonym is not available
                         config.enterpriseConfig.setAnonymousIdentity(anonAtRealm);
                     }
 
                     if (mWifiNative.connectToNetwork(mInterfaceName, config)) {
+                        mWifiInjector.getWifiLastResortWatchdog().noteStartConnectTime();
                         mWifiMetrics.logStaEvent(StaEvent.TYPE_CMD_START_CONNECT, config);
                         mLastConnectAttemptTimestamp = mClock.getWallClockMillis();
                         mTargetWifiConfiguration = config;
@@ -4673,6 +4700,8 @@ public class ClientModeImpl extends StateMachine {
                             mWifiMetrics.setConnectionScanDetail(scanDetailCache.getScanDetail(
                                     someBssid));
                         }
+                        // Update last associated BSSID
+                        mLastBssid = someBssid;
                     }
                     handleStatus = NOT_HANDLED;
                     break;
@@ -4709,21 +4738,17 @@ public class ClientModeImpl extends StateMachine {
                         // We need to get the updated pseudonym from supplicant for EAP-SIM/AKA/AKA'
                         if (config.enterpriseConfig != null
                                 && TelephonyUtil.isSimEapMethod(
-                                        config.enterpriseConfig.getEapMethod())
-                                // if using anonymous@<realm>, do not use pseudonym identity on
-                                // reauthentication. Instead, use full authentication using
-                                // anonymous@<realm> followed by encrypted IMSI every time.
-                                // This is because the encrypted IMSI spec does not specify its
-                                // compatibility with the pseudonym identity specified by EAP-AKA.
-                                && !TelephonyUtil.isAnonymousAtRealmIdentity(
-                                        config.enterpriseConfig.getAnonymousIdentity())) {
+                                        config.enterpriseConfig.getEapMethod())) {
                             String anonymousIdentity =
                                     mWifiNative.getEapAnonymousIdentity(mInterfaceName);
                             if (mVerboseLoggingEnabled) {
                                 log("EAP Pseudonym: " + anonymousIdentity);
                             }
-                            config.enterpriseConfig.setAnonymousIdentity(anonymousIdentity);
-                            mWifiConfigManager.addOrUpdateNetwork(config, Process.WIFI_UID);
+                            if (!TelephonyUtil.isAnonymousAtRealmIdentity(anonymousIdentity)) {
+                                // Save the pseudonym only if it is a real one
+                                config.enterpriseConfig.setAnonymousIdentity(anonymousIdentity);
+                                mWifiConfigManager.addOrUpdateNetwork(config, Process.WIFI_UID);
+                            }
                         }
                         sendNetworkStateChangeBroadcast(mLastBssid);
                         mIpReachabilityMonitorActive = true;
@@ -5334,7 +5359,8 @@ public class ClientModeImpl extends StateMachine {
                     handleIPv4Failure();
                     mWifiInjector.getWifiLastResortWatchdog()
                             .noteConnectionFailureAndTriggerIfNeeded(
-                                    getTargetSsid(), mTargetRoamBSSID,
+                                    getTargetSsid(),
+                                    (mLastBssid == null) ? mTargetRoamBSSID : mLastBssid,
                                     WifiLastResortWatchdog.FAILURE_CODE_DHCP);
                     break;
                 }
@@ -5364,7 +5390,8 @@ public class ClientModeImpl extends StateMachine {
                             WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
                     mWifiInjector.getWifiLastResortWatchdog()
                             .noteConnectionFailureAndTriggerIfNeeded(
-                                    getTargetSsid(), mTargetRoamBSSID,
+                                    getTargetSsid(),
+                                    (mLastBssid == null) ? mTargetRoamBSSID : mLastBssid,
                                     WifiLastResortWatchdog.FAILURE_CODE_DHCP);
                     transitionTo(mDisconnectingState);
                     break;
@@ -5730,6 +5757,12 @@ public class ClientModeImpl extends StateMachine {
                             WifiMetrics.ConnectionEvent.FAILURE_NETWORK_DISCONNECTION,
                             WifiMetricsProto.ConnectionEvent.HLF_NONE,
                             WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
+                    mWifiInjector.getWifiLastResortWatchdog()
+                            .noteConnectionFailureAndTriggerIfNeeded(
+                                    getTargetSsid(),
+                                    (message.obj == null)
+                                    ? mTargetRoamBSSID : (String) message.obj,
+                                    WifiLastResortWatchdog.FAILURE_CODE_DHCP);
                     handleStatus = NOT_HANDLED;
                     break;
                 case CMD_SET_HIGH_PERF_MODE:
