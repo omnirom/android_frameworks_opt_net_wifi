@@ -20,7 +20,7 @@ import static android.app.AppOpsManager.MODE_ALLOWED;
 import static android.app.AppOpsManager.MODE_IGNORED;
 import static android.app.AppOpsManager.OPSTR_CHANGE_WIFI_STATE;
 import static android.app.AppOpsManager.OP_CHANGE_WIFI_STATE;
-import static android.app.Notification.EXTRA_TEXT;
+import static android.app.Notification.EXTRA_BIG_TEXT;
 
 import static com.android.server.wifi.WifiNetworkSuggestionsManager.NOTIFICATION_USER_ALLOWED_APP_INTENT_ACTION;
 import static com.android.server.wifi.WifiNetworkSuggestionsManager.NOTIFICATION_USER_DISALLOWED_APP_INTENT_ACTION;
@@ -80,7 +80,7 @@ import java.util.stream.Collectors;
  * Unit tests for {@link com.android.server.wifi.WifiNetworkSuggestionsManager}.
  */
 @SmallTest
-public class WifiNetworkSuggestionsManagerTest {
+public class WifiNetworkSuggestionsManagerTest extends WifiBaseTest {
     private static final String TEST_PACKAGE_1 = "com.test12345";
     private static final String TEST_PACKAGE_2 = "com.test54321";
     private static final String TEST_APP_NAME_1 = "test12345";
@@ -150,10 +150,12 @@ public class WifiNetworkSuggestionsManagerTest {
         when(mContext.getApplicationInfo()).thenReturn(ourAppInfo);
         // test app info
         ApplicationInfo appInfO1 = new ApplicationInfo();
-        when(mPackageManager.getApplicationInfo(TEST_PACKAGE_1, 0)).thenReturn(appInfO1);
+        when(mPackageManager.getApplicationInfoAsUser(eq(TEST_PACKAGE_1), eq(0), anyInt()))
+            .thenReturn(appInfO1);
         when(mPackageManager.getApplicationLabel(appInfO1)).thenReturn(TEST_APP_NAME_1);
         ApplicationInfo appInfO2 = new ApplicationInfo();
-        when(mPackageManager.getApplicationInfo(TEST_PACKAGE_2, 0)).thenReturn(appInfO2);
+        when(mPackageManager.getApplicationInfoAsUser(eq(TEST_PACKAGE_2), eq(0), anyInt()))
+            .thenReturn(appInfO2);
         when(mPackageManager.getApplicationLabel(appInfO2)).thenReturn(TEST_APP_NAME_2);
 
         mWifiNetworkSuggestionsManager =
@@ -340,7 +342,7 @@ public class WifiNetworkSuggestionsManagerTest {
     }
 
     /**
-     * Verify that an attempt to modify networks that are already active is rejected.
+     * Verify that modify networks that are already active is allowed.
      */
     @Test
     public void testAddNetworkSuggestionsFailureOnInPlaceModification() {
@@ -360,10 +362,13 @@ public class WifiNetworkSuggestionsManagerTest {
         networkSuggestion.wifiConfiguration.meteredOverride =
                 WifiConfiguration.METERED_OVERRIDE_METERED;
 
-        // Replace attempt should fail.
-        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_DUPLICATE,
+        // Replace attempt should success.
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
                 mWifiNetworkSuggestionsManager.add(networkSuggestionList1, TEST_UID_1,
                         TEST_PACKAGE_1));
+        assertEquals(WifiConfiguration.METERED_OVERRIDE_METERED,
+                mWifiNetworkSuggestionsManager
+                        .get(TEST_PACKAGE_1).get(0).wifiConfiguration.meteredOverride);
     }
 
     /**
@@ -2208,7 +2213,7 @@ public class WifiNetworkSuggestionsManagerTest {
 
     private boolean checkUserApprovalNotificationParams(
             Notification notification, String expectedAppName) {
-        if (!notification.extras.getString(EXTRA_TEXT).contains(expectedAppName)) return false;
+        if (!notification.extras.getString(EXTRA_BIG_TEXT).contains(expectedAppName)) return false;
         return true;
     }
 

@@ -16,6 +16,7 @@
 
 package com.android.server.wifi;
 
+import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.admin.DeviceAdminInfo;
@@ -94,7 +95,7 @@ import java.util.Set;
  * in the internal database. Any configuration updates should be triggered with appropriate helper
  * methods of this class using the configuration's unique networkId.
  *
- * NOTE: These API's are not thread safe and should only be used from ClientModeImpl thread.
+ * NOTE: These API's are not thread safe and should only be used from the main Wifi thread.
  */
 public class WifiConfigManager {
     /**
@@ -157,34 +158,34 @@ public class WifiConfigManager {
             Integer.MAX_VALUE   // threshold for DISABLED_AUTHENTICATION_NO_SUBSCRIBED
     };
     /**
-     * Interface for other modules to listen to the saved network updated
+     * Interface for other modules to listen to the network updated
      * events.
      */
-    public interface OnSavedNetworkUpdateListener {
+    public interface OnNetworkUpdateListener {
         /**
-         * Invoked on saved network being added.
+         * Invoked on network being added.
          */
-        void onSavedNetworkAdded(int networkId);
+        void onNetworkAdded(@NonNull WifiConfiguration config);
         /**
-         * Invoked on saved network being enabled.
+         * Invoked on network being enabled.
          */
-        void onSavedNetworkEnabled(int networkId);
+        void onNetworkEnabled(@NonNull WifiConfiguration config);
         /**
-         * Invoked on saved network being permanently disabled.
+         * Invoked on network being permanently disabled.
          */
-        void onSavedNetworkPermanentlyDisabled(int networkId, int disableReason);
+        void onNetworkPermanentlyDisabled(@NonNull WifiConfiguration config, int disableReason);
         /**
-         * Invoked on saved network being removed.
+         * Invoked on network being removed.
          */
-        void onSavedNetworkRemoved(int networkId);
+        void onNetworkRemoved(@NonNull WifiConfiguration config);
         /**
-         * Invoked on saved network being temporarily disabled.
+         * Invoked on network being temporarily disabled.
          */
-        void onSavedNetworkTemporarilyDisabled(int networkId, int disableReason);
+        void onNetworkTemporarilyDisabled(@NonNull WifiConfiguration config, int disableReason);
         /**
-         * Invoked on saved network being updated.
+         * Invoked on network being updated.
          */
-        void onSavedNetworkUpdated(int networkId);
+        void onNetworkUpdated(@NonNull WifiConfiguration config);
     }
     /**
      * Max size of scan details to cache in {@link #mScanDetailCaches}.
@@ -226,6 +227,9 @@ public class WifiConfigManager {
 
     private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 1; // 0 = disabled
     private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 1; // 0 = disabled:
+
+    @VisibleForTesting
+    protected static final long AGGRESSIVE_MAC_REFRESH_MS = 10 * 60 * 1000; //10 minutes
 
     /**
      * Expiration timeout for deleted ephemeral ssids. (1 day)
@@ -302,6 +306,9 @@ public class WifiConfigManager {
      */
     private final Map<String, String> mRandomizedMacAddressMapping;
 
+    private final Set<String> mAggressiveMacRandomizationWhitelist;
+    private final Set<String> mAggressiveMacRandomizationBlacklist;
+
     /**
      * Flag to indicate if only networks with the same psk should be linked.
      * TODO(b/30706406): Remove this flag if unused.
@@ -313,6 +320,7 @@ public class WifiConfigManager {
     private final int mMaxNumActiveChannelsForPartialScans;
 
     private final FrameworkFacade mFrameworkFacade;
+    private final DeviceConfigFacade mDeviceConfigFacade;
 
     /**
      * Verbose logging flag. Toggled by developer options.
@@ -365,8 +373,8 @@ public class WifiConfigManager {
     private final DeletedEphemeralSsidsStoreData mDeletedEphemeralSsidsStoreData;
     private final RandomizedMacStoreData mRandomizedMacStoreData;
 
-    // Store the saved network update listener.
-    private OnSavedNetworkUpdateListener mListener = null;
+    // Store the network update listener.
+    private OnNetworkUpdateListener mListener = null;
 
     private boolean mPnoFrequencyCullingEnabled = false;
     private boolean mPnoRecencySortingEnabled = false;
@@ -387,7 +395,8 @@ public class WifiConfigManager {
             NetworkListUserStoreData networkListUserStoreData,
             DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData,
             RandomizedMacStoreData randomizedMacStoreData,
-            FrameworkFacade frameworkFacade, Handler handler) {
+            FrameworkFacade frameworkFacade, Handler handler,
+            DeviceConfigFacade deviceConfigFacade) {
         mContext = context;
         mClock = clock;
         mUserManager = userManager;
@@ -439,6 +448,10 @@ public class WifiConfigManager {
         updatePnoRecencySortingSetting();
         mConnectedMacRandomzationSupported = mContext.getResources()
                 .getBoolean(R.bool.config_wifi_connected_mac_randomization_supported);
+        mDeviceConfigFacade = deviceConfigFacade;
+        mAggressiveMacRandomizationWhitelist = new ArraySet<String>();
+        mAggressiveMacRandomizationBlacklist = new ArraySet<String>();
+
         try {
             mSystemUiUid = mContext.getPackageManager().getPackageUidAsUser(SYSUI_PACKAGE_NAME,
                     PackageManager.MATCH_SYSTEM_ONLY, UserHandle.USER_SYSTEM);
@@ -469,9 +482,92 @@ public class WifiConfigManager {
      * @param config
      * @return
      */
-    public boolean shouldUseAggressiveMode(WifiConfiguration config) {
-        // TODO: b/137795359 add logic for classifying network as safe for aggressive mode.
+    private boolean shouldUseAggressiveRandomization(WifiConfiguration config) {
+        if (mDeviceConfigFacade.isAggressiveMacRandomizationSsidWhitelistEnabled()) {
+            return isSsidOptInForAggressiveRandomization(config.SSID);
+        }
         return false;
+    }
+
+    private boolean isSsidOptInForAggressiveRandomization(String ssid) {
+        if (mAggressiveMacRandomizationBlacklist.contains(ssid)) {
+            return false;
+        }
+        return mAggressiveMacRandomizationWhitelist.contains(ssid);
+    }
+
+    /**
+     * Sets the list of SSIDs that the framework should perform aggressive MAC randomization on.
+     * @param whitelist
+     */
+    public void setAggressiveMacRandomizationWhitelist(Set<String> whitelist) {
+        // TODO: b/137795359 persist this with WifiConfigStore
+        mAggressiveMacRandomizationWhitelist.clear();
+        mAggressiveMacRandomizationWhitelist.addAll(whitelist);
+    }
+
+    /**
+     * Sets the list of SSIDs that the framework will never perform aggressive MAC randomization
+     * on.
+     * @param blacklist
+     */
+    public void setAggressiveMacRandomizationBlacklist(Set<String> blacklist) {
+        mAggressiveMacRandomizationBlacklist.clear();
+        mAggressiveMacRandomizationBlacklist.addAll(blacklist);
+    }
+
+    /**
+     * Read the persistent MAC address from internal database and set it as the randomized
+     * MAC address.
+     * @param config the WifiConfiguration to make the update
+     * @return the persistent MacAddress
+     */
+    private MacAddress setRandomizedMacToPersistentMac(WifiConfiguration config) {
+        String persistentMac = mRandomizedMacAddressMapping.get(
+                config.getSsidAndSecurityTypeString());
+        if (persistentMac.equals(config.getRandomizedMacAddress().toString())) {
+            return config.getRandomizedMacAddress();
+        }
+        WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
+        internalConfig.setRandomizedMacAddress(MacAddress.fromString(persistentMac));
+        internalConfig.randomizedMacLastModifiedTimeMs = mClock.getWallClockMillis();
+        return internalConfig.getRandomizedMacAddress();
+    }
+
+    /**
+     * Re-randomizes the randomized MAC address if needed.
+     * @param config the WifiConfiguration to make the update
+     * @return the updated MacAddress
+     */
+    private MacAddress updateRandomizedMacIfNeeded(WifiConfiguration config) {
+        boolean shouldUpdateMac = config.randomizedMacLastModifiedTimeMs
+                + AGGRESSIVE_MAC_REFRESH_MS
+                < mClock.getWallClockMillis();
+        if (!shouldUpdateMac) {
+            return config.getRandomizedMacAddress();
+        }
+        WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
+        internalConfig.setRandomizedMacAddress(MacAddress.createRandomUnicastAddress());
+        internalConfig.randomizedMacLastModifiedTimeMs = mClock.getWallClockMillis();
+        return internalConfig.getRandomizedMacAddress();
+    }
+
+    /**
+     * Returns the randomized MAC address that should be used for this WifiConfiguration.
+     * This API may return a randomized MAC different from the persistent randomized MAC if
+     * the WifiConfiguration is configured for aggressive MAC randomization.
+     * @param config
+     * @return MacAddress
+     */
+    public MacAddress getRandomizedMacAndUpdateIfNeeded(WifiConfiguration config) {
+        MacAddress mac;
+        if (!config.getNetworkSelectionStatus().getHasEverConnected()
+                || !shouldUseAggressiveRandomization(config)) {
+            mac = setRandomizedMacToPersistentMac(config);
+        } else {
+            mac = updateRandomizedMacIfNeeded(config);
+        }
+        return mac;
     }
 
     /**
@@ -892,6 +988,7 @@ public class WifiConfigManager {
                 && !externalConfig.preSharedKey.equals(PASSWORD_MASK)) {
             internalConfig.preSharedKey = externalConfig.preSharedKey;
         }
+        internalConfig.saePasswordId = externalConfig.saePasswordId;
         // Modify only wep keys are present in the provided configuration. This is a little tricky
         // because there is no easy way to tell if the app is actually trying to null out the
         // existing keys or not.
@@ -1098,16 +1195,18 @@ public class WifiConfigManager {
         // If the key is not found in the current store, then it means this network has never been
         // seen before. So add it to store.
         if (!mRandomizedMacAddressMapping.containsKey(key)) {
-            mRandomizedMacAddressMapping.put(key,
-                    config.getOrCreateRandomizedMacAddress().toString());
+            MacAddress mac = MacAddress.createRandomUnicastAddress();
+            config.setRandomizedMacAddress(mac);
+            mRandomizedMacAddressMapping.put(key, mac.toString());
         } else { // Otherwise read from the store and set the WifiConfiguration
             try {
                 config.setRandomizedMacAddress(
                         MacAddress.fromString(mRandomizedMacAddressMapping.get(key)));
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Error creating randomized MAC address from stored value.");
-                mRandomizedMacAddressMapping.put(key,
-                        config.getOrCreateRandomizedMacAddress().toString());
+                MacAddress mac = MacAddress.createRandomUnicastAddress();
+                config.setRandomizedMacAddress(mac);
+                mRandomizedMacAddressMapping.put(key, mac.toString());
             }
         }
     }
@@ -1312,16 +1411,16 @@ public class WifiConfigManager {
         // Unless the added network is ephemeral or Passpoint, persist the network update/addition.
         if (!config.ephemeral && !config.isPasspoint()) {
             saveToStore(true);
-            if (mListener != null) {
-                if (result.isNewNetwork()) {
-                    mListener.onSavedNetworkAdded(newConfig.networkId);
-                } else {
-                    mListener.onSavedNetworkUpdated(newConfig.networkId);
-                }
+        }
+
+        if (mListener != null) {
+            if (result.isNewNetwork()) {
+                mListener.onNetworkAdded(new WifiConfiguration(newConfig));
+            } else {
+                mListener.onNetworkUpdated(new WifiConfiguration(newConfig));
             }
         }
         return result;
-
     }
 
     /**
@@ -1400,8 +1499,8 @@ public class WifiConfigManager {
         // Unless the removed network is ephemeral or Passpoint, persist the network removal.
         if (!config.ephemeral && !config.isPasspoint()) {
             saveToStore(true);
-            if (mListener != null) mListener.onSavedNetworkRemoved(networkId);
         }
+        if (mListener != null) mListener.onNetworkRemoved(new WifiConfiguration(config));
         return true;
     }
 
@@ -1529,7 +1628,7 @@ public class WifiConfigManager {
 
         // Clear out all the disable reason counters.
         status.clearDisableReasonCounter();
-        if (mListener != null) mListener.onSavedNetworkEnabled(config.networkId);
+        if (mListener != null) mListener.onNetworkEnabled(new WifiConfiguration(config));
     }
 
     /**
@@ -1544,7 +1643,7 @@ public class WifiConfigManager {
         status.setDisableTime(mClock.getElapsedSinceBootMillis());
         status.setNetworkSelectionDisableReason(disableReason);
         if (mListener != null) {
-            mListener.onSavedNetworkTemporarilyDisabled(config.networkId, disableReason);
+            mListener.onNetworkTemporarilyDisabled(new WifiConfiguration(config), disableReason);
         }
     }
 
@@ -1560,7 +1659,7 @@ public class WifiConfigManager {
                 NetworkSelectionStatus.INVALID_NETWORK_SELECTION_DISABLE_TIMESTAMP);
         status.setNetworkSelectionDisableReason(disableReason);
         if (mListener != null) {
-            mListener.onSavedNetworkPermanentlyDisabled(config.networkId, disableReason);
+            mListener.onNetworkPermanentlyDisabled(new WifiConfiguration(config), disableReason);
         }
     }
 
@@ -3052,12 +3151,18 @@ public class WifiConfigManager {
     }
 
     /**
-     * Generate randomized MAC addresses for configured networks and persist mapping to storage.
+     * Generate randomized MAC addresses for configured networks and persist mapping to storage
+     * if such a mapping doesn't already exist. (This is needed to generate persistent randomized
+     * MAC address for existing networks when a device updates to Q+ for the first time)
      */
     private void generateRandomizedMacAddresses() {
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            mRandomizedMacAddressMapping.put(config.getSsidAndSecurityTypeString(),
-                    config.getOrCreateRandomizedMacAddress().toString());
+            String key = config.getSsidAndSecurityTypeString();
+            if (!mRandomizedMacAddressMapping.containsKey(key)) {
+                MacAddress mac = MacAddress.createRandomUnicastAddress();
+                config.setRandomizedMacAddress(mac);
+                mRandomizedMacAddressMapping.put(key, mac.toString());
+            }
         }
     }
 
@@ -3304,9 +3409,9 @@ public class WifiConfigManager {
     }
 
     /**
-     * Set the saved network update event listener
+     * Set the network update event listener
      */
-    public void setOnSavedNetworkUpdateListener(OnSavedNetworkUpdateListener listener) {
+    public void setOnNetworkUpdateListener(OnNetworkUpdateListener listener) {
         mListener = listener;
     }
 

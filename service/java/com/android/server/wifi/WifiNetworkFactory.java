@@ -1081,11 +1081,10 @@ public class WifiNetworkFactory extends NetworkFactory {
         if (!bssid.matches(matchBaseAddress, matchMask)) {
             return false;
         }
-        if (ScanResultMatchInfo.getNetworkType(wns.wifiConfiguration)
-                != ScanResultMatchInfo.getNetworkType(scanResult)) {
-            return false;
-        }
-        return true;
+        ScanResultMatchInfo fromScanResult = ScanResultMatchInfo.fromScanResult(scanResult);
+        ScanResultMatchInfo fromWifiConfiguration =
+                ScanResultMatchInfo.fromWifiConfiguration(wns.wifiConfiguration);
+        return fromScanResult.networkTypeEquals(fromWifiConfiguration);
     }
 
     // Loops through the scan results and finds scan results matching the active network
@@ -1141,10 +1140,11 @@ public class WifiNetworkFactory extends NetworkFactory {
         mConnectionTimeoutSet = true;
     }
 
-    private @NonNull CharSequence getAppName(@NonNull String packageName) {
+    private @NonNull CharSequence getAppName(@NonNull String packageName, int uid) {
         ApplicationInfo applicationInfo = null;
         try {
-            applicationInfo = mContext.getPackageManager().getApplicationInfo(packageName, 0);
+            applicationInfo = mContext.getPackageManager().getApplicationInfoAsUser(
+                packageName, 0, UserHandle.getUserId(uid));
         } catch (PackageManager.NameNotFoundException e) {
             Log.e(TAG, "Failed to find app name for " + packageName);
             return "";
@@ -1159,7 +1159,8 @@ public class WifiNetworkFactory extends NetworkFactory {
         intent.addCategory(UI_START_INTENT_CATEGORY);
         intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra(UI_START_INTENT_EXTRA_APP_NAME,
-                getAppName(mActiveSpecificNetworkRequestSpecifier.requestorPackageName));
+                getAppName(mActiveSpecificNetworkRequestSpecifier.requestorPackageName,
+                           mActiveSpecificNetworkRequestSpecifier.requestorUid));
         intent.putExtra(UI_START_INTENT_EXTRA_REQUEST_IS_FOR_SINGLE_NETWORK,
                 isActiveRequestForSingleNetwork());
         mContext.startActivityAsUser(intent, UserHandle.getUserHandleForUid(

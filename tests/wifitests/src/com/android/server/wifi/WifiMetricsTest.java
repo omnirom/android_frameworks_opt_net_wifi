@@ -129,7 +129,7 @@ import java.util.regex.Pattern;
  * Unit tests for {@link com.android.server.wifi.WifiMetrics}.
  */
 @SmallTest
-public class WifiMetricsTest {
+public class WifiMetricsTest extends WifiBaseTest {
 
     WifiMetrics mWifiMetrics;
     WifiMetricsProto.WifiLog mDecodedProto;
@@ -1789,8 +1789,8 @@ public class WifiMetricsTest {
         {WifiMonitor.NETWORK_CONNECTION_EVENT,      0,                   0},
         {WifiMonitor.NETWORK_DISCONNECTION_EVENT,   LOCAL_GEN,           DEAUTH_REASON},
         {WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0,                   0},
-        {ClientModeImpl.CMD_ASSOCIATED_BSSID,       0,                   0},
-        {ClientModeImpl.CMD_TARGET_BSSID,           0,                   0},
+        {WifiMonitor.ASSOCIATED_BSSID_EVENT,        0,                   0},
+        {WifiMonitor.TARGET_BSSID_EVENT,            0,                   0},
         {WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0,                   0},
         {WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0,                   0}
     };

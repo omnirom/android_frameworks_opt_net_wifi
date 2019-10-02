@@ -23,6 +23,7 @@ import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
+import android.net.wifi.WifiEnterpriseConfig.Ocsp;
 import android.os.HidlSupport.Mutable;
 import android.os.RemoteException;
 import android.text.TextUtils;
@@ -132,6 +133,7 @@ public class SupplicantStaNetworkHal {
     private boolean mEapEngine;
     private String mEapEngineID;
     private String mEapDomainSuffixMatch;
+    private @Ocsp int mOcsp;
 
     SupplicantStaNetworkHal(ISupplicantStaNetwork iSupplicantStaNetwork, String ifaceName,
             Context context, WifiMonitor monitor) {
@@ -161,6 +163,7 @@ public class SupplicantStaNetworkHal {
      * @return true if succeeds, false otherwise.
      * @throws IllegalArgumentException on malformed configuration params.
      */
+    @VisibleForTesting
     public boolean loadWifiConfiguration(WifiConfiguration config,
             Map<String, String> networkExtras) {
         synchronized (mLock) {
@@ -215,6 +218,12 @@ public class SupplicantStaNetworkHal {
             } else if (getPsk() && !ArrayUtils.isEmpty(mPsk)) {
                 config.preSharedKey = NativeUtil.hexStringFromByteArray(mPsk);
             } /* Do not read SAE password */
+
+            /** SAE Password id */
+            config.saePasswordId = null;
+            if (getSaePasswordId() && !TextUtils.isEmpty(mSaePasswordId)) {
+                config.saePasswordId = mSaePasswordId;
+            }
 
             /** allowedKeyManagement */
             if (getKeyMgmt()) {
@@ -313,6 +322,14 @@ public class SupplicantStaNetworkHal {
                         Log.e(TAG, "failed to set psk");
                         return false;
                     }
+                }
+            }
+
+            if (config.saePasswordId != null
+                    && config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+                if (!setSaePasswordId(config.saePasswordId)) {
+                    Log.e(TAG, "failed to ste sae password id");
+                    return false;
                 }
             }
 
@@ -525,6 +542,10 @@ public class SupplicantStaNetworkHal {
             /** EAP CA Cert */
             if (getEapCACert() && !TextUtils.isEmpty(mEapCACert)) {
                 eapConfig.setFieldValue(WifiEnterpriseConfig.CA_CERT_KEY, mEapCACert);
+            }
+            /** EAP OCSP type */
+            if (getOcsp()) {
+                eapConfig.setOcsp(mOcsp);
             }
             /** EAP Subject Match */
             if (getEapSubjectMatch() && !TextUtils.isEmpty(mEapSubjectMatch)) {
@@ -769,6 +790,16 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, ssid + ": failed to set VendorSimNumber : " + eapParam);
             }
 
+            /**
+             * OCSP (Online Certificate Status Protocol)
+             * For older HAL compatibility, omit this step to avoid breaking
+             * connection flow.
+             */
+            if (getV1_3StaNetwork() != null && !setOcsp(eapConfig.getOcsp())) {
+                Log.e(TAG, "failed to set ocsp");
+                return false;
+            }
+
             return true;
         }
     }
@@ -776,6 +807,12 @@ public class SupplicantStaNetworkHal {
     private android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork getV1_2StaNetwork() {
         synchronized (mLock) {
             return getSupplicantStaNetworkForV1_2Mockable();
+        }
+    }
+
+    private android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork getV1_3StaNetwork() {
+        synchronized (mLock) {
+            return getSupplicantStaNetworkForV1_3Mockable();
         }
     }
 
@@ -2059,6 +2096,39 @@ public class SupplicantStaNetworkHal {
     }
 
     /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean getSaePasswordId() {
+        synchronized (mLock) {
+            final String methodStr = "getSaePasswordId";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV12;
+
+                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
+                if (iSupplicantStaNetworkV12 != null) {
+                    /* Support for SAE Requires HAL v1.2 or higher */
+                    MutableBoolean statusOk = new MutableBoolean(false);
+                    iSupplicantStaNetworkV12.getSaePasswordId((SupplicantStatus status,
+                            String saePasswordId) -> {
+                        statusOk.value = status.code == SupplicantStatusCode.SUCCESS;
+                        if (statusOk.value) {
+                            this.mSaePasswordId = saePasswordId;
+                        } else {
+                            checkStatusAndLogFailure(status, methodStr);
+                        }
+                    });
+                    return statusOk.value;
+                } else {
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
     private boolean setSaePasswordId(String saePasswordId) {
         synchronized (mLock) {
             final String methodStr = "setSaePasswordId";
@@ -3099,6 +3169,19 @@ public class SupplicantStaNetworkHal {
     }
 
     /**
+     * Method to mock out the V1_3 ISupplicantStaNetwork retrieval in unit tests.
+     *
+     * @return 1.3 ISupplicantStaNetwork object if the device is running the 1.3 supplicant hal
+     * service, null otherwise.
+     */
+    protected android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+            getSupplicantStaNetworkForV1_3Mockable() {
+        if (mISupplicantStaNetwork == null) return null;
+        return android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.castFrom(
+                mISupplicantStaNetwork);
+    }
+
+    /**
      * Send eap identity response.
      *
      * @param identityStr          identity used for EAP-Identity
@@ -3144,6 +3227,99 @@ public class SupplicantStaNetworkHal {
                 }
 
                 return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean setOcsp(@Ocsp int ocsp) {
+        synchronized (mLock) {
+            final String methodStr = "setOcsp";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+
+            int halOcspValue = android.hardware.wifi.supplicant.V1_3.OcspType.NONE;
+            switch (ocsp) {
+                case WifiEnterpriseConfig.OCSP_REQUEST_CERT_STATUS:
+                    halOcspValue = android.hardware.wifi.supplicant.V1_3
+                            .OcspType.REQUEST_CERT_STATUS;
+                    break;
+                case WifiEnterpriseConfig.OCSP_REQUIRE_CERT_STATUS:
+                    halOcspValue = android.hardware.wifi.supplicant.V1_3
+                            .OcspType.REQUIRE_CERT_STATUS;
+                    break;
+                case WifiEnterpriseConfig.OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS:
+                    halOcspValue = android.hardware.wifi.supplicant.V1_3
+                            .OcspType.REQUIRE_ALL_CERTS_STATUS;
+                    break;
+            }
+            try {
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV13;
+
+                iSupplicantStaNetworkV13 = getV1_3StaNetwork();
+                if (iSupplicantStaNetworkV13 != null) {
+                    /* Support for OCSP Requires HAL v1.3 or higher */
+                    SupplicantStatus status = iSupplicantStaNetworkV13
+                            .setOcsp(halOcspValue);
+                    return checkStatusAndLogFailure(status, methodStr);
+                } else {
+                    Log.e(TAG, "Cannot get ISupplicantStaNetwork V1.3");
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    private boolean getOcsp() {
+        synchronized (mLock) {
+            final String methodStr = "getOcsp";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+
+            try {
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV13;
+                iSupplicantStaNetworkV13 = getV1_3StaNetwork();
+                if (iSupplicantStaNetworkV13 != null) {
+                    MutableBoolean statusOk = new MutableBoolean(false);
+                    iSupplicantStaNetworkV13.getOcsp((SupplicantStatus status,
+                            int halOcspValue) -> {
+                        statusOk.value = status.code == SupplicantStatusCode.SUCCESS;
+                        if (statusOk.value) {
+                            mOcsp = WifiEnterpriseConfig.OCSP_NONE;
+                            switch (halOcspValue) {
+                                case android.hardware.wifi.supplicant.V1_3
+                                        .OcspType.REQUEST_CERT_STATUS:
+                                    mOcsp = WifiEnterpriseConfig.OCSP_REQUEST_CERT_STATUS;
+                                    break;
+                                case android.hardware.wifi.supplicant.V1_3
+                                        .OcspType.REQUIRE_CERT_STATUS:
+                                    mOcsp = WifiEnterpriseConfig.OCSP_REQUIRE_CERT_STATUS;
+                                    break;
+                                case android.hardware.wifi.supplicant.V1_3
+                                        .OcspType.REQUIRE_ALL_CERTS_STATUS:
+                                    mOcsp = WifiEnterpriseConfig
+                                            .OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS;
+                                    break;
+                                default:
+                                    Log.e(TAG, "Invalid HAL OCSP value " + halOcspValue);
+                                    break;
+                            }
+                        } else {
+                            checkStatusAndLogFailure(status, methodStr);
+                        }
+                    });
+                    return statusOk.value;
+                } else {
+                    Log.e(TAG, "Cannot get ISupplicantStaNetwork V1.3");
+                    return false;
+                }
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;

@@ -348,6 +348,7 @@ public class XmlUtil {
         public static final String XML_TAG_ROAMING_CONSORTIUM_OIS = "RoamingConsortiumOIs";
         public static final String XML_TAG_RANDOMIZED_MAC_ADDRESS = "RandomizedMacAddress";
         public static final String XML_TAG_MAC_RANDOMIZATION_SETTING = "MacRandomizationSetting";
+        public static final String XML_TAG_SAE_PASSWORD_ID_KEY = "SaePasswordId";
         public static final String XML_TAG_SHARE_THIS_AP = "ShareThisAp";
 
         public static final String XML_TAG_DPP_CONNECTOR = "DppConnector";
@@ -397,6 +398,7 @@ public class XmlUtil {
             XmlUtil.writeNextValue(out, XML_TAG_BSSID, configuration.BSSID);
             XmlUtil.writeNextValue(out, XML_TAG_SHARE_THIS_AP, configuration.shareThisAp);
             XmlUtil.writeNextValue(out, XML_TAG_PRE_SHARED_KEY, configuration.preSharedKey);
+            XmlUtil.writeNextValue(out, XML_TAG_SAE_PASSWORD_ID_KEY, configuration.saePasswordId);
             writeWepKeysToXml(out, configuration.wepKeys);
             XmlUtil.writeNextValue(out, XML_TAG_WEP_TX_KEY_INDEX, configuration.wepTxKeyIndex);
             XmlUtil.writeNextValue(out, XML_TAG_HIDDEN_SSID, configuration.hiddenSSID);
@@ -555,6 +557,9 @@ public class XmlUtil {
                         break;
                     case XML_TAG_PRE_SHARED_KEY:
                         configuration.preSharedKey = (String) value;
+                        break;
+                    case XML_TAG_SAE_PASSWORD_ID_KEY:
+                        configuration.saePasswordId = (String) value;
                         break;
                     case XML_TAG_WEP_KEYS:
                         populateWepKeysFromXmlValue(value, configuration.wepKeys);
@@ -1043,6 +1048,7 @@ public class XmlUtil {
         public static final String XML_TAG_PHASE2_METHOD = "Phase2Method";
         public static final String XML_TAG_PLMN = "PLMN";
         public static final String XML_TAG_REALM = "Realm";
+        public static final String XML_TAG_OCSP = "Ocsp";
         public static final String XML_TAG_SIMNUM = "SimNum";
 
         /**
@@ -1082,6 +1088,7 @@ public class XmlUtil {
             XmlUtil.writeNextValue(out, XML_TAG_PHASE2_METHOD, enterpriseConfig.getPhase2Method());
             XmlUtil.writeNextValue(out, XML_TAG_PLMN, enterpriseConfig.getPlmn());
             XmlUtil.writeNextValue(out, XML_TAG_REALM, enterpriseConfig.getRealm());
+            XmlUtil.writeNextValue(out, XML_TAG_OCSP, enterpriseConfig.getOcsp());
             XmlUtil.writeNextValue(out, XML_TAG_SIMNUM, enterpriseConfig.getSimNum());
         }
 
@@ -1151,6 +1158,9 @@ public class XmlUtil {
                     case XML_TAG_CA_PATH:
                         enterpriseConfig.setFieldValue(
                                 WifiEnterpriseConfig.CA_PATH_KEY, (String) value);
+                        break;
+                    case XML_TAG_OCSP:
+                        enterpriseConfig.setOcsp((int) value);
                         break;
                     case XML_TAG_EAP_METHOD:
                         enterpriseConfig.setEapMethod((int) value);

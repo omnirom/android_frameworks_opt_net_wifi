@@ -453,6 +453,7 @@ public class WifiNetworkSuggestionsManager {
                             scanResultMatchInfo, extNetworkSuggestionsForScanResultMatchInfo);
                 }
             }
+            extNetworkSuggestionsForScanResultMatchInfo.remove(extNetworkSuggestion);
             extNetworkSuggestionsForScanResultMatchInfo.add(extNetworkSuggestion);
         }
     }
@@ -576,25 +577,25 @@ public class WifiNetworkSuggestionsManager {
         }
         Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions =
                 convertToExtendedWnsSet(networkSuggestions, perAppInfo);
-        // check if the app is trying to in-place modify network suggestions.
-        if (!Collections.disjoint(perAppInfo.extNetworkSuggestions, extNetworkSuggestions)) {
-            Log.e(TAG, "Failed to add network suggestions for " + packageName
-                    + ". Modification of active network suggestions disallowed");
-            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_DUPLICATE;
-        }
         if (perAppInfo.extNetworkSuggestions.size() + extNetworkSuggestions.size()
                 > WifiManager.NETWORK_SUGGESTIONS_MAX_PER_APP) {
-            Log.e(TAG, "Failed to add network suggestions for " + packageName
-                    + ". Exceeds max per app, current list size: "
-                    + perAppInfo.extNetworkSuggestions.size()
-                    + ", new list size: "
-                    + extNetworkSuggestions.size());
-            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_EXCEEDS_MAX_PER_APP;
+            Set<ExtendedWifiNetworkSuggestion> savedNetworkSuggestions =
+                    new HashSet<>(perAppInfo.extNetworkSuggestions);
+            savedNetworkSuggestions.addAll(extNetworkSuggestions);
+            if (savedNetworkSuggestions.size() > WifiManager.NETWORK_SUGGESTIONS_MAX_PER_APP) {
+                Log.e(TAG, "Failed to add network suggestions for " + packageName
+                        + ". Exceeds max per app, current list size: "
+                        + perAppInfo.extNetworkSuggestions.size()
+                        + ", new list size: "
+                        + extNetworkSuggestions.size());
+                return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_EXCEEDS_MAX_PER_APP;
+            }
         }
         if (perAppInfo.extNetworkSuggestions.isEmpty()) {
             // Start tracking app-op changes from the app if they have active suggestions.
             startTrackingAppOpsChange(packageName, uid);
         }
+        perAppInfo.extNetworkSuggestions.removeAll(extNetworkSuggestions);
         perAppInfo.extNetworkSuggestions.addAll(extNetworkSuggestions);
         // Update the max size for this app.
         perAppInfo.maxSize = Math.max(perAppInfo.extNetworkSuggestions.size(), perAppInfo.maxSize);
@@ -771,10 +772,11 @@ public class WifiNetworkSuggestionsManager {
                 PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
-    private @NonNull CharSequence getAppName(@NonNull String packageName) {
+    private @NonNull CharSequence getAppName(@NonNull String packageName, int uid) {
         ApplicationInfo applicationInfo = null;
         try {
-            applicationInfo = mPackageManager.getApplicationInfo(packageName, 0);
+            applicationInfo = mContext.getPackageManager().getApplicationInfoAsUser(
+                packageName, 0, UserHandle.getUserId(uid));
         } catch (PackageManager.NameNotFoundException e) {
             Log.e(TAG, "Failed to find app name for " + packageName);
             return "";
@@ -797,13 +799,14 @@ public class WifiNetworkSuggestionsManager {
                                 packageName, uid))
                         .build();
 
-        CharSequence appName = getAppName(packageName);
+        CharSequence appName = getAppName(packageName, uid);
         Notification notification = new Notification.Builder(
                 mContext, SystemNotificationChannels.NETWORK_STATUS)
                 .setSmallIcon(R.drawable.stat_notify_wifi_in_range)
                 .setTicker(mResources.getString(R.string.wifi_suggestion_title))
                 .setContentTitle(mResources.getString(R.string.wifi_suggestion_title))
-                .setContentText(mResources.getString(R.string.wifi_suggestion_content, appName))
+                .setStyle(new Notification.BigTextStyle()
+                        .bigText(mResources.getString(R.string.wifi_suggestion_content, appName)))
                 .setDeleteIntent(getPrivateBroadcast(NOTIFICATION_USER_DISMISSED_INTENT_ACTION,
                         packageName, uid))
                 .setShowWhen(false)

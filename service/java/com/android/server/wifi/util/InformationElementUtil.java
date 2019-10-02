@@ -395,6 +395,7 @@ public class InformationElementUtil {
      */
     public static class Capabilities {
         private static final int CAP_ESS_BIT_OFFSET = 0;
+        private static final int CAP_IBSS_BIT_OFFSET = 1;
         private static final int CAP_PRIVACY_BIT_OFFSET = 4;
 
         private static final int WPA_VENDOR_OUI_TYPE_ONE = 0x01f25000;
@@ -416,6 +417,7 @@ public class InformationElementUtil {
         private static final int RSN_AKM_FT_SAE = 0x09ac0f00;
         private static final int RSN_AKM_OWE = 0x12ac0f00;
         private static final int RSN_AKM_EAP_SUITE_B_192 = 0x0cac0f00;
+        private static final int RSN_OSEN = 0x019a6f50;
         private static final int WPA2_AKM_FILS_SHA256 = 0x0eac0f00;
         private static final int WPA2_AKM_FILS_SHA384 = 0x0fac0f00;
         private static final int WPA2_AKM_DPP = 0x029a6f50;
@@ -435,6 +437,7 @@ public class InformationElementUtil {
         public ArrayList<ArrayList<Integer>> pairwiseCipher;
         public ArrayList<Integer> groupCipher;
         public boolean isESS;
+        public boolean isIBSS;
         public boolean isPrivacy;
         public boolean isWPS;
         public boolean isHt;
@@ -532,6 +535,9 @@ public class InformationElementUtil {
                         case RSN_AKM_EAP_SUITE_B_192:
                             Log.e("informationelement", "captured suite b" );
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_EAP_SUITE_B_192);
+                            break;
+                        case RSN_OSEN:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_OSEN);
                             break;
                         default:
                             // do nothing
@@ -697,6 +703,7 @@ public class InformationElementUtil {
                 return;
             }
             isESS = beaconCap.get(CAP_ESS_BIT_OFFSET);
+            isIBSS = beaconCap.get(CAP_IBSS_BIT_OFFSET);
             isPrivacy = beaconCap.get(CAP_PRIVACY_BIT_OFFSET);
             for (InformationElement ie : ies) {
                 if (ie.id == InformationElement.EID_RSN) {
@@ -768,6 +775,8 @@ public class InformationElementUtil {
                     return "WPA";
                 case ScanResult.PROTOCOL_RSN:
                     return "RSN";
+                case ScanResult.PROTOCOL_OSEN:
+                    return "OSEN";
                 default:
                     return "?";
             }
@@ -799,6 +808,8 @@ public class InformationElementUtil {
                     return "FT/SAE";
                 case ScanResult.KEY_MGMT_EAP_SUITE_B_192:
                     return "EAP_SUITE_B_192";
+                case ScanResult.KEY_MGMT_OSEN:
+                    return "OSEN";
                 case ScanResult.KEY_MGMT_DPP:
                     return "DPP";
                 case ScanResult.KEY_MGMT_FILS_SHA256:
@@ -848,6 +859,9 @@ public class InformationElementUtil {
             }
             if (isESS) {
                 capabilities.append("[ESS]");
+            }
+            if (isIBSS) {
+                capabilities.append("[IBSS]");
             }
             if (isWPS) {
                 capabilities.append("[WPS]");

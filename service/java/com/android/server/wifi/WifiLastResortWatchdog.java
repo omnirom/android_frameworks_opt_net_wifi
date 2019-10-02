@@ -79,9 +79,6 @@ public class WifiLastResortWatchdog {
     @VisibleForTesting
     public static final long LAST_TRIGGER_TIMEOUT_MILLIS = 2 * 3600 * 1000; // 2 hours
 
-    private int mAbnormalConnectionDurationMs;
-    private boolean mAbnormalConnectionBugreportEnabled;
-
 
     /**
      * Cached WifiConfigurations of available networks seen within MAX_BSSID_AGE scan results
@@ -120,6 +117,7 @@ public class WifiLastResortWatchdog {
     private boolean mWatchdogFixedWifi = true;
     private long mLastStartConnectTime = 0;
     private Handler mHandler;
+    private final WifiThreadRunner mWifiThreadRunner;
 
     /**
      * Local log used for debugging any WifiLastResortWatchdog issues.
@@ -128,7 +126,7 @@ public class WifiLastResortWatchdog {
 
     WifiLastResortWatchdog(WifiInjector wifiInjector, Context context, Clock clock,
             WifiMetrics wifiMetrics, ClientModeImpl clientModeImpl, Looper clientModeImplLooper,
-            DeviceConfigFacade deviceConfigFacade) {
+            DeviceConfigFacade deviceConfigFacade, WifiThreadRunner wifiThreadRunner) {
         mWifiInjector = wifiInjector;
         mClock = clock;
         mWifiMetrics = wifiMetrics;
@@ -136,29 +134,12 @@ public class WifiLastResortWatchdog {
         mClientModeImplLooper = clientModeImplLooper;
         mContext = context;
         mDeviceConfigFacade = deviceConfigFacade;
-        updateDeviceConfigFlags();
+        mWifiThreadRunner = wifiThreadRunner;
         mHandler = new Handler(clientModeImplLooper) {
             public void handleMessage(Message msg) {
                 processMessage(msg);
             }
         };
-
-        mDeviceConfigFacade.addOnPropertiesChangedListener(
-                command -> mHandler.post(command),
-                properties -> {
-                    updateDeviceConfigFlags();
-                });
-    }
-
-    private void updateDeviceConfigFlags() {
-        mAbnormalConnectionBugreportEnabled =
-                mDeviceConfigFacade.isAbnormalConnectionBugreportEnabled();
-        mAbnormalConnectionDurationMs =
-                mDeviceConfigFacade.getAbnormalConnectionDurationMs();
-        logv("updateDeviceConfigFlags: mAbnormalConnectionDurationMs = "
-                + mAbnormalConnectionDurationMs
-                + ", mAbnormalConnectionBugreportEnabled = "
-                + mAbnormalConnectionBugreportEnabled);
     }
 
     /**
@@ -182,17 +163,19 @@ public class WifiLastResortWatchdog {
         switch (msg.what) {
             case WifiMonitor.NETWORK_CONNECTION_EVENT:
                 // Trigger bugreport for successful connections that take abnormally long
-                if (mAbnormalConnectionBugreportEnabled && mLastStartConnectTime > 0) {
+                if (mDeviceConfigFacade.isAbnormalConnectionBugreportEnabled()
+                        && mLastStartConnectTime > 0) {
                     long durationMs = mClock.getElapsedSinceBootMillis() - mLastStartConnectTime;
-                    if (durationMs > mAbnormalConnectionDurationMs) {
+                    long abnormalConnectionDurationMs =
+                            mDeviceConfigFacade.getAbnormalConnectionDurationMs();
+                    if (durationMs > abnormalConnectionDurationMs) {
                         final String bugTitle = "Wi-Fi Bugreport: Abnormal connection time";
                         final String bugDetail = "Expected connection to take less than "
-                                + mAbnormalConnectionDurationMs + " milliseconds. "
+                                + abnormalConnectionDurationMs + " milliseconds. "
                                 + "Actually took " + durationMs + " milliseconds.";
                         logv("Triggering bug report for abnormal connection time.");
-                        mWifiInjector.getClientModeImplHandler().post(() -> {
-                            mClientModeImpl.takeBugReport(bugTitle, bugDetail);
-                        });
+                        mWifiThreadRunner.post(() ->
+                                mClientModeImpl.takeBugReport(bugTitle, bugDetail));
                     }
                 }
                 // Should reset last connection time after each connection regardless if bugreport
