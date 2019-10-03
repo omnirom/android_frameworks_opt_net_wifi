@@ -3731,7 +3731,7 @@ public class WifiServiceImpl extends BaseWifiService {
             softApConfig.mConfig.apBand = apConfig.apBand;
 
         Slog.d(TAG,"Repeater mode config - " + softApConfig.mConfig);
-        mWifiController.sendMessage(CMD_SET_AP, 1, 0, softApConfig);
+        mActiveModeWarden.startSoftAp(softApConfig);
     }
 
     public boolean isWifiCoverageExtendFeatureEnabled() {
