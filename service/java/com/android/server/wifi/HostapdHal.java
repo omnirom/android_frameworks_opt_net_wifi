@@ -535,6 +535,28 @@ public class HostapdHal {
     }
 
     /**
+     * Terminate the hostapd daemon if already running, otherwise ignore.
+     */
+    public void terminateIfRunning() {
+        synchronized (mLock) {
+            WifiInjector wifiInjector = WifiInjector.getInstance();
+            if (wifiInjector.getPropertyService().get("init.svc.hostapd", "").equals("running") ||
+                     wifiInjector.getPropertyService().get("init.svc.hostapd_fst", "").equals("running")) {
+                try {
+                    Log.i(TAG, "Hostapd daemon is running, Terminate gracefully");
+                    IHostapd.getService().terminate();
+                } catch (RemoteException e) {
+                    Log.e(TAG, "IHostapd.getService.terminate exception: " + e);
+                } catch (NoSuchElementException e) {
+                    // |NoSuchElementException| expected when hostapd is not running
+                    // It shouldn't happen as we are calling getService only when hostapd is running
+                    Log.e(TAG, "NoSuchElementException on calling IHostapd.getService though hostapd service is running.");
+                }
+            }
+        }
+    }
+
+    /**
      * Wrapper functions to access static HAL methods, created to be mockable in unit tests
      */
     @VisibleForTesting
