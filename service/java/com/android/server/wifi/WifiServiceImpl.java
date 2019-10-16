@@ -30,6 +30,9 @@ import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_FAILED;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_INFRA_5G;
+import static android.net.wifi.WifiManager.STA_SHARED;
+import static android.net.wifi.WifiManager.STA_PRIMARY;
+import static android.net.wifi.WifiManager.STA_SECONDARY;
 
 import static com.android.server.wifi.LocalOnlyHotspotRequestInfo.HOTSPOT_NO_ERROR;
 import static com.android.server.wifi.WifiController.CMD_AIRPLANE_TOGGLED;
@@ -38,6 +41,7 @@ import static com.android.server.wifi.WifiController.CMD_EMERGENCY_MODE_CHANGED;
 import static com.android.server.wifi.WifiController.CMD_SCAN_ALWAYS_MODE_CHANGED;
 import static com.android.server.wifi.WifiController.CMD_SET_AP;
 import static com.android.server.wifi.WifiController.CMD_WIFI_TOGGLED;
+import static com.android.server.wifi.WifiController.CMD_ADD_WIFI_SET;
 
 import android.Manifest;
 import android.annotation.CheckResult;
@@ -60,6 +64,8 @@ import android.net.DhcpResults;
 import android.net.Network;
 import android.net.NetworkUtils;
 import android.net.Uri;
+import android.net.LinkProperties;
+import android.net.NetworkInfo;
 import android.net.ip.IpClientUtil;
 import android.net.wifi.IDppCallback;
 import android.net.wifi.INetworkRequestMatchCallback;
@@ -80,6 +86,7 @@ import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.WifiDppConfig;
 import android.net.wifi.SupplicantState;
+import android.net.wifi.IWifiNotificationCallback;
 import android.os.AsyncTask;
 import android.os.BatteryStats;
 import android.os.Binder;
@@ -217,6 +224,14 @@ public class WifiServiceImpl extends BaseWifiService {
     @GuardedBy("mLocalOnlyHotspotRequests")
     private final ConcurrentHashMap<String, Integer> mIfaceIpModes;
 
+    private final ExternalCallbackTracker<IWifiNotificationCallback> mRegisteredWifiCallbacks;
+
+    // QtiClientMode states
+    private final HashMap<Integer, Integer> mQtiWifiRssi;
+    private final HashMap<Integer, Integer> mQtiWifiNewState;
+    private final HashMap<Integer, LinkProperties> mQtiWifiLinkProperties;
+    private final HashMap<Integer, NetworkInfo> mQtiWifiNetworkInfo;
+
     private final ExternalCallbackTracker<ISoftApCallback> mRegisteredSoftApCallbacks;
 
     /**
@@ -289,7 +304,10 @@ public class WifiServiceImpl extends BaseWifiService {
                                 + " uid=" + msg.sendingUid
                                 + " name="
                                 + mContext.getPackageManager().getNameForUid(msg.sendingUid));
-                        if (config != null) {
+
+                        if (handleForOtherInterface(Message.obtain(msg))) {
+                            Slog.d(TAG, "CONNECT handled for additional interface");
+                        } else if (config != null) {
                             /* Command is forwarded to state machine */
                             mClientModeImpl.sendMessage(Message.obtain(msg));
                         } else if (config == null
@@ -315,7 +333,10 @@ public class WifiServiceImpl extends BaseWifiService {
                                 + " uid=" + msg.sendingUid
                                 + " name="
                                 + mContext.getPackageManager().getNameForUid(msg.sendingUid));
-                        if (config != null) {
+
+                        if (handleForOtherInterface(Message.obtain(msg))) {
+                            Slog.d(TAG, "SAVE network handled for additional interface");
+                        } else if (config != null) {
                             /* Command is forwarded to state machine */
                             mClientModeImpl.sendMessage(Message.obtain(msg));
                         } else {
@@ -330,13 +351,19 @@ public class WifiServiceImpl extends BaseWifiService {
                 case WifiManager.FORGET_NETWORK:
                     if (checkPrivilegedPermissionsAndReplyIfNotAuthorized(
                             msg, WifiManager.FORGET_NETWORK_FAILED)) {
-                        mClientModeImpl.sendMessage(Message.obtain(msg));
+                        if (handleForOtherInterface(Message.obtain(msg)))
+                            Slog.d(TAG, "FORGET network handled for additional interface");
+                        else
+                            mClientModeImpl.sendMessage(Message.obtain(msg));
                     }
                     break;
                 case WifiManager.DISABLE_NETWORK:
                     if (checkPrivilegedPermissionsAndReplyIfNotAuthorized(
                             msg, WifiManager.DISABLE_NETWORK_FAILED)) {
-                        mClientModeImpl.sendMessage(Message.obtain(msg));
+                        if (handleForOtherInterface(Message.obtain(msg)))
+                            Slog.d(TAG, "DISABLE network handled for additional interface");
+                        else
+                            mClientModeImpl.sendMessage(Message.obtain(msg));
                     }
                     break;
                 case WifiManager.RSSI_PKTCNT_FETCH: {
@@ -406,6 +433,32 @@ public class WifiServiceImpl extends BaseWifiService {
             } catch (RemoteException e) {
                 // There's not much we can do if reply can't be sent!
             }
+        }
+
+        // if request is for interface other than primary, take care of it here.
+        public boolean handleForOtherInterface(Message msg) {
+            WifiConfiguration config = (WifiConfiguration) msg.obj;
+            int networkId = msg.arg1;
+            int wifiId = -1;
+            if (config != null && config.staId > STA_PRIMARY) {
+                wifiId = config.staId;
+            } else if (config == null
+                    && networkId != WifiConfiguration.INVALID_NETWORK_ID) {
+                config = mWifiInjector.getWifiConfigManager().getConfiguredNetwork(networkId);
+                if (config != null && config.staId > STA_PRIMARY)
+                    wifiId = config.staId;
+            }
+            if (wifiId == -1)
+                return false;
+
+            QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(wifiId);
+            AsyncChannel channel = mActiveModeWarden.getQtiClientImplChannel(wifiId);
+            if (qtiClientModeImpl == null || channel == null) {
+                Slog.e(TAG, "qtiClientModeImpl is not initialized. Drop this.");
+                return false; // TODO: UT: to indicate this command is intended for wifiId but could not be processed
+            }
+            qtiClientModeImpl.syncNetworkCmd(channel, Message.obtain(msg));
+            return true;
         }
     }
     private AsyncChannelExternalClientHandler mAsyncChannelExternalClientHandler;
@@ -532,6 +585,16 @@ public class WifiServiceImpl extends BaseWifiService {
                 new ExternalCallbackTracker<ISoftApCallback>(mClientModeImplHandler);
 
         mWifiInjector.getActiveModeWarden().registerSoftApCallback(new SoftApCallbackImpl());
+
+        mQtiWifiRssi = new HashMap<>();
+        mQtiWifiNewState = new HashMap<>();
+        mQtiWifiLinkProperties = new HashMap<>();
+        mQtiWifiNetworkInfo = new HashMap<>();
+        mRegisteredWifiCallbacks =
+                new ExternalCallbackTracker<IWifiNotificationCallback>(mClientModeImplHandler);
+        mWifiInjector.getActiveModeWarden().registerQtiClientModeCallback(new WifiNotificationCallbackImpl());
+        mWifiInjector.getWifiConfigManager().configureNumIfaces(getNumConcurrentStaSupported());
+
         mPowerProfile = mWifiInjector.getPowerProfile();
         mWifiNetworkSuggestionsManager = mWifiInjector.getWifiNetworkSuggestionsManager();
         mDppManager = mWifiInjector.getDppManager();
@@ -915,12 +978,13 @@ public class WifiServiceImpl extends BaseWifiService {
 
     /**
      * see {@link android.net.wifi.WifiManager#setWifiEnabled(boolean)}
+     * @param  staId Wifi interface to enable/disable.
      * @param enable {@code true} to enable, {@code false} to disable.
      * @return {@code true} if the enable/disable operation was
      *         started or is already in the queue.
      */
     @Override
-    public synchronized boolean setWifiEnabled(String packageName, boolean enable) {
+    public synchronized boolean setWifiEnabled2(String packageName, int staId, boolean enable) {
         if (enforceChangePermission(packageName) != MODE_ALLOWED) {
             return false;
         }
@@ -949,7 +1013,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(Binder.getCallingUid()).c(enable).flush();
         long ident = Binder.clearCallingIdentity();
         try {
-            if (!mSettingsStore.handleWifiToggled(enable)) {
+            if (staId == STA_PRIMARY && !mSettingsStore.handleWifiToggled(enable)) {
                 // Nothing to do if wifi cannot be toggled
                 return true;
             }
@@ -964,8 +1028,23 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mWifiMetrics.incrementNumWifiToggles(isPrivileged, enable);
 
-        mWifiController.sendMessage(CMD_WIFI_TOGGLED);
+        if (staId == STA_PRIMARY) {
+            mWifiController.sendMessage(CMD_WIFI_TOGGLED);
+        } else if ((getNumConcurrentStaSupported() > 1)
+                   && (getWifiEnabledState() == WifiManager.WIFI_STATE_ENABLED)
+                   && staId > STA_PRIMARY) {
+            mWifiController.sendMessage(CMD_ADD_WIFI_SET, staId, enable ? 1 : 0);
+        } else {
+           Slog.e(TAG,"setWifiEnabled not allowed for id:"+staId);
+           return false;
+        }
+
         return true;
+    }
+
+    @Override
+    public synchronized boolean setWifiEnabled(String packageName, boolean enable) {
+        return setWifiEnabled2(packageName, STA_PRIMARY, enable);
     }
 
     /**
@@ -1783,7 +1862,7 @@ public class WifiServiceImpl extends BaseWifiService {
      * see {@link android.net.wifi.WifiManager#disconnect()}
      */
     @Override
-    public boolean disconnect(String packageName) {
+    public boolean disconnect2(int staId, String packageName) {
         if (enforceChangePermission(packageName) != MODE_ALLOWED) {
             return false;
         }
@@ -1794,8 +1873,23 @@ public class WifiServiceImpl extends BaseWifiService {
             return false;
         }
         mLog.info("disconnect uid=%").c(Binder.getCallingUid()).flush();
-        mClientModeImpl.disconnectCommand();
+        if (staId == STA_PRIMARY) {
+            mClientModeImpl.disconnectCommand();
+        } else {
+            QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(staId);
+            if (qtiClientModeImpl == null) return false;
+            qtiClientModeImpl.disconnectCommand();
+        }
         return true;
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#disconnect()}
+     * @hide
+     */
+    @Override
+    public boolean disconnect(String packageName) {
+        return disconnect2(STA_PRIMARY, packageName);
     }
 
     /**
@@ -1821,7 +1915,7 @@ public class WifiServiceImpl extends BaseWifiService {
      * see {@link android.net.wifi.WifiManager#reassociate()}
      */
     @Override
-    public boolean reassociate(String packageName) {
+    public boolean reassociate2(int staId, String packageName) {
         if (enforceChangePermission(packageName) != MODE_ALLOWED) {
             return false;
         }
@@ -1832,8 +1926,22 @@ public class WifiServiceImpl extends BaseWifiService {
             return false;
         }
         mLog.info("reassociate uid=%").c(Binder.getCallingUid()).flush();
-        mClientModeImpl.reassociateCommand();
+        if (staId == STA_PRIMARY) {
+            mClientModeImpl.reassociateCommand();
+        } else {
+            QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(staId);
+            if (qtiClientModeImpl == null) return false;
+            qtiClientModeImpl.reassociateCommand();
+        }
         return true;
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#reassociate()}
+     */
+    @Override
+    public boolean reassociate(String packageName) {
+        return reassociate2(STA_PRIMARY, packageName);
     }
 
     /**
@@ -1934,11 +2042,12 @@ public class WifiServiceImpl extends BaseWifiService {
     /**
      * see {@link android.net.wifi.WifiManager#getConfiguredNetworks()}
      *
+     * @param staId Integer value for wifi interface
      * @param packageName String name of the calling package
      * @return the list of configured networks
      */
     @Override
-    public ParceledListSlice<WifiConfiguration> getConfiguredNetworks(String packageName) {
+    public ParceledListSlice<WifiConfiguration> getConfiguredNetworks2(int staId, String packageName) {
         enforceAccessPermission();
         int callingUid = Binder.getCallingUid();
         // bypass shell: can get varioud pkg name
@@ -1975,26 +2084,61 @@ public class WifiServiceImpl extends BaseWifiService {
             targetConfigUid = callingUid; // expose only those configs created by the Carrier App
         }
 
-        if (mClientModeImplChannel != null) {
-            List<WifiConfiguration> configs = mClientModeImpl.syncGetConfiguredNetworks(
-                    callingUid, mClientModeImplChannel, targetConfigUid);
-            if (configs != null) {
-                if (isTargetSdkLessThanQOrPrivileged) {
-                    return new ParceledListSlice<WifiConfiguration>(configs);
-                } else { // Carrier app: should only get its own configs
-                    List<WifiConfiguration> creatorConfigs = new ArrayList<>();
-                    for (WifiConfiguration config : configs) {
-                        if (config.creatorUid == callingUid) {
-                            creatorConfigs.add(config);
-                        }
+        List<WifiConfiguration> configs = null;
+        if (mClientModeImplChannel != null && ((staId == STA_PRIMARY) || (staId == STA_SHARED))) {
+            configs = mClientModeImpl.syncGetConfiguredNetworks(
+                          callingUid, mClientModeImplChannel, targetConfigUid);
+        } else if (staId > STA_PRIMARY) {
+            QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(staId);
+            AsyncChannel channel = mActiveModeWarden.getQtiClientImplChannel(staId);
+            if (qtiClientModeImpl == null || channel == null) {
+                Slog.e(TAG, "qtiClientModeImpl is not initialized. Drop this.");
+                return null;
+            }
+            configs = qtiClientModeImpl.syncGetConfiguredNetworks(
+                          callingUid, channel, targetConfigUid);
+        }
+
+        if (configs != null && staId == STA_SHARED) {
+            List<WifiConfiguration> tconfigs = new ArrayList<WifiConfiguration>();
+            for (WifiConfiguration config : configs) {
+                // Handle for SHARED-only request.
+                if (config.staId != STA_SHARED)
+                    continue;
+                tconfigs.add(config);
+            }
+                configs.clear();
+                configs.addAll(tconfigs);
+        }
+
+        if (configs != null) {
+            if (isTargetSdkLessThanQOrPrivileged) {
+                return new ParceledListSlice<WifiConfiguration>(configs);
+            } else { // Carrier app: should only get its own configs
+                List<WifiConfiguration> creatorConfigs = new ArrayList<>();
+                for (WifiConfiguration config : configs) {
+                    if (config.creatorUid == callingUid) {
+                        creatorConfigs.add(config);
                     }
-                    return new ParceledListSlice<WifiConfiguration>(creatorConfigs);
                 }
+                return new ParceledListSlice<WifiConfiguration>(creatorConfigs);
             }
         } else {
             Slog.e(TAG, "mClientModeImplChannel is not initialized");
         }
+
         return null;
+    }
+
+    /**
+     * see {@link android.net.wifi.WifiManager#getConfiguredNetworks()}
+     *
+     * @param packageName String name of the calling package
+     * @return the list of configured networks
+     */
+    @Override
+    public ParceledListSlice<WifiConfiguration> getConfiguredNetworks(String packageName) {
+        return getConfiguredNetworks2(STA_PRIMARY, packageName);
     }
 
     /**
@@ -2194,13 +2338,22 @@ public class WifiServiceImpl extends BaseWifiService {
         //TODO: pass the Uid the ClientModeImpl as a message parameter
         Slog.i("addOrUpdateNetwork", " uid = " + Integer.toString(Binder.getCallingUid())
                 + " SSID " + config.SSID
-                + " nid=" + Integer.toString(config.networkId));
+                + " nid=" + Integer.toString(config.networkId)
+                + " staId=" + Integer.toString(config.staId));
         if (config.networkId == WifiConfiguration.INVALID_NETWORK_ID) {
             config.creatorUid = Binder.getCallingUid();
         } else {
             config.lastUpdateUid = Binder.getCallingUid();
         }
-        if (mClientModeImplChannel != null) {
+        if (config.staId > STA_PRIMARY) {
+            QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(config.staId);
+            AsyncChannel channel = mActiveModeWarden.getQtiClientImplChannel(config.staId);
+            if (qtiClientModeImpl == null || channel == null) {
+                Slog.e(TAG, "qtiClientModeImpl is not initialized. Drop this.");
+                return -1;
+            }
+            return qtiClientModeImpl.syncAddOrUpdateNetwork(channel, config);
+        } else if (mClientModeImplChannel != null) {
             return mClientModeImpl.syncAddOrUpdateNetwork(mClientModeImplChannel, config);
         } else {
             Slog.e(TAG, "mClientModeImplChannel is not initialized");
@@ -2241,7 +2394,14 @@ public class WifiServiceImpl extends BaseWifiService {
         }
         mLog.info("removeNetwork uid=%").c(Binder.getCallingUid()).flush();
         // TODO Add private logging for netId b/33807876
-        if (mClientModeImplChannel != null) {
+
+        // Check if this was intended for non primary interface
+        Message msg = new Message();
+        msg.what = WifiManager.FORGET_NETWORK;
+        msg.arg1 = netId;
+        if (mAsyncChannelExternalClientHandler.handleForOtherInterface(msg)) {
+            return true;
+        } else if (mClientModeImplChannel != null) {
             return mClientModeImpl.syncRemoveNetwork(mClientModeImplChannel, netId);
         } else {
             Slog.e(TAG, "mClientModeImplChannel is not initialized");
@@ -2251,13 +2411,14 @@ public class WifiServiceImpl extends BaseWifiService {
 
     /**
      * See {@link android.net.wifi.WifiManager#enableNetwork(int, boolean)}
+     * @param staId the integer that identifies the station interface.
      * @param netId the integer that identifies the network configuration
      * to the supplicant
      * @param disableOthers if true, disable all other networks.
      * @return {@code true} if the operation succeeded
      */
     @Override
-    public boolean enableNetwork(int netId, boolean disableOthers, String packageName) {
+    public boolean enableNetwork2(int staId, int netId, boolean disableOthers, String packageName) {
         if (enforceChangePermission(packageName) != MODE_ALLOWED) {
             return false;
         }
@@ -2273,13 +2434,36 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(disableOthers).flush();
 
         mWifiMetrics.incrementNumEnableNetworkCalls();
-        if (mClientModeImplChannel != null) {
+
+        // check if this was intended for non primary interface.
+        int wifiId = getIdentityForNetwork(staId, netId);
+        if (wifiId > STA_PRIMARY) {
+            QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(wifiId);
+            AsyncChannel channel = mActiveModeWarden.getQtiClientImplChannel(wifiId);
+            if (qtiClientModeImpl == null || channel == null) {
+                Slog.e(TAG, "qtiClientModeImpl is not initialized. Drop this.");
+                return false;
+            }
+            return qtiClientModeImpl.syncEnableNetwork(channel, netId, disableOthers);
+        } else if (mClientModeImplChannel != null) {
             return mClientModeImpl.syncEnableNetwork(mClientModeImplChannel, netId,
                     disableOthers);
         } else {
             Slog.e(TAG, "mClientModeImplChannel is not initialized");
             return false;
         }
+    }
+
+    /**
+     * See {@link android.net.wifi.WifiManager#enableNetwork(int, boolean)}
+     * @param netId the integer that identifies the network configuration
+     * to the supplicant
+     * @param disableOthers if true, disable all other networks.
+     * @return {@code true} if the operation succeeded
+     */
+    @Override
+    public boolean enableNetwork(int netId, boolean disableOthers, String packageName) {
+        return enableNetwork2(STA_PRIMARY, netId, disableOthers, packageName);
     }
 
     /**
@@ -2315,7 +2499,7 @@ public class WifiServiceImpl extends BaseWifiService {
      * @return the Wi-Fi information, contained in {@link WifiInfo}.
      */
     @Override
-    public WifiInfo getConnectionInfo(String callingPackage) {
+    public WifiInfo getConnectionInfo2(int staId, String callingPackage) {
         enforceAccessPermission();
         int uid = Binder.getCallingUid();
         if (mVerboseLoggingEnabled) {
@@ -2323,7 +2507,16 @@ public class WifiServiceImpl extends BaseWifiService {
         }
         long ident = Binder.clearCallingIdentity();
         try {
-            WifiInfo result = mClientModeImpl.syncRequestConnectionInfo();
+            WifiInfo result;
+
+            if (staId == STA_PRIMARY) {
+                result = mClientModeImpl.syncRequestConnectionInfo();
+            } else {
+                QtiClientModeImpl qtiClientModeImpl = mActiveModeWarden.getQtiClientModeImpl(staId);
+                if (qtiClientModeImpl == null) return null;
+                result = qtiClientModeImpl.syncRequestConnectionInfo();
+            }
+
             boolean hideDefaultMacAddress = true;
             boolean hideBssidSsidAndNetworkId = true;
 
@@ -2356,6 +2549,15 @@ public class WifiServiceImpl extends BaseWifiService {
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
+    }
+
+    /**
+     * See {@link android.net.wifi.WifiManager#getConnectionInfo()}
+     * @hide
+     */
+    @Override
+    public WifiInfo getConnectionInfo(String callingPackage) {
+        return getConnectionInfo2(STA_PRIMARY, callingPackage);
     }
 
     /**
@@ -3893,6 +4095,197 @@ public class WifiServiceImpl extends BaseWifiService {
             return mWifiApConfigStore.getWifiGeneration();
         } else {
             return -1;
+        }
+    }
+
+    private final class WifiNotificationCallbackImpl implements QtiClientModeManager.Listener {
+        @Override
+        public void onStateChanged(int staId, int newState) {
+            if (mVerboseLoggingEnabled)
+                Log.d(TAG, "[wifi" + staId + "] State changed from client mode. state = " + newState);
+
+            mQtiWifiNewState.put(staId, newState);
+
+            // Clear out the events for NetworkInfo/LinkLayer/RSSI on wifi disable
+            if (newState == WifiManager.WIFI_STATE_DISABLED) {
+                mQtiWifiRssi.remove(staId);
+                mQtiWifiLinkProperties.remove(staId);
+                mQtiWifiNetworkInfo.remove(staId);
+            }
+
+            Iterator<IWifiNotificationCallback> iterator =
+                    mRegisteredWifiCallbacks.getCallbacks(staId).iterator();
+            while (iterator.hasNext()) {
+                IWifiNotificationCallback callback = iterator.next();
+                try {
+                    callback.onStateChanged(newState);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "onStateChanged: remote exception -- " + e);
+                    iterator.remove();
+                }
+            }
+        }
+
+        @Override
+        public void onRssiChanged(int staId, int rssi) {
+            if (mVerboseLoggingEnabled)
+                Log.d(TAG, "[wifi" + staId + "] rssi changed from client mode. rssi = " + rssi);
+
+            mQtiWifiRssi.put(staId, rssi);
+
+            Iterator<IWifiNotificationCallback> iterator =
+                    mRegisteredWifiCallbacks.getCallbacks(staId).iterator();
+            while (iterator.hasNext()) {
+                IWifiNotificationCallback callback = iterator.next();
+                try {
+                    callback.onRssiChanged(rssi);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "onRssiChanged: remote exception -- " + e);
+                    iterator.remove();
+                }
+            }
+        }
+
+        @Override
+        public void onLinkConfigurationChanged(int staId, LinkProperties lp) {
+            if (mVerboseLoggingEnabled)
+                Log.d(TAG, "[wifi" + staId + "] link changed from client mode. lp = " + lp);
+
+            mQtiWifiLinkProperties.put(staId, lp);
+
+            Iterator<IWifiNotificationCallback> iterator =
+                    mRegisteredWifiCallbacks.getCallbacks(staId).iterator();
+            while (iterator.hasNext()) {
+                IWifiNotificationCallback callback = iterator.next();
+                try {
+                    callback.onLinkConfigurationChanged(lp);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "onLinkConfigurationChanged: remote exception -- " + e);
+                    iterator.remove();
+                }
+            }
+        }
+
+        @Override
+        public void onNetworkStateChanged(int staId, NetworkInfo netInfo) {
+            if (mVerboseLoggingEnabled)
+                Log.d(TAG, "[wifi" + staId + "] network state changed from client mode. netInfo = " + netInfo);
+
+            mQtiWifiNetworkInfo.put(staId, netInfo);
+
+            Iterator<IWifiNotificationCallback> iterator =
+                    mRegisteredWifiCallbacks.getCallbacks(staId).iterator();
+            while (iterator.hasNext()) {
+                IWifiNotificationCallback callback = iterator.next();
+                try {
+                    callback.onNetworkStateChanged(netInfo);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "onNetworkStateChanged: remote exception -- " + e);
+                    iterator.remove();
+                }
+            }
+        }
+    }
+
+    /**
+     * @hide
+     */
+    @Override
+    public void registerForWifiNotification(int staId, IBinder binder,
+            IWifiNotificationCallback callback,
+            int callbackIdentifier) {
+        if (binder == null || callback == null) {
+            Log.e(TAG, "Binder or callback must not be null");
+            return;
+        }
+
+        if (getNumConcurrentStaSupported() < 2 || staId < STA_SECONDARY) {
+            Log.e(TAG, "registerForWifiNotification not allowed for id:"+staId);
+            return;
+        }
+
+        mLog.info("registerForWifiNotification uid=%").c(Binder.getCallingUid()).flush();
+
+        // post operation to handler thread
+        mWifiInjector.getClientModeImplHandler().post(() -> {
+            // reserve lowest 4 bits for staId
+            int callbackIdentifierExt = (callbackIdentifier << 4) | (staId & 0xF);
+
+            if (!mRegisteredWifiCallbacks.add(binder, callback, callbackIdentifierExt)) {
+                Log.e(TAG, "registerSoftApCallback: Failed to add callback");
+                return;
+            }
+            // Update the client about the current state immediately after registering the callback
+            try {
+                Integer rssi = mQtiWifiRssi.get(staId);
+                int iRssi = rssi == null ? 0 : rssi.intValue();
+
+                Integer newState = mQtiWifiNewState.get(staId);
+                int iNewState = newState == null ? -1 : newState.intValue();
+
+                LinkProperties lp = mQtiWifiLinkProperties.get(staId);
+                NetworkInfo netInfo = mQtiWifiNetworkInfo.get(staId);
+
+                if (iRssi != 0)
+                    callback.onRssiChanged(rssi);
+                if (iNewState != -1)
+                     callback.onStateChanged(newState);
+                if (lp != null)
+                     callback.onLinkConfigurationChanged(lp);
+                if (netInfo != null)
+                    callback.onNetworkStateChanged(netInfo);
+            } catch (RemoteException e) {
+                Log.e(TAG, "registerSoftApCallback: remote exception -- " + e);
+            }
+        });
+    }
+
+    /**
+     * @hide
+     */
+    @Override
+    public void unregisterForWifiNotification(int staId, int callbackIdentifier) {
+        mLog.info("unregisterForWifiNotification uid=%").c(Binder.getCallingUid()).flush();
+
+        if (getNumConcurrentStaSupported() < 2 || staId < STA_SECONDARY) {
+            Log.e(TAG, "unregisterForWifiNotification not allowed for id:"+staId);
+            return;
+        }
+
+        // post operation to handler thread
+        mWifiInjector.getClientModeImplHandler().post(() -> {
+            // reserve lowest 4 bits for staId
+            int callbackIdentifierExt = (callbackIdentifier << 4) | (staId & 0xF);
+
+            mRegisteredWifiCallbacks.remove(callbackIdentifierExt);
+        });
+    }
+
+    /**
+     * @hide
+     */
+    @Override
+    public int getNumConcurrentStaSupported() {
+        // TODO: isAdditionalStaSupported() only valid when wifi enabled.
+        mLog.info("getNumConcurrentStaSupported uid=%").c(Binder.getCallingUid()).flush();
+        if (mContext.getResources().getBoolean(
+            com.android.internal.R.bool.config_wifi_framework_secondary_sta_supported)) {
+            return 2;
+        } else {
+            return 1;
+        }
+    }
+
+    private int getIdentityForNetwork(int staId, int netId) {
+        WifiConfiguration config = mWifiInjector.getWifiConfigManager().getConfiguredNetwork(netId);
+        if (config == null)
+            return -1;
+
+        if(config.staId == STA_SHARED) {
+            // For Shared profile use interface id as staId.
+            return staId;
+        } else {
+            return config.staId;
         }
     }
 }

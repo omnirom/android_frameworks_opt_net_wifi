@@ -70,6 +70,7 @@ import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.BitSet;
 
 /**
  * Native calls for bring up/shut down of the supplicant daemon and for
@@ -109,6 +110,9 @@ public class WifiNative {
         mWifiMetrics = wifiMetrics;
         mHandler = handler;
         mRandom = random;
+        qtiConnectedbands = new BitSet();
+        qtiConnectedbands.set(ConnectedBand.BAND_NONE);
+        mIfaceBands = new HashMap<>();
     }
 
     /**
@@ -351,6 +355,17 @@ public class WifiNative {
                 }
             }
             return removedIface;
+        }
+
+        /** Gets all ifaces of the given type. */
+        private List<Iface> getAllfaceOfType(@Iface.IfaceType int type) {
+            List<Iface> mReqIfaces = new ArrayList<>();
+            for (Iface iface : mIfaces.values()) {
+                if (iface.type == type) {
+                    mReqIfaces.add(iface);
+                }
+            }
+            return mReqIfaces;
         }
     }
 
@@ -1066,10 +1081,11 @@ public class WifiNative {
      * (wificond, wpa_supplicant & vendor HAL).
      *
      * @param interfaceCallback Associated callback for notifying status changes for the iface.
+     * @param lowPriority the iface is of low priority.
      * @return Returns the name of the allocated interface, will be null on failure.
      */
     public String setupInterfaceForClientInConnectivityMode(
-            @NonNull InterfaceCallback interfaceCallback) {
+            @NonNull InterfaceCallback interfaceCallback, boolean lowPriority) {
         synchronized (mLock) {
             if (!startHal()) {
                 Log.e(TAG, "Failed to start Hal");
@@ -1087,7 +1103,7 @@ public class WifiNative {
                 return null;
             }
             iface.externalListener = interfaceCallback;
-            iface.name = createStaIface(iface, /* lowPrioritySta */ false);
+            iface.name = createStaIface(iface, lowPriority);
             if (TextUtils.isEmpty(iface.name)) {
                 Log.e(TAG, "Failed to create STA iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
@@ -1128,6 +1144,20 @@ public class WifiNative {
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             return iface.name;
         }
+    }
+
+    /**
+     * Setup an interface for client mode (for connectivity) operations.
+     *
+     * This method configures an interface in STA mode in all the native daemons
+     * (wificond, wpa_supplicant & vendor HAL).
+     *
+     * @param interfaceCallback Associated callback for notifying status changes for the iface.
+     * @return Returns the name of the allocated interface, will be null on failure.
+     */
+    public String setupInterfaceForClientInConnectivityMode(
+            @NonNull InterfaceCallback interfaceCallback) {
+        return setupInterfaceForClientInConnectivityMode(interfaceCallback, false);
     }
 
     /**
@@ -3729,5 +3759,74 @@ public class WifiNative {
      */
     public String dppConfiguratorGetKey(@NonNull String ifaceName, int id) {
         return mSupplicantStaIfaceHal.dppConfiguratorGetKey(ifaceName, id);
+    }
+
+    public BitSet qtiConnectedbands;
+    private HashMap<Integer, Integer> mIfaceBands;
+
+    public static class ConnectedBand {
+        private ConnectedBand() {}
+
+        /* no band is in connected state */
+        public static final int BAND_NONE = 0;
+
+        /* one of band is connected in 2.4 GHz */
+        public static final int BAND_2G = 1;
+
+        /* one of band is connected in 5 GHz */
+        public static final int BAND_5G = 2;
+    }
+
+    public void qtiUpdateConnectedBand(boolean set, int wifiId, int band) {
+        if (band < 0 || band > ConnectedBand.BAND_5G) {
+            Log.e(TAG, "Unknown band option: " + band);
+            return;
+        }
+
+        if (set)
+            mIfaceBands.put(wifiId, band);
+        else
+            mIfaceBands.remove(wifiId);
+
+        synchronized (mLock) {
+            qtiConnectedbands.clear();
+            for (int b : mIfaceBands.values()) {
+                qtiConnectedbands.set(b);
+            }
+            if (qtiConnectedbands.isEmpty())
+                qtiConnectedbands.set(ConnectedBand.BAND_NONE);
+
+            if (mVerboseLoggingEnabled)
+                Log.d(TAG, "ConnectedBand bitset="+qtiConnectedbands);
+        }
+    }
+
+    /**
+     * Check if a mac address is already in use by one of the interfaces.
+     * This only checks for Station interfaces.
+     *
+     * @param ifaceName String representing iface name to ignore.
+     * @param macAddr MacAddress to check
+     * returns true if given mac is in use, false otherwise.
+     */
+    public boolean isMacAddressAlreadyInUse(String ifaceName, MacAddress macAddr) {
+        if (!WifiConfiguration.isValidMacAddressForRandomization(macAddr)) {
+            Log.e(TAG, "Not a valid address to compare.");
+            return false;
+        }
+        List<Iface> staIfaces = new ArrayList<>();
+        // Consider only STA ifaces.
+        staIfaces.addAll(mIfaceMgr.getAllfaceOfType(Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY));
+        staIfaces.addAll(mIfaceMgr.getAllfaceOfType(Iface.IFACE_TYPE_STA_FOR_SCAN));
+        if (staIfaces.isEmpty())
+            return false;
+        for (Iface iface : staIfaces) {
+            // Skip own mac check.
+            if (ifaceName != null && iface.name.equals(ifaceName))
+                continue;
+            if (macAddr.equals(MacAddress.fromString(getMacAddress(iface.name))))
+                return true;
+        }
+        return false;
     }
 }

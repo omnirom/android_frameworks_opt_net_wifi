@@ -268,9 +268,11 @@ public class WifiMonitor {
             for (Map.Entry<String, SparseArray<Set<Handler>>> entry : mHandlerMap.entrySet()) {
                 if (isMonitoring(entry.getKey())) {
                     Set<Handler> ifaceWhatHandlers = entry.getValue().get(message.what);
-                    for (Handler handler : ifaceWhatHandlers) {
-                        if (handler != null) {
-                            sendMessage(handler, Message.obtain(message));
+                    if (ifaceWhatHandlers != null) {
+                        for (Handler handler : ifaceWhatHandlers) {
+                            if (handler != null) {
+                                sendMessage(handler, Message.obtain(message));
+                            }
                         }
                     }
                 }
