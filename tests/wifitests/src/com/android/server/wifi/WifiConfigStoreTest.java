@@ -64,7 +64,7 @@ import java.util.Random;
  * Unit tests for {@link com.android.server.wifi.WifiConfigStore}.
  */
 @SmallTest
-public class WifiConfigStoreTest {
+public class WifiConfigStoreTest extends WifiBaseTest {
     private static final String TEST_USER_DATA = "UserData";
     private static final String TEST_SHARE_DATA = "ShareData";
     private static final String TEST_CREATOR_NAME = "CreatorName";
@@ -88,6 +88,7 @@ public class WifiConfigStoreTest {
                     + "<string name=\"SSID\">%s</string>\n"
                     + "<null name=\"BSSID\" />\n"
                     + "<null name=\"PreSharedKey\" />\n"
+                    + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
                     + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
                     + "<boolean name=\"HiddenSSID\" value=\"false\" />\n"
@@ -746,13 +747,10 @@ public class WifiConfigStoreTest {
     }
 
     /**
-     * Verify that a XmlPullParserException will be thrown when reading an user store file
-     * containing unknown data.
-     *
-     * @throws Exception
+     * Verify that we gracefully skip unknown section when reading an user store file.
      */
-    @Test(expected = XmlPullParserException.class)
-    public void testReadUserStoreContainedUnknownData() throws Exception {
+    @Test
+    public void testReadUserStoreContainedUnknownSection() throws Exception {
         String storeFileData =
                 "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
                         + "<WifiConfigStoreData>\n"
@@ -765,13 +763,10 @@ public class WifiConfigStoreTest {
     }
 
     /**
-     * Verify that a XmlPullParserException will be thrown when reading the share store file
-     * containing unknown data.
-     *
-     * @throws Exception
+     * Verify that we gracefully skip unknown section when reading a shared store file.
      */
-    @Test(expected = XmlPullParserException.class)
-    public void testReadShareStoreContainedUnknownData() throws Exception {
+    @Test
+    public void testReadShareStoreContainedUnknownSection() throws Exception {
         String storeFileData =
                 "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
                         + "<WifiConfigStoreData>\n"

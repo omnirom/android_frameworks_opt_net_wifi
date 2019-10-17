@@ -26,12 +26,12 @@ import android.content.Context;
 import android.os.Environment;
 import android.os.FileUtils;
 import android.os.Handler;
+import android.util.AtomicFile;
 import android.util.Log;
 import android.util.SparseArray;
 import android.util.Xml;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.os.AtomicFile;
 import com.android.internal.util.FastXmlSerializer;
 import com.android.internal.util.Preconditions;
 import com.android.server.wifi.util.DataIntegrityChecker;
@@ -684,15 +684,16 @@ public class WifiConfigStore {
         String[] headerName = new String[1];
         Set<StoreData> storeDatasInvoked = new HashSet<>();
         while (XmlUtil.gotoNextSectionOrEnd(in, headerName, rootTagDepth)) {
-            // There can only be 1 store data matching the tag (O indicates a fatal
-            // error).
+            // There can only be 1 store data matching the tag, O indicates a previous StoreData
+            // module that no longer exists (ignore this XML section).
             StoreData storeData = storeDataList.stream()
                     .filter(s -> s.getName().equals(headerName[0]))
                     .findAny()
                     .orElse(null);
             if (storeData == null) {
-                throw new XmlPullParserException("Unknown store data: " + headerName[0]
-                        + ". List of store data: " + storeDataList);
+                Log.e(TAG, "Unknown store data: " + headerName[0] + ". List of store data: "
+                        + storeDataList);
+                continue;
             }
             storeData.deserializeData(in, rootTagDepth + 1);
             storeDatasInvoked.add(storeData);

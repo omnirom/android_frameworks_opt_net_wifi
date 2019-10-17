@@ -134,7 +134,7 @@ import java.util.function.Consumer;
  * Unit tests for {@link com.android.server.wifi.ClientModeImpl}.
  */
 @SmallTest
-public class ClientModeImplTest {
+public class ClientModeImplTest extends WifiBaseTest {
     public static final String TAG = "ClientModeImplTest";
 
     private static final int MANAGED_PROFILE_UID = 1100000;
@@ -158,8 +158,6 @@ public class ClientModeImplTest {
             MacAddress.fromString("2a:53:43:c3:56:21");
     private static final MacAddress TEST_DEFAULT_MAC_ADDRESS =
             MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
-    private static final MacAddress TEST_AGGRESSIVE_MAC_ADDRESS =
-            MacAddress.fromString("3a:53:43:c3:56:21");
 
     // NetworkAgent creates threshold ranges with Integers
     private static final int RSSI_THRESHOLD_MAX = -30;
@@ -200,8 +198,14 @@ public class ClientModeImplTest {
         WifiP2pServiceImpl p2pm = (WifiP2pServiceImpl) p2pBinder.queryLocalInterface(
                 IWifiP2pManager.class.getCanonicalName());
 
-        final CountDownLatch untilDone = new CountDownLatch(1);
+        final CountDownLatch untilDone = new CountDownLatch(2);
         mP2pThread = new HandlerThread("WifiP2pMockThread") {
+            @Override
+            protected void onLooperPrepared() {
+                untilDone.countDown();
+            }
+        };
+        mPasspointProvisionerThread = new HandlerThread("PasspointProvisionerMockThread") {
             @Override
             protected void onLooperPrepared() {
                 untilDone.countDown();
@@ -209,10 +213,13 @@ public class ClientModeImplTest {
         };
 
         mP2pThread.start();
+        mPasspointProvisionerThread.start();
         untilDone.await();
 
         Handler handler = new Handler(mP2pThread.getLooper());
         when(p2pm.getP2pStateMachineMessenger()).thenReturn(new Messenger(handler));
+        when(mWifiInjector.getPasspointProvisionerHandlerThread())
+                .thenReturn(mPasspointProvisionerThread);
 
         IBinder batteryStatsBinder = mockService(BatteryStats.class, IBatteryStats.class);
         when(facade.getService(BatteryStats.SERVICE_NAME)).thenReturn(batteryStatsBinder);
@@ -336,6 +343,7 @@ public class ClientModeImplTest {
     ClientModeImpl mCmi;
     HandlerThread mWifiCoreThread;
     HandlerThread mP2pThread;
+    HandlerThread mPasspointProvisionerThread;
     HandlerThread mSyncThread;
     AsyncChannel  mCmiAsyncChannel;
     AsyncChannel  mNetworkAgentAsyncChannel;
@@ -463,6 +471,12 @@ public class ClientModeImplTest {
                         return true;
                     }
                 });
+        doAnswer(new AnswerWithArguments() {
+            public MacAddress answer(
+                    WifiConfiguration config) {
+                return config.getRandomizedMacAddress();
+            }
+        }).when(mWifiConfigManager).getRandomizedMacAndUpdateIfNeeded(any());
         when(mWifiNative.connectToNetwork(any(), any())).thenReturn(true);
 
         when(mWifiNetworkFactory.hasConnectionRequests()).thenReturn(true);
@@ -587,9 +601,13 @@ public class ClientModeImplTest {
         if (mSyncThread != null) stopLooper(mSyncThread.getLooper());
         if (mWifiCoreThread != null) stopLooper(mWifiCoreThread.getLooper());
         if (mP2pThread != null) stopLooper(mP2pThread.getLooper());
+        if (mPasspointProvisionerThread != null) {
+            stopLooper(mPasspointProvisionerThread.getLooper());
+        }
 
         mWifiCoreThread = null;
         mP2pThread = null;
+        mPasspointProvisionerThread = null;
         mSyncThread = null;
         mCmiAsyncChannel = null;
         mNetworkAgentAsyncChannel = null;
@@ -1150,7 +1168,6 @@ public class ClientModeImplTest {
         config.SSID = sWifiSsid.toString();
         config.BSSID = sBSSID;
         config.networkId = FRAMEWORK_NETWORK_ID;
-        when(config.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
         setupAndStartConnectSequence(config);
         validateSuccessfulConnectSequence(config);
@@ -1179,7 +1196,6 @@ public class ClientModeImplTest {
         config.SSID = sWifiSsid.toString();
         config.BSSID = sBSSID;
         config.networkId = PASSPOINT_NETWORK_ID;
-        when(config.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
         setupAndStartConnectSequence(config);
         validateSuccessfulConnectSequence(config);
@@ -1212,7 +1228,6 @@ public class ClientModeImplTest {
         osuConfig.osu = true;
         osuConfig.networkId = FRAMEWORK_NETWORK_ID;
         osuConfig.providerFriendlyName = WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME;
-        when(osuConfig.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
         osuConfig.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
         setupAndStartConnectSequence(osuConfig);
         validateSuccessfulConnectSequence(osuConfig);
@@ -1243,7 +1258,6 @@ public class ClientModeImplTest {
         osuConfig.osu = true;
         osuConfig.networkId = PASSPOINT_NETWORK_ID;
         osuConfig.providerFriendlyName = WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME;
-        when(osuConfig.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
         osuConfig.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
         setupAndStartConnectSequence(osuConfig);
         validateSuccessfulConnectSequence(osuConfig);
@@ -1379,6 +1393,50 @@ public class ClientModeImplTest {
         mLooper.stopAutoDispatch();
 
         assertEquals(WifiManager.CONNECT_NETWORK_SUCCEEDED, reply.what);
+    }
+
+    /**
+     * If caller tries to connect to a new network while still provisioning the current one,
+     * the connection attempt should succeed.
+     */
+    @Test
+    public void connectWhileObtainingIp() throws Exception {
+        initializeAndAddNetworkAndVerifySuccess();
+
+        verify(mWifiNative).removeAllNetworks(WIFI_IFACE_NAME);
+
+        mLooper.startAutoDispatch();
+        mCmi.syncEnableNetwork(mCmiAsyncChannel, 0, true);
+        mLooper.stopAutoDispatch();
+
+        verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt());
+
+        mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.COMPLETED));
+        mLooper.dispatchAll();
+
+        assertEquals("ObtainingIpState", getCurrentState().getName());
+        reset(mWifiNative);
+
+        // Connect to a different network
+        WifiConfiguration config = new WifiConfiguration();
+        config.networkId = TEST_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_NETWORK_ID)).thenReturn(config);
+
+        mCmi.sendMessage(WifiManager.CONNECT_NETWORK, TEST_NETWORK_ID);
+        mLooper.dispatchAll();
+
+        verify(mWifiNative).disconnect(any());
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.DISCONNECTED));
+        mLooper.dispatchAll();
+
+        verify(mWifiConnectivityManager).prepareForForcedConnection(eq(config.networkId));
+
     }
 
     /**
@@ -2114,7 +2172,7 @@ public class ClientModeImplTest {
 
         // This simulates the behavior of roaming to network with |sBSSID1|, |sFreq1|.
         // Send a CMD_ASSOCIATED_BSSID, verify WifiInfo is updated.
-        mCmi.sendMessage(ClientModeImpl.CMD_ASSOCIATED_BSSID, 0, 0, sBSSID1);
+        mCmi.sendMessage(WifiMonitor.ASSOCIATED_BSSID_EVENT, 0, 0, sBSSID1);
         mLooper.dispatchAll();
 
         WifiInfo wifiInfo = mCmi.getWifiInfo();
@@ -2573,56 +2631,6 @@ public class ClientModeImplTest {
     }
 
     /**
-     * Verifies that
-     * 1. aggressive MAC is generated when ClientModeImpl is created.
-     * 2. aggressive MAC is generated again during connection when the appropriate amount of time
-     * have passed.
-     * @throws Exception
-     */
-    @Test
-    public void testAggressiveMacUpdatedDuringConnection() throws Exception {
-        ExtendedMockito.verify(() -> MacAddress.createRandomUnicastAddress());
-        when(mClock.getElapsedSinceBootMillis()).thenReturn(
-                ClientModeImpl.AGGRESSIVE_MAC_REFRESH_MS + 1);
-        connect();
-        ExtendedMockito.verify(() -> MacAddress.createRandomUnicastAddress(), times(2));
-    }
-
-    /**
-     * Verifies that aggressive MAC is not updated due to time constraint.
-     * @throws Exception
-     */
-    @Test
-    public void testAggressiveMacNotUpdatedDueToTimeConstraint() throws Exception {
-        ExtendedMockito.verify(() -> MacAddress.createRandomUnicastAddress());
-        when(mClock.getElapsedSinceBootMillis()).thenReturn(
-                ClientModeImpl.AGGRESSIVE_MAC_REFRESH_MS);
-        connect();
-        ExtendedMockito.verify(() -> MacAddress.createRandomUnicastAddress());
-    }
-
-    /**
-     * Verifies that
-     * 1. connected MAC randomization is on and
-     * 2. macRandomizationSetting of the WifiConfiguration is RANDOMIZATION_PERSISTENT and
-     * 3. the WifiConfiguration should use "aggressive mode"
-     * 4. ClientmodeImpl programs the aggressive MAC when connecting the network.
-     */
-    @Test
-    public void testMacRandomizationAggressiveMacIsUsed() throws Exception {
-        when(MacAddress.createRandomUnicastAddress()).thenReturn(TEST_AGGRESSIVE_MAC_ADDRESS);
-        when(mWifiConfigManager.shouldUseAggressiveMode(any())).thenReturn(true);
-        initializeAndAddNetworkAndVerifySuccess();
-        assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
-        assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
-
-        when(mClock.getElapsedSinceBootMillis()).thenReturn(
-                ClientModeImpl.AGGRESSIVE_MAC_REFRESH_MS + 1);
-        connect();
-        verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_AGGRESSIVE_MAC_ADDRESS);
-    }
-
-    /**
      * Verifies that when
      * 1. Global feature support flag is set to false
      * 2. connected MAC randomization is on and
@@ -2724,7 +2732,6 @@ public class ClientModeImplTest {
         verify(mWifiMetrics)
                 .logStaEvent(eq(StaEvent.TYPE_MAC_CHANGE), any(WifiConfiguration.class));
         assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
-        verify(config, never()).getOrCreateRandomizedMacAddress();
     }
 
     /**
@@ -2755,7 +2762,6 @@ public class ClientModeImplTest {
         verify(mWifiMetrics, never())
                 .logStaEvent(eq(StaEvent.TYPE_MAC_CHANGE), any(WifiConfiguration.class));
         assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getWifiInfo().getMacAddress());
-        verify(config, never()).getOrCreateRandomizedMacAddress();
     }
 
     /**
@@ -2801,6 +2807,21 @@ public class ClientModeImplTest {
         mLooper.dispatchAll();
 
         verify(mWifiNative, never()).setMacAddress(eq(WIFI_IFACE_NAME), any(MacAddress.class));
+    }
+
+    /**
+     * Verify that we don't crash when WifiNative returns null as the current MAC address.
+     * @throws Exception
+     */
+    @Test
+    public void testMacRandomizationWifiNativeReturningNull() throws Exception {
+        when(mWifiNative.getMacAddress(anyString())).thenReturn(null);
+        initializeAndAddNetworkAndVerifySuccess();
+        assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
+        assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
+
+        connect();
+        verify(mWifiNative).setMacAddress(WIFI_IFACE_NAME, TEST_LOCAL_MAC_ADDRESS);
     }
 
     /**
@@ -3758,7 +3779,7 @@ public class ClientModeImplTest {
                 0, FRAMEWORK_NETWORK_ID, DEFAULT_TEST_SSID);
         mLooper.dispatchAll();
 
-        verify(mWifiNative).simIdentityResponse(WIFI_IFACE_NAME, FRAMEWORK_NETWORK_ID,
+        verify(mWifiNative).simIdentityResponse(WIFI_IFACE_NAME,
                 "13214561234567890@wlan.mnc456.mcc321.3gppnetwork.org", "");
     }
 

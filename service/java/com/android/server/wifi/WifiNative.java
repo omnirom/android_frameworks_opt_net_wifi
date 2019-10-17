@@ -37,8 +37,8 @@ import android.net.wifi.WifiDppConfig;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.text.TextUtils;
+import android.util.ArraySet;
 import android.util.Log;
-import android.util.SparseArray;
 
 import com.android.internal.annotations.Immutable;
 import com.android.internal.util.HexDump;
@@ -179,7 +179,7 @@ public class WifiNative {
         /** Identifier allocated for the interface */
         public final int id;
         /** Type of the iface: STA (for Connectivity or Scan) or AP */
-        public final @IfaceType int type;
+        public @IfaceType int type;
         /** Name of the interface */
         public String name;
         /** Is the interface up? This is used to mask up/down notifications to external clients. */
@@ -333,6 +333,17 @@ public class WifiNative {
                 return null;
             }
             return iface.name;
+        }
+
+        private @NonNull Set<String> findAllStaIfaceNames() {
+            Set<String> ifaceNames = new ArraySet<>();
+            for (Iface iface : mIfaces.values()) {
+                if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY
+                        || iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
+                    ifaceNames.add(iface.name);
+                }
+            }
+            return ifaceNames;
         }
 
         /** Removes the existing iface that does not match the provided id. */
@@ -908,6 +919,7 @@ public class WifiNative {
             }
             mWifiVendorHal.registerRadioModeChangeHandler(
                     new VendorHalRadioModeChangeHandlerInternal());
+            mHostapdHal.terminateIfRunning();
             return true;
         }
     }
@@ -1152,7 +1164,7 @@ public class WifiNative {
                 return null;
             }
             iface.externalListener = interfaceCallback;
-            iface.name = createStaIface(iface, /* lowPrioritySta */ true);
+            iface.name = createStaIface(iface, /* lowPrioritySta */ false);
             if (TextUtils.isEmpty(iface.name)) {
                 Log.e(TAG, "Failed to create iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
@@ -1288,6 +1300,77 @@ public class WifiNative {
     }
 
     /**
+     * Switches an existing Client mode interface from connectivity
+     * {@link Iface#IFACE_TYPE_STA_FOR_CONNECTIVITY} to scan mode
+     * {@link Iface#IFACE_TYPE_STA_FOR_SCAN}.
+     *
+     * @param ifaceName Name of the interface.
+     * @return true if the operation succeeded, false if there is an error or the iface is already
+     * in scan mode.
+     */
+    public boolean switchClientInterfaceToScanMode(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final Iface iface = mIfaceMgr.getIface(ifaceName);
+            if (iface == null) {
+                Log.e(TAG, "Trying to switch to scan mode on an invalid iface=" + ifaceName);
+                return false;
+            }
+            if (iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
+                Log.e(TAG, "Already in scan mode on iface=" + ifaceName);
+                return true;
+            }
+            if (!mSupplicantStaIfaceHal.teardownIface(iface.name)) {
+                Log.e(TAG, "Failed to teardown iface in supplicant on " + iface);
+                teardownInterface(iface.name);
+                return false;
+            }
+            iface.type = Iface.IFACE_TYPE_STA_FOR_SCAN;
+            stopSupplicantIfNecessary();
+            Log.i(TAG, "Successfully switched to scan mode on iface=" + iface);
+            return true;
+        }
+    }
+
+    /**
+     * Switches an existing Client mode interface from scan mode
+     * {@link Iface#IFACE_TYPE_STA_FOR_SCAN} to connectivity mode
+     * {@link Iface#IFACE_TYPE_STA_FOR_CONNECTIVITY}.
+     *
+     * @param ifaceName Name of the interface.
+     * @return true if the operation succeeded, false if there is an error or the iface is already
+     * in scan mode.
+     */
+    public boolean switchClientInterfaceToConnectivityMode(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final Iface iface = mIfaceMgr.getIface(ifaceName);
+            if (iface == null) {
+                Log.e(TAG, "Trying to switch to connectivity mode on an invalid iface="
+                        + ifaceName);
+                return false;
+            }
+            if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY) {
+                Log.e(TAG, "Already in connectivity mode on iface=" + ifaceName);
+                return true;
+            }
+            if (!startSupplicant()) {
+                Log.e(TAG, "Failed to start supplicant");
+                teardownInterface(iface.name);
+                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToSupplicant();
+                return false;
+            }
+            if (!mSupplicantStaIfaceHal.setupIface(iface.name)) {
+                Log.e(TAG, "Failed to setup iface in supplicant on " + iface);
+                teardownInterface(iface.name);
+                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToSupplicant();
+                return false;
+            }
+            iface.type = Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY;
+            Log.i(TAG, "Successfully switched to connectivity mode on iface=" + iface);
+            return true;
+        }
+    }
+
+    /**
      *
      * Check if the interface is up or down.
      *
@@ -1389,6 +1472,17 @@ public class WifiNative {
     public String getClientInterfaceName() {
         synchronized (mLock) {
             return mIfaceMgr.findAnyStaIfaceName();
+        }
+    }
+
+    /**
+     * Get names of all the client interfaces.
+     *
+     * @return List of interface name of all active client interfaces.
+     */
+    public Set<String> getClientInterfaceNames() {
+        synchronized (mLock) {
+            return mIfaceMgr.findAllStaIfaceNames();
         }
     }
 
@@ -2192,7 +2286,7 @@ public class WifiNative {
      * @return true if succeeds, false otherwise.
      */
     public boolean simAuthResponse(
-            @NonNull String ifaceName, int id, String type, String response) {
+            @NonNull String ifaceName, String type, String response) {
         if (SIM_AUTH_RESP_TYPE_GSM_AUTH.equals(type)) {
             return mSupplicantStaIfaceHal.sendCurrentNetworkEapSimGsmAuthResponse(
                     ifaceName, response);
@@ -2213,7 +2307,7 @@ public class WifiNative {
      * @param ifaceName Name of the interface.
      * @return true if succeeds, false otherwise.
      */
-    public boolean simAuthFailedResponse(@NonNull String ifaceName, int id) {
+    public boolean simAuthFailedResponse(@NonNull String ifaceName) {
         return mSupplicantStaIfaceHal.sendCurrentNetworkEapSimGsmAuthFailure(ifaceName);
     }
 
@@ -2223,7 +2317,7 @@ public class WifiNative {
      * @param ifaceName Name of the interface.
      * @return true if succeeds, false otherwise.
      */
-    public boolean umtsAuthFailedResponse(@NonNull String ifaceName, int id) {
+    public boolean umtsAuthFailedResponse(@NonNull String ifaceName) {
         return mSupplicantStaIfaceHal.sendCurrentNetworkEapSimUmtsAuthFailure(ifaceName);
     }
 
@@ -2235,8 +2329,8 @@ public class WifiNative {
      * @param encryptedResponse String to send.
      * @return true if succeeds, false otherwise.
      */
-    public boolean simIdentityResponse(@NonNull String ifaceName, int id,
-                                       String unencryptedResponse, String encryptedResponse) {
+    public boolean simIdentityResponse(@NonNull String ifaceName, String unencryptedResponse,
+                                       String encryptedResponse) {
         return mSupplicantStaIfaceHal.sendCurrentNetworkEapIdentityResponse(ifaceName,
                 unencryptedResponse, encryptedResponse);
     }
@@ -2389,21 +2483,6 @@ public class WifiNative {
      */
     public boolean enableStaAutoReconnect(@NonNull String ifaceName, boolean enable) {
         return mSupplicantStaIfaceHal.enableAutoReconnect(ifaceName, enable);
-    }
-
-    /**
-     * Migrate all the configured networks from wpa_supplicant.
-     *
-     * @param ifaceName Name of the interface.
-     * @param configs       Map of configuration key to configuration objects corresponding to all
-     *                      the networks.
-     * @param networkExtras Map of extra configuration parameters stored in wpa_supplicant.conf
-     * @return Max priority of all the configs.
-     */
-    public boolean migrateNetworksFromSupplicant(
-            @NonNull String ifaceName, Map<String, WifiConfiguration> configs,
-            SparseArray<Map<String, String>> networkExtras) {
-        return mSupplicantStaIfaceHal.loadNetworks(ifaceName, configs, networkExtras);
     }
 
     /**

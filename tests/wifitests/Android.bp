@@ -21,6 +21,15 @@ android_test {
 
     srcs: ["**/*.java"],
 
+    // For coverage
+    jacoco: {
+        include_filter: [
+            "com.android.server.wifi.**",
+        ],
+        exclude_filter: [
+        ],
+    },
+
     dxflags: ["--multi-dex"],
 
     // wifi-service and services must be included here so that the latest changes
@@ -34,7 +43,7 @@ android_test {
         "mockito-target-extended-minus-junit4",
         "frameworks-base-testutils",
         "services",
-        "WifiStackBase",
+        "wifi-service",
         "truth-prebuilt",
     ],
 
@@ -48,42 +57,15 @@ android_test {
     // These must be explicitly included because they are not normally accessible
     // from apps.
     jni_libs: [
-        "libcrypto",
         "libwifi-jni",
-        "libEGL",
-        "libGLESv2",
-        "libaudioutils",
-        "libbacktrace",
         "libbase",
-        "libbinder",
-        "libbinderthreadstate",
         "libc++",
         "ld-android",
         "libdl_android",
-        "libcamera_client",
-        "libcamera_metadata",
         "libcgrouprc",
         "libcutils",
-        "libexpat",
-        "libgui",
-        "libhardware",
-        "libandroidicu",
-        "libjsoncpp",
-        "liblzma",
-        "libmedia",
         "libnativehelper",
-        "libnbaio",
-        "libnetutils",
-        "libnl",
-        "libpowermanager",
         "libprocessgroup",
-        "libsonivox",
-        "libstagefright_foundation",
-        "libstdc++",
-        "libsync",
-        "libwifi-system",
-        "libui",
-        "libunwindstack",
         "libutils",
         "libvndksupport",
         "libdexmakerjvmtiagent",

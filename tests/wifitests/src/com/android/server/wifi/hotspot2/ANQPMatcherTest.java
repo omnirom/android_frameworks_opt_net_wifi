@@ -25,6 +25,7 @@ import android.net.wifi.EAPConstants;
 import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.IMSIParameter;
+import com.android.server.wifi.WifiBaseTest;
 import com.android.server.wifi.hotspot2.anqp.CellularNetwork;
 import com.android.server.wifi.hotspot2.anqp.DomainNameElement;
 import com.android.server.wifi.hotspot2.anqp.NAIRealmData;
@@ -50,7 +51,7 @@ import java.util.Set;
  * Unit tests for {@link com.android.server.wifi.hotspot2.ANQPMatcher}.
  */
 @SmallTest
-public class ANQPMatcherTest {
+public class ANQPMatcherTest extends WifiBaseTest {
     private static final String TEST_MCC_MNC = "123456";
     private static final String TEST_3GPP_FQDN = String.format("wlan.mnc%s.mcc%s.3gppnetwork.org",
             TEST_MCC_MNC.substring(3), TEST_MCC_MNC.substring(0, 3));
@@ -457,5 +458,20 @@ public class ANQPMatcherTest {
 
         assertEquals(-1,
                 ANQPMatcher.getCarrierEapMethodFromMatchingNAIRealm(TEST_3GPP_FQDN, element));
+    }
+
+    /**
+     * Verify that domain name match will fail when domain contains invalid values.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void verifyInvalidDomain() throws Exception {
+        IMSIParameter imsiParam = new IMSIParameter("1234", true);
+        List<String> simImsiList = Arrays.asList(new String[] {"123457890", "123498723"});
+        // 3GPP network domain with MCC=123 and MNC=456.
+        String[] domains = new String[] {"wlan.mnc457.mccI23.3gppnetwork.org"};
+        DomainNameElement element = new DomainNameElement(Arrays.asList(domains));
+        assertFalse(ANQPMatcher.matchDomainName(element, null, imsiParam, simImsiList));
     }
 }

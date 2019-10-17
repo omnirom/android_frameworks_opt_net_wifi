@@ -52,7 +52,7 @@ import java.util.List;
  * Unit tests for {@link com.android.server.wifi.NetworkListStoreData}.
  */
 @SmallTest
-public class NetworkListStoreDataTest {
+public class NetworkListStoreDataTest extends WifiBaseTest {
 
     private static final String TEST_SSID = "WifiConfigStoreDataSSID_";
     private static final String TEST_CONNECT_CHOICE = "XmlUtilConnectChoice";
@@ -68,6 +68,7 @@ public class NetworkListStoreDataTest {
                     + "<string name=\"SSID\">%s</string>\n"
                     + "<null name=\"BSSID\" />\n"
                     + "<null name=\"PreSharedKey\" />\n"
+                    + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
                     + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
                     + "<boolean name=\"HiddenSSID\" value=\"false\" />\n"
@@ -123,6 +124,7 @@ public class NetworkListStoreDataTest {
                     + "<string name=\"SSID\">%s</string>\n"
                     + "<null name=\"BSSID\" />\n"
                     + "<null name=\"PreSharedKey\" />\n"
+                    + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
                     + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
                     + "<boolean name=\"HiddenSSID\" value=\"false\" />\n"
@@ -186,6 +188,7 @@ public class NetworkListStoreDataTest {
                     + "<int name=\"Phase2Method\" value=\"0\" />\n"
                     + "<string name=\"PLMN\"></string>\n"
                     + "<string name=\"Realm\"></string>\n"
+                    + "<int name=\"Ocsp\" value=\"0\" />\n"
                     + "</WifiEnterpriseConfiguration>\n"
                     + "</Network>\n";
 

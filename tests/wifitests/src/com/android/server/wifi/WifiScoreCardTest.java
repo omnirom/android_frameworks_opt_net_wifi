@@ -47,7 +47,7 @@ import java.util.Arrays;
  * Unit tests for {@link com.android.server.wifi.WifiScoreCard}.
  */
 @SmallTest
-public class WifiScoreCardTest {
+public class WifiScoreCardTest extends WifiBaseTest {
 
     static final WifiSsid TEST_SSID_1 = WifiSsid.createFromAsciiEncoded("Joe's Place");
     static final WifiSsid TEST_SSID_2 = WifiSsid.createFromAsciiEncoded("Poe's Raven");
@@ -492,6 +492,40 @@ public class WifiScoreCardTest {
         mWifiScoreCard.clear();
         byte[] leftovers = mWifiScoreCard.getNetworkListByteArray(false);
         assertEquals(0, leftovers.length);
+    }
+
+    /**
+     * Test that older items are evicted from memory.
+     */
+    @Test
+    public void testOlderItemsShouldBeEvicted() throws Exception {
+        mWifiInfo.setRssi(-55);
+        mWifiInfo.setFrequency(5805);
+        mWifiInfo.setLinkSpeed(384);
+        mWifiScoreCard.installMemoryStore(mMemoryStore);
+        for (int i = 0; i < 256; i++) {
+            MacAddress bssid = MacAddress.fromBytes(new byte[]{2, 2, 2, 2, 2, (byte) i});
+            mWifiInfo.setBSSID(bssid.toString());
+            mWifiScoreCard.noteSignalPoll(mWifiInfo);
+        }
+
+        verify(mMemoryStore, times(256)).read(any(), any());
+        verify(mMemoryStore, atLeastOnce()).write(any(), any()); // Assumes target size < 256
+        reset(mMemoryStore);
+
+        for (int i = 256 - 3; i < 256; i++) {
+            MacAddress bssid = MacAddress.fromBytes(new byte[]{2, 2, 2, 2, 2, (byte) i});
+            mWifiInfo.setBSSID(bssid.toString());
+            mWifiScoreCard.noteSignalPoll(mWifiInfo);
+        }
+        verify(mMemoryStore, never()).read(any(), any()); // Assumes target size >= 3
+
+        for (int i = 0; i < 3; i++) {
+            MacAddress bssid = MacAddress.fromBytes(new byte[]{2, 2, 2, 2, 2, (byte) i});
+            mWifiInfo.setBSSID(bssid.toString());
+            mWifiScoreCard.noteSignalPoll(mWifiInfo);
+        }
+        verify(mMemoryStore, times(3)).read(any(), any()); // Assumes target size < 253
     }
 
 }

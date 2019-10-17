@@ -47,6 +47,7 @@ import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.BinderUtil;
 import com.android.server.wifi.FakeWifiLog;
+import com.android.server.wifi.WifiBaseTest;
 import com.android.server.wifi.WifiInjector;
 
 import org.junit.Before;
@@ -65,7 +66,7 @@ import java.util.HashMap;
 /** Unit tests for {@link WifiPermissionsUtil}. */
 @RunWith(JUnit4.class)
 @SmallTest
-public class WifiPermissionsUtilTest {
+public class WifiPermissionsUtilTest extends WifiBaseTest {
     public static final String TAG = "WifiPermissionsUtilTest";
 
     // Mock objects for testing
@@ -1148,7 +1149,7 @@ public class WifiPermissionsUtilTest {
     }
 
     private void setupMocks() throws Exception {
-        when(mMockPkgMgr.getApplicationInfo(TEST_PACKAGE_NAME, 0))
+        when(mMockPkgMgr.getApplicationInfoAsUser(eq(TEST_PACKAGE_NAME), eq(0), anyInt()))
             .thenReturn(mMockApplInfo);
         when(mMockContext.getPackageManager()).thenReturn(mMockPkgMgr);
         when(mMockAppOps.noteOp(AppOpsManager.OP_WIFI_SCAN, mUid, TEST_PACKAGE_NAME))

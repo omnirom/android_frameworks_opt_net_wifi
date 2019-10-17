@@ -85,8 +85,8 @@ public class SoftApManager implements ActiveModeManager {
 
     private final WifiMetrics mWifiMetrics;
 
-    private final int mMode;
-    private WifiConfiguration mApConfig;
+    @NonNull
+    private SoftApModeConfiguration mApConfig;
 
     private int mReportedFrequency = -1;
     private int mReportedBandwidth = -1;
@@ -158,12 +158,10 @@ public class SoftApManager implements ActiveModeManager {
         mCountryCode = countryCode;
         mCallback = callback;
         mWifiApConfigStore = wifiApConfigStore;
-        mMode = apConfig.getTargetMode();
-        WifiConfiguration config = apConfig.getWifiConfiguration();
-        if (config == null) {
-            mApConfig = mWifiApConfigStore.getApConfiguration();
-        } else {
-            mApConfig = config;
+        mApConfig = apConfig;
+        if (mApConfig.getWifiConfiguration() == null) {
+            WifiConfiguration wifiConfig = mWifiApConfigStore.getApConfiguration();
+            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), wifiConfig);
         }
         mWifiMetrics = wifiMetrics;
         mSarManager = sarManager;
@@ -173,10 +171,10 @@ public class SoftApManager implements ActiveModeManager {
     }
 
     /**
-     * Start soft AP with the supplied config.
+     * Start soft AP, as configured in the constructor.
      */
     public void start() {
-        mStateMachine.sendMessage(SoftApStateMachine.CMD_START, mApConfig);
+        mStateMachine.sendMessage(SoftApStateMachine.CMD_START);
     }
 
     /**
@@ -201,7 +199,7 @@ public class SoftApManager implements ActiveModeManager {
     }
 
     public int getIpMode() {
-        return mMode;
+        return mApConfig.getTargetMode();
     }
 
     /**
@@ -213,15 +211,12 @@ public class SoftApManager implements ActiveModeManager {
         pw.println("current StateMachine mode: " + getCurrentStateName());
         pw.println("mApInterfaceName: " + mApInterfaceName);
         pw.println("mIfaceIsUp: " + mIfaceIsUp);
-        pw.println("mMode: " + mMode);
         pw.println("mSoftApCountryCode: " + mCountryCode);
-        if (mApConfig != null) {
-            pw.println("mApConfig.SSID: " + mApConfig.SSID);
-            pw.println("mApConfig.apBand: " + mApConfig.apBand);
-            pw.println("mApConfig.hiddenSSID: " + mApConfig.hiddenSSID);
-        } else {
-            pw.println("mApConfig: null");
-        }
+        pw.println("mApConfig.targetMode: " + mApConfig.getTargetMode());
+        WifiConfiguration wifiConfig = mApConfig.getWifiConfiguration();
+        pw.println("mApConfig.wifiConfiguration.SSID: " + wifiConfig.SSID);
+        pw.println("mApConfig.wifiConfiguration.apBand: " + wifiConfig.apBand);
+        pw.println("mApConfig.wifiConfiguration.hiddenSSID: " + wifiConfig.hiddenSSID);
         pw.println("mNumAssociatedStations: " + mNumAssociatedStations);
         pw.println("mTimeoutEnabled: " + mTimeoutEnabled);
         pw.println("mReportedFrequency: " + mReportedFrequency);
@@ -262,16 +257,42 @@ public class SoftApManager implements ActiveModeManager {
         }
 
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mDataInterfaceName);
-        intent.putExtra(WifiManager.EXTRA_WIFI_AP_MODE, mMode);
+        intent.putExtra(WifiManager.EXTRA_WIFI_AP_MODE, mApConfig.getTargetMode());
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
     }
 
+    private int setCountryCode() {
+        int band = mApConfig.getWifiConfiguration().apBand;
+        if (TextUtils.isEmpty(mCountryCode)) {
+            if (band == WifiConfiguration.AP_BAND_5GHZ) {
+                // Country code is mandatory for 5GHz band.
+                Log.e(TAG, "Invalid country code, required for setting up soft ap in 5GHz");
+                return ERROR_GENERIC;
+            }
+            // Absence of country code is not fatal for 2Ghz & Any band options.
+            return SUCCESS;
+        }
+
+        if (!mWifiNative.setCountryCodeHal(
+                mApInterfaceName, mCountryCode.toUpperCase(Locale.ROOT))) {
+            if (band == WifiConfiguration.AP_BAND_5GHZ) {
+                // Return an error if failed to set country code when AP is configured for
+                // 5GHz band.
+                Log.e(TAG, "Failed to set country code, required for setting up soft ap in 5GHz");
+                return ERROR_GENERIC;
+            }
+            // Failure to set country code is not fatal for 2Ghz & Any band options.
+        }
+        return SUCCESS;
+    }
+
     /**
-     * Start a soft AP instance with the given configuration.
-     * @param config AP configuration
+     * Start a soft AP instance as configured.
+     *
      * @return integer result code
      */
-    private int startSoftAp(WifiConfiguration config) {
+    private int startSoftAp() {
+        WifiConfiguration config = mApConfig.getWifiConfiguration();
         if (config == null || config.SSID == null) {
             Log.e(TAG, "Unable to start soft AP without valid configuration");
             return ERROR_GENERIC;
@@ -280,25 +301,9 @@ public class SoftApManager implements ActiveModeManager {
         Log.d(TAG, "band " + config.apBand + " iface "
                 + mApInterfaceName + " country " + mCountryCode);
 
-        // Setup country code
-        if (TextUtils.isEmpty(mCountryCode)) {
-            if (config.apBand == WifiConfiguration.AP_BAND_5GHZ) {
-                // Country code is mandatory for 5GHz band.
-                Log.e(TAG, "Invalid country code, required for setting up "
-                        + "soft ap in 5GHz");
-                return ERROR_GENERIC;
-            }
-            // Absence of country code is not fatal for 2Ghz & Any band options.
-        } else if (!mWifiNative.setCountryCodeHal(
-                mApInterfaceName, mCountryCode.toUpperCase(Locale.ROOT))) {
-            if (config.apBand == WifiConfiguration.AP_BAND_5GHZ) {
-                // Return an error if failed to set country code when AP is configured for
-                // 5GHz band.
-                Log.e(TAG, "Failed to set country code, required for setting up "
-                        + "soft ap in 5GHz");
-                return ERROR_GENERIC;
-            }
-            // Failure to set country code is not fatal for 2Ghz & Any band options.
+        int result = setCountryCode();
+        if (result != SUCCESS) {
+            return result;
         }
 
         if (config.apBand == WifiConfiguration.AP_BAND_5GHZ
@@ -313,7 +318,7 @@ public class SoftApManager implements ActiveModeManager {
         // Make a copy of configuration for updating AP band and channel.
         WifiConfiguration localConfig = new WifiConfiguration(config);
 
-        int result = ApConfigUtil.updateApChannelConfig(
+        result = ApConfigUtil.updateApChannelConfig(
                 mWifiNative, mCountryCode,
                 mWifiApConfigStore.getAllowed2GChannel(), localConfig);
 
@@ -470,11 +475,13 @@ public class SoftApManager implements ActiveModeManager {
 
             mApInterfaceName = mdualApInterfaces[0];
             localConfig.apBand =  WifiConfiguration.AP_BAND_2GHZ;
-            int result = startSoftAp(localConfig);
+            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig);
+            int result = startSoftAp();
             if (result == SUCCESS) {
                 localConfig.apBand =  WifiConfiguration.AP_BAND_5GHZ;
                 mApInterfaceName = mdualApInterfaces[1];
-                result = startSoftAp(localConfig);
+                mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig);
+                result = startSoftAp();
             }
 
             mApInterfaceName = bridgeIfacename;
@@ -498,13 +505,15 @@ public class SoftApManager implements ActiveModeManager {
             oweConfig.SSID =  "OWE_" + oweConfig.SSID;
             oweConfig.SSID =  oweConfig.SSID.length() > 32 ? oweConfig.SSID.substring(0, 32) : oweConfig.SSID;
             oweConfig.hiddenSSID =  true;
-            int result = startSoftAp(oweConfig);
+            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), oweConfig);
+            int result = startSoftAp();
             if (result == SUCCESS) {
                 mApInterfaceName = mdualApInterfaces[1];
                 openConfig.oweTransIfaceName =  mdualApInterfaces[0];
                 openConfig.allowedKeyManagement.clear();
                 openConfig.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
-                result = startSoftAp(openConfig);
+                mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), openConfig);
+                result = startSoftAp();
             }
 
             mApInterfaceName = bridgeIfacename;
@@ -569,7 +578,7 @@ public class SoftApManager implements ActiveModeManager {
                         }
                         updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
                                 WifiManager.WIFI_AP_STATE_DISABLED, 0);
-                        int result = startSoftAp((WifiConfiguration) message.obj);
+                        int result = startSoftAp();
                         if (result != SUCCESS) {
                             int failureReason = WifiManager.SAP_START_FAILURE_GENERAL;
                             if (result == ERROR_NO_CHANNEL) {
@@ -671,8 +680,14 @@ public class SoftApManager implements ActiveModeManager {
                 } else {
                     Log.e(TAG, "SoftApCallback is null. Dropping NumClientsChanged event.");
                 }
-                mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(mNumAssociatedStations,
-                        mMode);
+                mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(
+                        mNumAssociatedStations, mApConfig.getTargetMode());
+
+                if (mNumAssociatedStations == 0) {
+                    scheduleTimeoutMessage();
+                } else {
+                    cancelTimeoutMessage();
+                }
             }
 
             /**
@@ -726,7 +741,7 @@ public class SoftApManager implements ActiveModeManager {
                     // the interface was up, but goes down
                     sendMessage(CMD_INTERFACE_DOWN);
                 }
-                mWifiMetrics.addSoftApUpChangedEvent(isUp, mMode);
+                mWifiMetrics.addSoftApUpChangedEvent(isUp, mApConfig.getTargetMode());
             }
 
             @Override
@@ -770,7 +785,7 @@ public class SoftApManager implements ActiveModeManager {
                 cancelTimeoutMessage();
                 // Need this here since we are exiting |Started| state and won't handle any
                 // future CMD_INTERFACE_STATUS_CHANGED events after this point
-                mWifiMetrics.addSoftApUpChangedEvent(false, mMode);
+                mWifiMetrics.addSoftApUpChangedEvent(false, mApConfig.getTargetMode());
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLED,
                         WifiManager.WIFI_AP_STATE_DISABLING, 0);
 
@@ -783,14 +798,12 @@ public class SoftApManager implements ActiveModeManager {
             }
 
             private void updateUserBandPreferenceViolationMetricsIfNeeded() {
-                boolean bandPreferenceViolated = false;
-                if (mApConfig.apBand == WifiConfiguration.AP_BAND_2GHZ
-                        && ScanResult.is5GHz(mReportedFrequency)) {
-                    bandPreferenceViolated = true;
-                } else if (mApConfig.apBand == WifiConfiguration.AP_BAND_5GHZ
-                        && ScanResult.is24GHz(mReportedFrequency)) {
-                    bandPreferenceViolated = true;
-                }
+                int band = mApConfig.getWifiConfiguration().apBand;
+                boolean bandPreferenceViolated =
+                        (band == WifiConfiguration.AP_BAND_2GHZ
+                            && ScanResult.is5GHz(mReportedFrequency))
+                        || (band == WifiConfiguration.AP_BAND_5GHZ
+                            && ScanResult.is24GHz(mReportedFrequency));
                 if (bandPreferenceViolated) {
                     Log.e(TAG, "Channel does not satisfy user band preference: "
                             + mReportedFrequency);
@@ -815,7 +828,7 @@ public class SoftApManager implements ActiveModeManager {
                         Log.d(TAG, "Channel switched. Frequency: " + mReportedFrequency
                                 + " Bandwidth: " + mReportedBandwidth);
                         mWifiMetrics.addSoftApChannelSwitchedEvent(mReportedFrequency,
-                                mReportedBandwidth, mMode);
+                                mReportedBandwidth, mApConfig.getTargetMode());
                         updateUserBandPreferenceViolationMetricsIfNeeded();
                         break;
                     case CMD_CONNECTED_STATIONS:

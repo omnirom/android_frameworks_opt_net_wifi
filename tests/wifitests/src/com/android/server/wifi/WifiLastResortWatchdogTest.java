@@ -27,14 +27,12 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiSsid;
 import android.os.Handler;
 import android.os.test.TestLooper;
-import android.provider.DeviceConfig.OnPropertiesChangedListener;
 import android.util.Pair;
 
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 
 import java.util.ArrayList;
@@ -45,9 +43,7 @@ import java.util.List;
  * Unit tests for {@link com.android.server.wifi.WifiLastResortWatchdog}.
  */
 @SmallTest
-public class WifiLastResortWatchdogTest {
-    final ArgumentCaptor<OnPropertiesChangedListener> mOnPropertiesChangedListenerCaptor =
-            ArgumentCaptor.forClass(OnPropertiesChangedListener.class);
+public class WifiLastResortWatchdogTest extends WifiBaseTest {
     WifiLastResortWatchdog mLastResortWatchdog;
     @Mock WifiInjector mWifiInjector;
     @Mock WifiMetrics mWifiMetrics;
@@ -79,14 +75,13 @@ public class WifiLastResortWatchdogTest {
         when(mDeviceConfigFacade.isAbnormalConnectionBugreportEnabled()).thenReturn(true);
         when(mDeviceConfigFacade.getAbnormalConnectionDurationMs()).thenReturn(
                         DEFAULT_ABNORMAL_CONNECTION_DURATION_MS);
+        WifiThreadRunner wifiThreadRunner = new WifiThreadRunner(new Handler(mLooper.getLooper()));
         mLastResortWatchdog = new WifiLastResortWatchdog(mWifiInjector, mContext, mClock,
-                mWifiMetrics, mClientModeImpl, mLooper.getLooper(), mDeviceConfigFacade);
+                mWifiMetrics, mClientModeImpl, mLooper.getLooper(), mDeviceConfigFacade,
+                wifiThreadRunner);
         mLastResortWatchdog.setBugReportProbability(1);
         when(mClientModeImpl.getWifiInfo()).thenReturn(mWifiInfo);
         when(mWifiInfo.getSSID()).thenReturn(TEST_NETWORK_SSID);
-        when(mWifiInjector.getClientModeImplHandler()).thenReturn(mLastResortWatchdog.getHandler());
-        verify(mDeviceConfigFacade).addOnPropertiesChangedListener(any(),
-                mOnPropertiesChangedListenerCaptor.capture());
     }
 
     private List<Pair<ScanDetail, WifiConfiguration>> createFilteredQnsCandidates(String[] ssids,
@@ -2212,16 +2207,14 @@ public class WifiLastResortWatchdogTest {
     }
 
     /**
-     * Changes |mAbnormalConnectionDurationMs| to a new value, and then verify that a bugreport is
+     * Changes the abnormal connection duration to a new value, and then verify that a bugreport is
      * taken for a connection that takes longer than the new threshold.
      * @throws Exception
      */
     @Test
     public void testGServicesSetDuration() throws Exception {
         final int testDurationMs = 10 * 1000; // 10 seconds
-        // changes the abnormal connection duration to |testDurationMs|.
         when(mDeviceConfigFacade.getAbnormalConnectionDurationMs()).thenReturn(testDurationMs);
-        mOnPropertiesChangedListenerCaptor.getValue().onPropertiesChanged(null);
 
         // verifies that bugreport is taken for connections that take longer than |testDurationMs|.
         when(mClock.getElapsedSinceBootMillis()).thenReturn(1L);
@@ -2237,14 +2230,12 @@ public class WifiLastResortWatchdogTest {
 
     /**
      * Verifies that bugreports are not triggered even when conditions are met after the
-     * |mAbnormalConnectionBugreportEnabled| flag is changed to false.
+     * applicable flag is changed to false.
      * @throws Exception
      */
     @Test
     public void testGServicesFlagDisable() throws Exception {
-        // changes |mAbnormalConnectionBugreportEnabled| to false.
         when(mDeviceConfigFacade.isAbnormalConnectionBugreportEnabled()).thenReturn(false);
-        mOnPropertiesChangedListenerCaptor.getValue().onPropertiesChanged(null);
 
         // verifies that bugreports are not taken.
         when(mClock.getElapsedSinceBootMillis()).thenReturn(1L);
