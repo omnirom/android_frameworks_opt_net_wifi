@@ -480,8 +480,10 @@ public class SoftApManager implements ActiveModeManager {
 
             mApInterfaceName = mdualApInterfaces[0];
             oweConfig.oweTransIfaceName =  mdualApInterfaces[1];
-            oweConfig.SSID =  "OWE_" + oweConfig.SSID;
-            oweConfig.SSID =  oweConfig.SSID.length() > 32 ? oweConfig.SSID.substring(0, 32) : oweConfig.SSID;
+            // hashCode() generates integer hash for given string
+            // As maximum string size of a integer is 12 bytes SSID size never crosses 32 bytes
+            oweConfig.SSID =  "OWE_" + oweConfig.SSID.hashCode();
+            Log.i(TAG, "Generated OWE SSID: " + oweConfig.SSID);
             oweConfig.hiddenSSID =  true;
             int result = startSoftAp(oweConfig);
             if (result == SUCCESS) {
