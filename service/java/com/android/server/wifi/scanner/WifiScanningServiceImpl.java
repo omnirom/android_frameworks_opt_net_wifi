@@ -1047,7 +1047,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             }
 
             // Cache full band (with DFS or not) scan results.
-            if (results.getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
+            if (results.getBandScanned() == WifiScanner.WIFI_TRI_BANDS
                     || results.getBandScanned() == WifiScanner.WIFI_BAND_BOTH) {
                 mCachedScanResults.clear();
                 mCachedScanResults.addAll(Arrays.asList(results.getResults()));

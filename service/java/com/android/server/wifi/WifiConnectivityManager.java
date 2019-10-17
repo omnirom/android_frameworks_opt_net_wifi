@@ -355,7 +355,7 @@ public class WifiConnectivityManager {
 
             // We treat any full band scans (with DFS or not) as "full".
             boolean isFullBandScanResults =
-                    results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
+                    results[0].getBandScanned() == WifiScanner.WIFI_TRI_BANDS
                             || results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH;
             // Full band scan results only.
             if (mWaitForFullBandScanResults) {
@@ -805,7 +805,7 @@ public class WifiConnectivityManager {
 
     private int getScanBand(boolean isFullBandScan) {
         if (isFullBandScan) {
-            return WifiScanner.WIFI_BAND_BOTH_WITH_DFS;
+            return WifiScanner.WIFI_TRI_BANDS;
         } else {
             // Use channel list instead.
             return WifiScanner.WIFI_BAND_UNSPECIFIED;

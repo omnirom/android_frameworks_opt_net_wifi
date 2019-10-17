@@ -308,10 +308,14 @@ public abstract class ChannelHelper {
                 return "5Ghz (DFS only)";
             case WifiScanner.WIFI_BAND_5_GHZ_WITH_DFS:
                 return "5Ghz (DFS incl)";
+            case WifiScanner.WIFI_BAND_6_GHZ:
+                return "6Ghz";
             case WifiScanner.WIFI_BAND_BOTH:
                 return "24Ghz & 5Ghz (no DFS)";
             case WifiScanner.WIFI_BAND_BOTH_WITH_DFS:
                 return "24Ghz & 5Ghz (DFS incl)";
+            case WifiScanner.WIFI_TRI_BANDS:
+                return "24Ghz, 5Ghz and 6Ghz";
         }
         return "invalid band";
     }

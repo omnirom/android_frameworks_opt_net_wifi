@@ -894,6 +894,7 @@ public class WificondControl implements IBinder.DeathRecipient {
      * WifiScanner.WIFI_BAND_24_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY
+     * WifiScanner.WIFI_BAND_6_GHZ
      * @return frequencies vector of valid frequencies (MHz), or null for error.
      * @throws IllegalArgumentException if band is not recognized.
      */
@@ -910,6 +911,8 @@ public class WificondControl implements IBinder.DeathRecipient {
                     return mWificond.getAvailable5gNonDFSChannels();
                 case WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY:
                     return mWificond.getAvailableDFSChannels();
+                case WifiScanner.WIFI_BAND_6_GHZ:
+                    return mWificond.getAvailable6gChannels();
                 default:
                     throw new IllegalArgumentException("unsupported band " + band);
             }

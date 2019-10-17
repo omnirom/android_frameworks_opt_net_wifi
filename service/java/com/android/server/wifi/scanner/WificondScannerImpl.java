@@ -352,7 +352,9 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
      * Return one of the WIFI_BAND_# values that was scanned for in this scan.
      */
     private static int getBandScanned(ChannelCollection channelCollection) {
-        if (channelCollection.containsBand(WifiScanner.WIFI_BAND_BOTH_WITH_DFS)) {
+        if (channelCollection.containsBand(WifiScanner.WIFI_TRI_BANDS)) {
+            return WifiScanner.WIFI_TRI_BANDS;
+        } else if (channelCollection.containsBand(WifiScanner.WIFI_BAND_BOTH_WITH_DFS)) {
             return WifiScanner.WIFI_BAND_BOTH_WITH_DFS;
         } else if (channelCollection.containsBand(WifiScanner.WIFI_BAND_BOTH)) {
             return WifiScanner.WIFI_BAND_BOTH;
@@ -364,6 +366,8 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             return WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY;
         } else if (channelCollection.containsBand(WifiScanner.WIFI_BAND_24_GHZ)) {
             return WifiScanner.WIFI_BAND_24_GHZ;
+        } else if (channelCollection.containsBand(WifiScanner.WIFI_BAND_6_GHZ)) {
+            return WifiScanner.WIFI_BAND_6_GHZ;
         }
         return WifiScanner.WIFI_BAND_UNSPECIFIED;
     }
