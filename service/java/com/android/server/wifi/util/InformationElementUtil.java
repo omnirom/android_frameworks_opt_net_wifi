@@ -396,6 +396,7 @@ public class InformationElementUtil {
     public static class Capabilities {
         private static final int CAP_ESS_BIT_OFFSET = 0;
         private static final int CAP_PRIVACY_BIT_OFFSET = 4;
+        private static final int CAP_VHT_8SS_OFFSET = 224; //(0xEO)
 
         private static final int WPA_VENDOR_OUI_TYPE_ONE = 0x01f25000;
         private static final int WPS_VENDOR_OUI_TYPE = 0x04f25000;
@@ -440,9 +441,11 @@ public class InformationElementUtil {
         public boolean isHt;
         public boolean isVht;
         public boolean isHe;
+        public boolean is8SS;
         public boolean reportHt;
         public boolean reportVht;
         public boolean reportHe;
+        public boolean report8SS;
 
         public Capabilities() {
         }
@@ -741,6 +744,9 @@ public class InformationElementUtil {
                     isHt = true;
                 } else if (ie.id == InformationElement.EID_VHT_CAPABILITIES) {
                     isVht = true;
+                    if(ie.bytes != null && ie.bytes.length > 0 && ((ie.bytes[1] & CAP_VHT_8SS_OFFSET) == CAP_VHT_8SS_OFFSET)) {
+                        is8SS = true;
+                     }
                 } else if (ie.id == InformationElement.EID_EXTENSION &&
                       ie.bytes != null && ie.bytes.length > 0 &&
                       ((ie.bytes[0] & 0xFF) == InformationElement.EID_EXT_HE_CAPABILITIES)) {
@@ -857,6 +863,10 @@ public class InformationElementUtil {
             }
             if (reportVht && isVht) {
                 capabilities.append("[WFA-VHT]");
+            }
+            if (reportVht && report8SS && isHe && is8SS)
+            {
+                capabilities.append("[WFA-HE-READY]");
             }
             if (reportHe && isHe) {
                 capabilities.append("[WFA-HE]");

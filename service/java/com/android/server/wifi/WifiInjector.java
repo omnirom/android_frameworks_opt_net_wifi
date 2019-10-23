@@ -521,6 +521,11 @@ public class WifiInjector {
         return mDppManager;
     }
 
+    public boolean getReport8SS()
+    {
+        return (mContext.getResources().getBoolean(com.android.internal.R.bool.config_wifi_report_he_ready));
+    }
+
     /** Gets IWificond without caching. */
     public IWificond makeWificond() {
         // We depend on being able to refresh our binder in ClientModeImpl, so don't cache it.

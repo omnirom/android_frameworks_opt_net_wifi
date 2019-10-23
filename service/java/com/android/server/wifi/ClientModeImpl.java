@@ -3303,11 +3303,24 @@ public class ClientModeImpl extends StateMachine {
         if (wifiGenerationStatus != null) {
             mWifiInfo.setWifiGeneration(wifiGenerationStatus.generation);
             mWifiInfo.setVhtMax8SpatialStreamsSupport(wifiGenerationStatus.vhtMax8SpatialStreamsSupport);
-            mWifiInfo.setTwtSupport(wifiGenerationStatus.twtSupport);
+            WifiConfiguration config = getCurrentWifiConfiguration();
+            if (config != null) {
+                ScanDetailCache scanDetailCache = mWifiConfigManager
+                    .getScanDetailCacheForNetwork(config.networkId);
+                if( scanDetailCache != null ) {
+                    ScanResult result = scanDetailCache.getScanResult(mLastBssid);
+                    if(result != null) {
+                        if(result.capabilities.contains("WFA-HE-READY")) {
+                            mWifiInfo.setHe8ssCapableAp(true);
+                        } else {
+                            mWifiInfo.setHe8ssCapableAp(false);
+                        }
+                    }
+                }
+            }
         } else {
             mWifiInfo.setWifiGeneration(0);
             mWifiInfo.setVhtMax8SpatialStreamsSupport(false);
-            mWifiInfo.setTwtSupport(false);
         }
     }
 
