@@ -72,7 +72,6 @@ import android.os.UserManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
-import android.util.Slog;
 import android.util.SparseArray;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -402,7 +401,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     mP2pStateMachine.sendMessage(Message.obtain(msg));
                     break;
                 default:
-                    Slog.d(TAG, "ClientHandler.handleMessage ignoring msg=" + msg);
+                    Log.d(TAG, "ClientHandler.handleMessage ignoring msg=" + msg);
                     break;
             }
         }
@@ -1984,7 +1983,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         WifiP2pProvDiscEvent provDisc = (WifiP2pProvDiscEvent) message.obj;
                         WifiP2pDevice device = provDisc.device;
                         if (device == null) {
-                            Slog.d(TAG, "Device entry is null");
+                            Log.d(TAG, "Device entry is null");
                             break;
                         }
                         mSavedPeerConfig = new WifiP2pConfig();
@@ -2584,9 +2583,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 dialog.setCanceledOnTouchOutside(false);
 
                 dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
-                WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
-                attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
-                dialog.getWindow().setAttributes(attrs);
+                dialog.getWindow().addSystemFlags(
+                        WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
                 dialog.show();
                 mFrequencyConflictDialog = dialog;
             }
@@ -3175,9 +3173,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     .create();
             dialog.setCanceledOnTouchOutside(false);
             dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
-            WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
-            attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
-            dialog.getWindow().setAttributes(attrs);
+            dialog.getWindow().addSystemFlags(
+                    WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
             dialog.show();
         }
 
@@ -3207,9 +3204,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     .create();
             dialog.setCanceledOnTouchOutside(false);
             dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
-            WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
-            attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
-            dialog.getWindow().setAttributes(attrs);
+            dialog.getWindow().addSystemFlags(
+                    WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
             dialog.show();
         }
 
@@ -3234,9 +3230,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     .create();
             dialog.setCanceledOnTouchOutside(false);
             dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
-            WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
-            attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
-            dialog.getWindow().setAttributes(attrs);
+            dialog.getWindow().addSystemFlags(
+                    WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
             dialog.show();
         }
 
@@ -3318,9 +3313,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             }
 
             dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
-            WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
-            attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
-            dialog.getWindow().setAttributes(attrs);
+            dialog.getWindow().addSystemFlags(
+                    WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
             dialog.show();
         }
 
@@ -3911,12 +3905,12 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
         @Override
         protected void logd(String s) {
-            Slog.d(TAG, s);
+            Log.d(TAG, s);
         }
 
         @Override
         protected void loge(String s) {
-            Slog.e(TAG, s);
+            Log.e(TAG, s);
         }
 
         /**

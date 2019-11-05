@@ -18,7 +18,6 @@ package com.android.server.wifi;
 
 import static com.android.server.wifi.util.NativeUtil.addEnclosingQuotes;
 
-import android.content.pm.UserInfo;
 import android.net.IpConfiguration;
 import android.net.MacAddress;
 import android.net.StaticIpConfiguration;
@@ -27,7 +26,6 @@ import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiNetworkSpecifier;
 import android.net.wifi.WifiScanner;
 import android.os.PatternMatcher;
-import android.os.UserHandle;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.Pair;
@@ -41,7 +39,6 @@ import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -66,44 +63,15 @@ public class WifiConfigurationUtil {
     private static final int SAE_ASCII_MIN_LEN = 1 + ENCLOSING_QUOTES_LEN;
     private static final int PSK_SAE_ASCII_MAX_LEN = 63 + ENCLOSING_QUOTES_LEN;
     private static final int PSK_SAE_HEX_LEN = 64;
+    private static final MacAddress ALL_ZEROS_MAC_ADDRESS =
+            MacAddress.fromString("00:00:00:00:00:00");
     @VisibleForTesting
     public static final String PASSWORD_MASK = "*";
     private static final String MATCH_EMPTY_SSID_PATTERN_PATH = "";
     private static final Pair<MacAddress, MacAddress> MATCH_NONE_BSSID_PATTERN =
             new Pair(MacAddress.BROADCAST_ADDRESS, MacAddress.BROADCAST_ADDRESS);
     private static final Pair<MacAddress, MacAddress> MATCH_ALL_BSSID_PATTERN =
-            new Pair(MacAddress.ALL_ZEROS_ADDRESS, MacAddress.ALL_ZEROS_ADDRESS);
-
-    /**
-     * Check whether a network configuration is visible to a user or any of its managed profiles.
-     *
-     * @param config   the network configuration whose visibility should be checked
-     * @param profiles the user IDs of the user itself and all its managed profiles (can be obtained
-     *                 via {@link android.os.UserManager#getProfiles})
-     * @return whether the network configuration is visible to the user or any of its managed
-     * profiles
-     */
-    public static boolean isVisibleToAnyProfile(WifiConfiguration config, List<UserInfo> profiles) {
-        return (config.shared || doesUidBelongToAnyProfile(config.creatorUid, profiles));
-    }
-
-    /**
-     * Check whether a uid belong to a user or any of its managed profiles.
-     *
-     * @param uid      uid of the app.
-     * @param profiles the user IDs of the user itself and all its managed profiles (can be obtained
-     *                 via {@link android.os.UserManager#getProfiles})
-     * @return whether the uid belongs to the user or any of its managed profiles.
-     */
-    public static boolean doesUidBelongToAnyProfile(int uid, List<UserInfo> profiles) {
-        final int userId = UserHandle.getUserId(uid);
-        for (UserInfo profile : profiles) {
-            if (profile.id == userId) {
-                return true;
-            }
-        }
-        return false;
-    }
+            new Pair(ALL_ZEROS_MAC_ADDRESS, ALL_ZEROS_MAC_ADDRESS);
 
     /**
      * Checks if the provided |wepKeys| array contains any non-null value;
@@ -662,8 +630,8 @@ public class WifiConfigurationUtil {
             Log.e(TAG, "validateBssidPatternMatcher failed : invalid base address: " + baseAddress);
             return false;
         }
-        if (mask.equals(MacAddress.ALL_ZEROS_ADDRESS)
-                && !baseAddress.equals(MacAddress.ALL_ZEROS_ADDRESS)) {
+        if (mask.equals(ALL_ZEROS_MAC_ADDRESS)
+                && !baseAddress.equals(ALL_ZEROS_MAC_ADDRESS)) {
             Log.e(TAG, "validateBssidPatternMatcher failed : invalid mask/base: " + mask + "/"
                     + baseAddress);
             return false;

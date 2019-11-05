@@ -409,6 +409,11 @@ public class WificondControl implements IBinder.DeathRecipient {
             return false;
         }
 
+        if (mWificond == null) {
+            Log.e(TAG, "Reference to wifiCond is null");
+            return false;
+        }
+
         boolean success;
         try {
             success = mWificond.tearDownClientInterface(ifaceName);
@@ -468,6 +473,12 @@ public class WificondControl implements IBinder.DeathRecipient {
             Log.e(TAG, "No valid wificond ap interface handler");
             return false;
         }
+
+        if (mWificond == null) {
+            Log.e(TAG, "Reference to wifiCond is null");
+            return false;
+        }
+
         boolean success;
         try {
             success = mWificond.tearDownApInterface(ifaceName);

@@ -16,10 +16,12 @@
 
 package com.android.server.wifi;
 
-import android.app.ActivityManagerInternal;
-import android.app.AppGlobals;
+import static android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE;
+
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.PendingIntent;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
@@ -30,14 +32,11 @@ import android.net.ip.IpClientUtil;
 import android.os.BatteryStats;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.RemoteException;
 import android.os.ServiceManager;
-import android.os.storage.StorageManager;
 import android.provider.Settings;
 import android.telephony.CarrierConfigManager;
 
 import com.android.internal.app.IBatteryStats;
-import com.android.server.LocalServices;
 import com.android.server.wifi.util.WifiAsyncChannel;
 
 /**
@@ -46,40 +45,65 @@ import com.android.server.wifi.util.WifiAsyncChannel;
 public class FrameworkFacade {
     public static final String TAG = "FrameworkFacade";
 
-    private ActivityManagerInternal mActivityManagerInternal;
+    private ContentResolver mContentResolver = null;
+    private CarrierConfigManager mCarrierConfigManager = null;
+    private ActivityManager mActivityManager = null;
+
+    private ContentResolver getContentResolver(Context context) {
+        if (mContentResolver == null) {
+            mContentResolver = context.getContentResolver();
+        }
+        return mContentResolver;
+    }
+
+    private CarrierConfigManager getCarrierConfigManager(Context context) {
+        if (mCarrierConfigManager == null) {
+            mCarrierConfigManager =
+                (CarrierConfigManager) context.getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        }
+        return mCarrierConfigManager;
+    }
+
+    private ActivityManager getActivityManager(Context context) {
+        if (mActivityManager == null) {
+            mActivityManager =
+                (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+        }
+        return mActivityManager;
+    }
 
     public boolean setIntegerSetting(Context context, String name, int def) {
-        return Settings.Global.putInt(context.getContentResolver(), name, def);
+        return Settings.Global.putInt(getContentResolver(context), name, def);
     }
 
     public int getIntegerSetting(Context context, String name, int def) {
-        return Settings.Global.getInt(context.getContentResolver(), name, def);
+        return Settings.Global.getInt(getContentResolver(context), name, def);
     }
 
     public long getLongSetting(Context context, String name, long def) {
-        return Settings.Global.getLong(context.getContentResolver(), name, def);
+        return Settings.Global.getLong(getContentResolver(context), name, def);
     }
 
     public boolean setStringSetting(Context context, String name, String def) {
-        return Settings.Global.putString(context.getContentResolver(), name, def);
+        return Settings.Global.putString(getContentResolver(context), name, def);
     }
 
     public String getStringSetting(Context context, String name) {
-        return Settings.Global.getString(context.getContentResolver(), name);
+        return Settings.Global.getString(getContentResolver(context), name);
     }
 
     /**
      * Mockable facade to Settings.Secure.getInt(.).
      */
     public int getSecureIntegerSetting(Context context, String name, int def) {
-        return Settings.Secure.getInt(context.getContentResolver(), name, def);
+        return Settings.Secure.getInt(getContentResolver(context), name, def);
     }
 
     /**
      * Mockable facade to Settings.Secure.getString(.).
      */
     public String getSecureStringSetting(Context context, String name) {
-        return Settings.Secure.getString(context.getContentResolver(), name);
+        return Settings.Secure.getString(getContentResolver(context), name);
     }
 
     /**
@@ -93,7 +117,7 @@ public class FrameworkFacade {
      */
     public void registerContentObserver(Context context, Uri uri,
             boolean notifyForDescendants, ContentObserver contentObserver) {
-        context.getContentResolver().registerContentObserver(uri, notifyForDescendants,
+        getContentResolver(context).registerContentObserver(uri, notifyForDescendants,
                 contentObserver);
     }
 
@@ -105,7 +129,7 @@ public class FrameworkFacade {
      * @param contentObserver
      */
     public void unregisterContentObserver(Context context, ContentObserver contentObserver) {
-        context.getContentResolver().unregisterContentObserver(contentObserver);
+        getContentResolver(context).unregisterContentObserver(contentObserver);
     }
 
     public IBinder getService(String serviceName) {
@@ -137,8 +161,7 @@ public class FrameworkFacade {
     }
 
     public boolean getConfigWiFiDisableInECBM(Context context) {
-        CarrierConfigManager configManager = (CarrierConfigManager) context
-                .getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        CarrierConfigManager configManager = getCarrierConfigManager(context);
         if (configManager != null) {
             return configManager.getConfig().getBoolean(
                     CarrierConfigManager.KEY_CONFIG_WIFI_DISABLE_IN_ECBM);
@@ -166,17 +189,6 @@ public class FrameworkFacade {
     }
 
     /**
-     * Checks whether the given uid has been granted the given permission.
-     * @param permName the permission to check
-     * @param uid The uid to check
-     * @return {@link PackageManager.PERMISSION_GRANTED} if the permission has been granted and
-     *         {@link PackageManager.PERMISSION_DENIED} otherwise
-     */
-    public int checkUidPermission(String permName, int uid) throws RemoteException {
-        return AppGlobals.getPackageManager().checkUidPermission(permName, uid);
-    }
-
-    /**
      * Create a new instance of WifiAsyncChannel
      * @param tag String corresponding to the service creating the channel
      * @return WifiAsyncChannel object created
@@ -190,11 +202,10 @@ public class FrameworkFacade {
      * @param uid the uid to check
      * @return true if the app is in the foreground, false otherwise
      */
-    public boolean isAppForeground(int uid) {
-        if (mActivityManagerInternal == null) {
-            mActivityManagerInternal = LocalServices.getService(ActivityManagerInternal.class);
-        }
-        return mActivityManagerInternal.isAppForeground(uid);
+    public boolean isAppForeground(Context context, int uid) {
+        ActivityManager activityManager = getActivityManager(context);
+        if (activityManager == null) return false;
+        return activityManager.getUidImportance(uid) <= IMPORTANCE_VISIBLE;
     }
 
     /**

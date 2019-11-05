@@ -44,6 +44,7 @@ public class ApConfigUtil {
 
     /**
      * Convert frequency to channel.
+     * Note: the utility does not perform any regulatory domain compliance.
      * @param frequency frequency to convert
      * @return channel number associated with given frequency, -1 if no match
      */

@@ -17,25 +17,23 @@
 package com.android.server.wifi.util;
 
 import android.Manifest;
+import android.annotation.Nullable;
 import android.app.AppOpsManager;
+import android.app.admin.DevicePolicyManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.content.pm.UserInfo;
 import android.location.LocationManager;
 import android.net.NetworkStack;
-import android.net.wifi.WifiStackClient;
 import android.os.Binder;
 import android.os.Build;
-import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.UserManager;
-import android.util.Slog;
+import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.server.wifi.WifiInjector;
 import com.android.server.wifi.WifiLog;
-
-import java.util.List;
 
 /**
  * A wifi permissions utility assessing permissions
@@ -68,45 +66,8 @@ public class WifiPermissionsUtil {
      * @return true if the app does have the permission, false otherwise.
      */
     public boolean checkConfigOverridePermission(int uid) {
-        try {
-            int permission = mWifiPermissionsWrapper.getOverrideWifiConfigPermission(uid);
-            return (permission == PackageManager.PERMISSION_GRANTED);
-        } catch (RemoteException e) {
-            mLog.err("Error checking for permission: %").r(e.getMessage()).flush();
-            return false;
-        }
-    }
-
-    /**
-     * Checks if the app has the permission to change Wi-Fi network configuration or not.
-     *
-     * @param uid uid of the app.
-     * @return true if the app does have the permission, false otherwise.
-     */
-    public boolean checkChangePermission(int uid) {
-        try {
-            int permission = mWifiPermissionsWrapper.getChangeWifiConfigPermission(uid);
-            return (permission == PackageManager.PERMISSION_GRANTED);
-        } catch (RemoteException e) {
-            mLog.err("Error checking for permission: %").r(e.getMessage()).flush();
-            return false;
-        }
-    }
-
-    /**
-     * Checks if the app has the permission to access Wi-Fi state or not.
-     *
-     * @param uid uid of the app.
-     * @return true if the app does have the permission, false otherwise.
-     */
-    public boolean checkWifiAccessPermission(int uid) {
-        try {
-            int permission = mWifiPermissionsWrapper.getAccessWifiStatePermission(uid);
-            return (permission == PackageManager.PERMISSION_GRANTED);
-        } catch (RemoteException e) {
-            mLog.err("Error checking for permission: %").r(e.getMessage()).flush();
-            return false;
-        }
+        int permission = mWifiPermissionsWrapper.getOverrideWifiConfigPermission(uid);
+        return permission == PackageManager.PERMISSION_GRANTED;
     }
 
     /**
@@ -129,7 +90,8 @@ public class WifiPermissionsUtil {
         long ident = Binder.clearCallingIdentity();
         try {
             if (mContext.getPackageManager().getApplicationInfoAsUser(
-                    packageName, 0, UserHandle.getUserId(callingUid)).targetSdkVersion
+                    packageName, 0,
+                    UserHandle.getUserHandleForUid(callingUid)).targetSdkVersion
                     < versionCode) {
                 return true;
             }
@@ -169,11 +131,15 @@ public class WifiPermissionsUtil {
 
         // Always checking FINE - even if will not enforce. This will record the request for FINE
         // so that a location request by the app is surfaced to the user.
-        boolean isAppOpAllowed = noteAppOpAllowed(AppOpsManager.OP_FINE_LOCATION, pkgName, uid);
-        if (!isAppOpAllowed && coarseForTargetSdkLessThanQ && isTargetSdkLessThanQ) {
-            isAppOpAllowed = noteAppOpAllowed(AppOpsManager.OP_COARSE_LOCATION, pkgName, uid);
+        boolean isFineLocationAllowed = noteAppOpAllowed(
+                AppOpsManager.OPSTR_FINE_LOCATION, pkgName, uid);
+        if (isFineLocationAllowed) {
+            return true;
         }
-        return isAppOpAllowed;
+        if (coarseForTargetSdkLessThanQ && isTargetSdkLessThanQ) {
+            return noteAppOpAllowed(AppOpsManager.OPSTR_COARSE_LOCATION, pkgName, uid);
+        }
+        return false;
     }
 
     /**
@@ -188,7 +154,6 @@ public class WifiPermissionsUtil {
         }
     }
 
-
     /**
      * Checks that calling process has android.Manifest.permission.ACCESS_FINE_LOCATION
      * and a corresponding app op is allowed for this package and uid.
@@ -196,7 +161,7 @@ public class WifiPermissionsUtil {
      * @param pkgName PackageName of the application requesting access
      * @param uid The uid of the package
      * @param hideFromAppOps True to invoke {@link AppOpsManager#checkOp(int, int, String)}, false
-     *                       to invoke {@link AppOpsManager#noteOp(int, int, String)}.
+     *                       to invoke {@link AppOpsManager#noteOp(String, int, String, String)}.
      */
     private boolean checkCallersFineLocationPermission(String pkgName, int uid,
                                                        boolean hideFromAppOps) {
@@ -208,15 +173,10 @@ public class WifiPermissionsUtil {
         }
         if (hideFromAppOps) {
             // Don't note the operation, just check if the app is allowed to perform the operation.
-            if (!checkAppOpAllowed(AppOpsManager.OP_FINE_LOCATION, pkgName, uid)) {
-                return false;
-            }
+            return checkAppOpAllowed(AppOpsManager.OPSTR_FINE_LOCATION, pkgName, uid);
         } else {
-            if (!noteAppOpAllowed(AppOpsManager.OP_FINE_LOCATION, pkgName, uid)) {
-                return false;
-            }
+            return noteAppOpAllowed(AppOpsManager.OPSTR_FINE_LOCATION, pkgName, uid);
         }
-        return true;
     }
 
     /**
@@ -328,7 +288,7 @@ public class WifiPermissionsUtil {
         try {
             checkPackage(uid, pkgName);
         } catch (SecurityException se) {
-            Slog.e(TAG, "Package check exception - " + se);
+            Log.e(TAG, "Package check exception - " + se);
             return false;
         }
 
@@ -339,7 +299,7 @@ public class WifiPermissionsUtil {
 
         // Location mode must be enabled if needed.
         if (needLocationModeEnabled && !isLocationModeEnabled()) {
-            Slog.e(TAG, "Location mode is disabled for the device");
+            Log.e(TAG, "Location mode is disabled for the device");
             return false;
         }
 
@@ -347,7 +307,7 @@ public class WifiPermissionsUtil {
         // location information.
         if (!checkCallersLocationPermission(pkgName, uid,
                 /* coarseForTargetSdkLessThanQ */ false)) {
-            Slog.e(TAG, "UID " + uid + " has no location permission");
+            Log.e(TAG, "UID " + uid + " has no location permission");
             return false;
         }
         return true;
@@ -382,7 +342,7 @@ public class WifiPermissionsUtil {
      * and package.
      */
     private boolean isScanAllowedbyApps(String pkgName, int uid) {
-        return noteAppOpAllowed(AppOpsManager.OP_WIFI_SCAN, pkgName, uid);
+        return noteAppOpAllowed(AppOpsManager.OPSTR_WIFI_SCAN, pkgName, uid);
     }
 
     /**
@@ -399,27 +359,19 @@ public class WifiPermissionsUtil {
      * current user.
      */
     private boolean isCurrentProfile(int uid) {
-        int currentUser = mWifiPermissionsWrapper.getCurrentUser();
-        int callingUserId = mWifiPermissionsWrapper.getCallingUserId(uid);
-        if (callingUserId == currentUser) {
-            return true;
-        } else {
-            List<UserInfo> userProfiles = mUserManager.getProfiles(currentUser);
-            for (UserInfo user : userProfiles) {
-                if (user.id == callingUserId) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        UserHandle currentUser = UserHandle.of(mWifiPermissionsWrapper.getCurrentUser());
+        UserHandle callingUser = UserHandle.getUserHandleForUid(uid);
+        return currentUser.equals(callingUser)
+                || mUserManager.isSameProfileGroup(currentUser, callingUser);
     }
 
-    private boolean noteAppOpAllowed(int op, String pkgName, int uid) {
-        return mAppOps.noteOp(op, uid, pkgName) == AppOpsManager.MODE_ALLOWED;
+    private boolean noteAppOpAllowed(String op, String pkgName, int uid) {
+        // TODO moltmann: Set correct featureId
+        return mAppOps.noteOp(op, uid, pkgName, null, null) == AppOpsManager.MODE_ALLOWED;
     }
 
-    private boolean checkAppOpAllowed(int op, String pkgName, int uid) {
-        return mAppOps.checkOp(op, uid, pkgName) == AppOpsManager.MODE_ALLOWED;
+    private boolean checkAppOpAllowed(String op, String pkgName, int uid) {
+        return mAppOps.unsafeCheckOp(op, uid, pkgName) == AppOpsManager.MODE_ALLOWED;
     }
 
     private boolean retrieveLocationManagerIfNecessary() {
@@ -509,13 +461,84 @@ public class WifiPermissionsUtil {
      * Returns true if the |callingUid|/\callingPackage| holds SYSTEM_ALERT_WINDOW permission.
      */
     public boolean checkSystemAlertWindowPermission(int callingUid, String callingPackage) {
-        final int mode = mAppOps.noteOp(
-                AppOpsManager.OP_SYSTEM_ALERT_WINDOW, callingUid, callingPackage);
+        final int mode = mAppOps.noteOp(AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, callingUid,
+                callingPackage, null, null);
         if (mode == AppOpsManager.MODE_DEFAULT) {
             return mWifiPermissionsWrapper.getUidPermission(
                     Manifest.permission.SYSTEM_ALERT_WINDOW, callingUid)
                     == PackageManager.PERMISSION_GRANTED;
         }
         return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private static DevicePolicyManager retrieveDevicePolicyManagerFromContext(Context context) {
+        DevicePolicyManager devicePolicyManager =
+                context.getSystemService(DevicePolicyManager.class);
+        if (devicePolicyManager == null
+                && context.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_DEVICE_ADMIN)) {
+            Log.w(TAG, "Error retrieving DPM service");
+        }
+        return devicePolicyManager;
+    }
+
+    private DevicePolicyManager retrieveDevicePolicyManagerFromUserContext(int uid) {
+        Context userContext = null;
+        try {
+            userContext = mContext.createPackageContextAsUser(mContext.getPackageName(), 0,
+                    UserHandle.getUserHandleForUid(uid));
+        } catch (PackageManager.NameNotFoundException e) {
+            Log.e(TAG, "Unknown package name");
+            return null;
+        }
+        if (userContext == null) {
+            Log.e(TAG, "Unable to retrieve user context for " + uid);
+            return null;
+        }
+        return retrieveDevicePolicyManagerFromContext(userContext);
+    }
+
+    /**
+     * Returns true if the |callingUid|/\callingPackage| is the device owner.
+     */
+    public boolean isDeviceOwner(int uid, @Nullable String packageName) {
+        // Cannot determine if the app is DO/PO if packageName is null. So, will return false to be
+        // safe.
+        if (packageName == null) {
+            Log.e(TAG, "isDeviceOwner: packageName is null, returning false");
+            return false;
+        }
+        DevicePolicyManager devicePolicyManager =
+                retrieveDevicePolicyManagerFromContext(mContext);
+        if (devicePolicyManager == null) return false;
+        long ident = Binder.clearCallingIdentity();
+        UserHandle deviceOwnerUser = null;
+        ComponentName deviceOwnerComponent = null;
+        try {
+            deviceOwnerUser = devicePolicyManager.getDeviceOwnerUser();
+            deviceOwnerComponent = devicePolicyManager.getDeviceOwnerComponentOnAnyUser();
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+        // no device owner
+        if (deviceOwnerUser == null || deviceOwnerComponent == null) return false;
+        return deviceOwnerUser.equals(UserHandle.getUserHandleForUid(uid))
+                && deviceOwnerComponent.getPackageName().equals(packageName);
+    }
+
+    /**
+     * Returns true if the |callingUid|/\callingPackage| is the profile owner.
+     */
+    public boolean isProfileOwner(int uid, @Nullable String packageName) {
+        // Cannot determine if the app is DO/PO if packageName is null. So, will return false to be
+        // safe.
+        if (packageName == null) {
+            Log.e(TAG, "isProfileOwner: packageName is null, returning false");
+            return false;
+        }
+        DevicePolicyManager devicePolicyManager =
+                retrieveDevicePolicyManagerFromUserContext(uid);
+        if (devicePolicyManager == null) return false;
+        return devicePolicyManager.isProfileOwnerApp(packageName);
     }
 }
