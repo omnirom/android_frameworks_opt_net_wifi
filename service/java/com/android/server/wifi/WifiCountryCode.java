@@ -85,7 +85,6 @@ public class WifiCountryCode {
         context.registerReceiver(new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                final String action = intent.getAction();
                 String countryCode = intent.getStringExtra(TelephonyManager.EXTRA_NETWORK_COUNTRY);
                 Log.d(TAG, "Country code changed");
                 setCountryCodeAndUpdate(countryCode);
@@ -123,19 +122,6 @@ public class WifiCountryCode {
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_COUNTRY_CODE, getCountryCode());
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
-    }
-
-    /**
-     * This is called when airplane mode is enabled.
-     * In this case we should invalidate all other country code except the
-     * phone default one.
-     */
-    public synchronized void airplaneModeEnabled() {
-        Log.d(TAG, "Airplane Mode Enabled");
-        // Airplane mode is enabled, we need to reset the country code to phone default.
-        // Country code will be set upon when wpa_supplicant starts next time.
-        mTelephonyCountryCode = null;
-        sendCountryCodeChangedBroadcast();
     }
 
     private void initializeTelephonyCountryCodeIfNeeded() {

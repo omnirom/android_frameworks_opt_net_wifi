@@ -47,6 +47,7 @@ import com.android.server.connectivity.tethering.TetheringConfiguration;
 import com.android.server.net.BaseNetworkObserver;
 import com.android.server.wifi.util.FrameParser;
 import com.android.server.wifi.util.NativeUtil;
+import com.android.server.wifi.wificond.NativeWifiClient;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -1824,9 +1825,9 @@ public class WifiNative {
         void onFailure();
 
         /**
-         * Invoked when the number of associated stations changes.
+         * Invoked when the associated stations changes.
          */
-        void onNumAssociatedStationsChanged(int numStations);
+        void onConnectedClientsChanged(List<NativeWifiClient> clients);
 
         /**
          * Invoked when the channel switch event happens.

@@ -74,6 +74,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import javax.crypto.Mac;
+
 /**
  * This class provides the APIs to manage configured Wi-Fi networks.
  * It deals with the following:
@@ -227,7 +229,14 @@ public class WifiConfigManager {
     private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 1; // 0 = disabled:
 
     @VisibleForTesting
-    protected static final long AGGRESSIVE_MAC_REFRESH_MS = 10 * 60 * 1000; //10 minutes
+    protected static final long AGGRESSIVE_MAC_REFRESH_MS_MIN = 30 * 60 * 1000; // 30 minutes
+    @VisibleForTesting
+    protected static final long AGGRESSIVE_MAC_REFRESH_MS_MAX = 24 * 60 * 60 * 1000; // 24 hours
+    @VisibleForTesting
+    protected static final long AGGRESSIVE_MAC_REFRESH_MS_DEFAULT = 3 * 60 * 60 * 1000; // 3 hours
+
+    private static final MacAddress DEFAULT_MAC_ADDRESS =
+            MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
 
     /**
      * Expiration timeout for deleted ephemeral ssids. (1 day)
@@ -273,6 +282,7 @@ public class WifiConfigManager {
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
     private final WifiInjector mWifiInjector;
     private boolean mConnectedMacRandomzationSupported;
+    private final Mac mMac;
 
     /**
      * Local log used for debugging any WifiConfigManager issues.
@@ -462,6 +472,11 @@ public class WifiConfigManager {
         } catch (PackageManager.NameNotFoundException e) {
             Log.e(TAG, "Unable to resolve SystemUI's UID.");
         }
+        mMac = WifiConfigurationUtil.obtainMacRandHashFunction(Process.WIFI_UID);
+        if (mMac == null) {
+            Log.wtf(TAG, "Failed to obtain secret for MAC randomization."
+                    + " All randomized MAC addresses are lost!");
+        }
     }
 
     /**
@@ -487,6 +502,9 @@ public class WifiConfigManager {
      * @return
      */
     private boolean shouldUseAggressiveRandomization(WifiConfiguration config) {
+        if (config.getIpConfiguration().ipAssignment == IpConfiguration.IpAssignment.STATIC) {
+            return false;
+        }
         if (mDeviceConfigFacade.isAggressiveMacRandomizationSsidWhitelistEnabled()) {
             return isSsidOptInForAggressiveRandomization(config.SSID);
         }
@@ -520,39 +538,93 @@ public class WifiConfigManager {
         mAggressiveMacRandomizationBlacklist.addAll(blacklist);
     }
 
-    /**
-     * Read the persistent MAC address from internal database and set it as the randomized
-     * MAC address.
-     * @param config the WifiConfiguration to make the update
-     * @return the persistent MacAddress
-     */
-    private MacAddress setRandomizedMacToPersistentMac(WifiConfiguration config) {
-        String persistentMac = mRandomizedMacAddressMapping.get(
-                config.getSsidAndSecurityTypeString());
-        if (persistentMac.equals(config.getRandomizedMacAddress().toString())) {
-            return config.getRandomizedMacAddress();
-        }
-        WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
-        internalConfig.setRandomizedMacAddress(MacAddress.fromString(persistentMac));
-        internalConfig.randomizedMacLastModifiedTimeMs = mClock.getWallClockMillis();
-        return internalConfig.getRandomizedMacAddress();
+    @VisibleForTesting
+    protected int getRandomizedMacAddressMappingSize() {
+        return mRandomizedMacAddressMapping.size();
     }
 
     /**
-     * Re-randomizes the randomized MAC address if needed.
+     * The persistent randomized MAC address is locally generated for each SSID and does not
+     * change until factory reset of the device. In the initial Q release the per-SSID randomized
+     * MAC is saved on the device, but in an update the storing of randomized MAC is removed.
+     * Instead, the randomized MAC is calculated directly from the SSID and a on device secret.
+     * For backward compatibility, this method first checks the device storage for saved
+     * randomized MAC. If it is not found or the saved MAC is invalid then it will calculate the
+     * randomized MAC directly.
+     *
+     * In the future as devices launched on Q no longer get supported, this method should get
+     * simplified to return the calculated MAC address directly.
+     * @param config the WifiConfiguration to obtain MAC address for.
+     * @return persistent MAC address for this WifiConfiguration
+     */
+    private MacAddress getPersistentMacAddress(WifiConfiguration config) {
+        // mRandomizedMacAddressMapping had been the location to save randomized MAC addresses.
+        String persistentMacString = mRandomizedMacAddressMapping.get(
+                config.getSsidAndSecurityTypeString());
+        // Use the MAC address stored in the storage if it exists and is valid. Otherwise
+        // use the MAC address calculated from a hash function as the persistent MAC.
+        if (persistentMacString != null) {
+            try {
+                return MacAddress.fromString(persistentMacString);
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Error creating randomized MAC address from stored value.");
+                mRandomizedMacAddressMapping.remove(config.getSsidAndSecurityTypeString());
+            }
+        }
+        return WifiConfigurationUtil.calculatePersistentMacForConfiguration(config, mMac);
+    }
+
+    /**
+     * Sets the randomized MAC expiration time based on the DHCP lease duration.
+     * This should be called every time DHCP lease information is obtained.
+     */
+    public void updateRandomizedMacExpireTime(WifiConfiguration config, long dhcpLeaseSeconds) {
+        WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
+        if (internalConfig == null) {
+            return;
+        }
+        long expireDurationMs = (dhcpLeaseSeconds & 0xffffffffL) * 1000;
+        expireDurationMs = Math.max(AGGRESSIVE_MAC_REFRESH_MS_MIN, expireDurationMs);
+        expireDurationMs = Math.min(AGGRESSIVE_MAC_REFRESH_MS_MAX, expireDurationMs);
+        internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
+                + expireDurationMs;
+    }
+
+    /**
+     * Obtain the persistent MAC address by first reading from an internal database. If non exists
+     * then calculate the persistent MAC using HMAC-SHA256.
+     * Finally set the randomized MAC of the configuration to the randomized MAC obtained.
+     * @param config the WifiConfiguration to make the update
+     * @return the persistent MacAddress or null if the operation is unsuccessful
+     */
+    private MacAddress setRandomizedMacToPersistentMac(WifiConfiguration config) {
+        MacAddress persistentMac = getPersistentMacAddress(config);
+        if (persistentMac == null || persistentMac.equals(config.getRandomizedMacAddress())) {
+            return persistentMac;
+        }
+        WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
+        internalConfig.setRandomizedMacAddress(persistentMac);
+        internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
+                + AGGRESSIVE_MAC_REFRESH_MS_DEFAULT;
+        return persistentMac;
+    }
+
+    /**
+     * This method is called before connecting to a network that has "aggressive randomization"
+     * enabled, and will re-randomize the MAC address if needed.
      * @param config the WifiConfiguration to make the update
      * @return the updated MacAddress
      */
     private MacAddress updateRandomizedMacIfNeeded(WifiConfiguration config) {
-        boolean shouldUpdateMac = config.randomizedMacLastModifiedTimeMs
-                + AGGRESSIVE_MAC_REFRESH_MS
+        boolean shouldUpdateMac = config.randomizedMacExpirationTimeMs
                 < mClock.getWallClockMillis();
         if (!shouldUpdateMac) {
             return config.getRandomizedMacAddress();
         }
         WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
         internalConfig.setRandomizedMacAddress(MacAddress.createRandomUnicastAddress());
-        internalConfig.randomizedMacLastModifiedTimeMs = mClock.getWallClockMillis();
+        internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
+                + AGGRESSIVE_MAC_REFRESH_MS_DEFAULT;
         return internalConfig.getRandomizedMacAddress();
     }
 
@@ -564,13 +636,9 @@ public class WifiConfigManager {
      * @return MacAddress
      */
     public MacAddress getRandomizedMacAndUpdateIfNeeded(WifiConfiguration config) {
-        MacAddress mac;
-        if (!config.getNetworkSelectionStatus().getHasEverConnected()
-                || !shouldUseAggressiveRandomization(config)) {
-            mac = setRandomizedMacToPersistentMac(config);
-        } else {
-            mac = updateRandomizedMacIfNeeded(config);
-        }
+        MacAddress mac = shouldUseAggressiveRandomization(config)
+                ? updateRandomizedMacIfNeeded(config)
+                : setRandomizedMacToPersistentMac(config);
         return mac;
     }
 
@@ -631,8 +699,7 @@ public class WifiConfigManager {
      * @param configuration WifiConfiguration to hide the MAC address
      */
     private void maskRandomizedMacAddressInWifiConfiguration(WifiConfiguration configuration) {
-        MacAddress defaultMac = MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
-        configuration.setRandomizedMacAddress(defaultMac);
+        configuration.setRandomizedMacAddress(DEFAULT_MAC_ADDRESS);
     }
 
     /**
@@ -1179,36 +1246,8 @@ public class WifiConfigManager {
                 packageName != null ? packageName : mContext.getPackageManager().getNameForUid(uid);
         newInternalConfig.creationTime = newInternalConfig.updateTime =
                 createDebugTimeStampString(mClock.getWallClockMillis());
-        updateRandomizedMacAddress(newInternalConfig);
-
+        initRandomizedMacForInternalConfig(newInternalConfig);
         return newInternalConfig;
-    }
-
-    /**
-     * Sets the randomized address for the given configuration from stored map if it exist.
-     * Otherwise generates a new randomized address and save to the stored map.
-     * @param config
-     */
-    private void updateRandomizedMacAddress(WifiConfiguration config) {
-        // Update randomized MAC address according to stored map
-        final String key = config.getSsidAndSecurityTypeString();
-        // If the key is not found in the current store, then it means this network has never been
-        // seen before. So add it to store.
-        if (!mRandomizedMacAddressMapping.containsKey(key)) {
-            MacAddress mac = MacAddress.createRandomUnicastAddress();
-            config.setRandomizedMacAddress(mac);
-            mRandomizedMacAddressMapping.put(key, mac.toString());
-        } else { // Otherwise read from the store and set the WifiConfiguration
-            try {
-                config.setRandomizedMacAddress(
-                        MacAddress.fromString(mRandomizedMacAddressMapping.get(key)));
-            } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Error creating randomized MAC address from stored value.");
-                MacAddress mac = MacAddress.createRandomUnicastAddress();
-                config.setRandomizedMacAddress(mac);
-                mRandomizedMacAddressMapping.put(key, mac.toString());
-            }
-        }
     }
 
     /**
@@ -1943,6 +1982,30 @@ public class WifiConfigManager {
                 networkId, NetworkSelectionStatus.DISABLED_BY_WIFI_MANAGER)) {
             return false;
         }
+        saveToStore(true);
+        return true;
+    }
+
+    /**
+     * Changes the user's choice to allow auto-join using the
+     * {@link WifiManager#allowAutojoin(int, boolean)} API.
+     *
+     * @param networkId network ID of the network that needs the update.
+     * @param choice the choice to allow auto-join or not
+     * @return true if it succeeds, false otherwise
+     */
+    public boolean allowAutojoin(int networkId, boolean choice) {
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Setting allowAutojoin to " + choice + " for netId " + networkId);
+        }
+        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
+        if (config == null) {
+            Log.e(TAG, "allowAutojoin: Supplied networkId " + networkId
+                    + " has no matching config");
+            return false;
+        }
+        config.allowAutojoin = choice;
+        sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_CONFIG_CHANGE);
         saveToStore(true);
         return true;
     }
@@ -3186,17 +3249,31 @@ public class WifiConfigManager {
     }
 
     /**
-     * Generate randomized MAC addresses for configured networks and persist mapping to storage
-     * if such a mapping doesn't already exist. (This is needed to generate persistent randomized
-     * MAC address for existing networks when a device updates to Q+ for the first time)
+     * Initializes the randomized MAC address for an internal WifiConfiguration depending on
+     * whether it should use aggressive randomization.
+     * @param config
+     */
+    private void initRandomizedMacForInternalConfig(WifiConfiguration internalConfig) {
+        MacAddress randomizedMac = shouldUseAggressiveRandomization(internalConfig)
+                ? MacAddress.createRandomUnicastAddress()
+                : getPersistentMacAddress(internalConfig);
+        if (randomizedMac != null) {
+            internalConfig.setRandomizedMacAddress(randomizedMac);
+            internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
+                    + AGGRESSIVE_MAC_REFRESH_MS_DEFAULT;
+        }
+    }
+
+    /**
+     * Assign randomized MAC addresses for configured networks.
+     * This is needed to generate persistent randomized MAC address for existing networks when
+     * a device updates to Q+ for the first time since we are not calling addOrUpdateNetwork when
+     * we load configuration at boot.
      */
     private void generateRandomizedMacAddresses() {
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            String key = config.getSsidAndSecurityTypeString();
-            if (!mRandomizedMacAddressMapping.containsKey(key)) {
-                MacAddress mac = MacAddress.createRandomUnicastAddress();
-                config.setRandomizedMacAddress(mac);
-                mRandomizedMacAddressMapping.put(key, mac.toString());
+            if (DEFAULT_MAC_ADDRESS.equals(config.getRandomizedMacAddress())) {
+                initRandomizedMacForInternalConfig(config);
             }
         }
     }

@@ -18,6 +18,7 @@ package com.android.server.wifi.scanner;
 
 import static android.content.pm.PackageManager.PERMISSION_DENIED;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+import static android.net.wifi.WifiScanner.GET_AVAILABLE_CHANNELS_EXTRA;
 
 import static com.android.server.wifi.ScanTestUtil.NativeScanSettingsBuilder;
 import static com.android.server.wifi.ScanTestUtil.assertNativePnoSettingsEquals;
@@ -61,6 +62,7 @@ import android.content.Context;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiStackClient;
+import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
@@ -73,7 +75,6 @@ import android.util.Pair;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.internal.app.IBatteryStats;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.test.BidirectionalAsyncChannel;
@@ -131,7 +132,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     @Mock WifiScannerImpl mWifiScannerImpl0;
     @Mock WifiScannerImpl mWifiScannerImpl1;
     @Mock WifiScannerImpl.WifiScannerImplFactory mWifiScannerImplFactory;
-    @Mock IBatteryStats mBatteryStats;
+    @Mock BatteryStatsManager mBatteryStats;
     @Mock WifiInjector mWifiInjector;
     @Mock FrameworkFacade mFrameworkFacade;
     @Mock Clock mClock;
@@ -3489,5 +3490,52 @@ public class WifiScanningServiceTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         verifyPnoNetworkFoundReceived(order, handler, requestId, scanResults.getRawScanResults());
+    }
+
+    /**
+     * Tests that {@link WifiScanningServiceImpl#getAvailableChannels(int, String)} throws a
+     * {@link SecurityException} if the caller doesn't hold the required permissions.
+     */
+    @Test(expected = SecurityException.class)
+    public void getAvailableChannels_noPermission_throwsException() throws Exception {
+        startServiceAndLoadDriver();
+
+        // no MAINLINE_WIFI_STACK permission
+        doThrow(new SecurityException()).when(mContext).enforcePermission(
+                eq(WifiStackClient.PERMISSION_MAINLINE_WIFI_STACK), anyInt(),
+                eq(Binder.getCallingUid()), any());
+
+        // Location permission or mode check fail.
+        doThrow(new SecurityException())
+                .when(mWifiPermissionsUtil).enforceCanAccessScanResultsForWifiScanner(
+                        TEST_PACKAGE_NAME, Binder.getCallingUid(), false, false);
+
+        mWifiScanningServiceImpl.getAvailableChannels(WifiScanner.WIFI_BAND_24_GHZ,
+                TEST_PACKAGE_NAME);
+    }
+
+    /**
+     * Tests that {@link WifiScanningServiceImpl#getAvailableChannels(int, String)} returns
+     * the expected result if the caller does hold the required permissions.
+     */
+    @Test
+    public void getAvailableChannels_hasPermission_returnsSuccessfully() throws Exception {
+        startServiceAndLoadDriver();
+
+        // has MAINLINE_WIFI_STACK permission
+        doNothing().when(mContext).enforcePermission(
+                eq(WifiStackClient.PERMISSION_MAINLINE_WIFI_STACK), anyInt(),
+                eq(Binder.getCallingUid()), any());
+
+        // has access scan results permission
+        doNothing().when(mWifiPermissionsUtil).enforceCanAccessScanResultsForWifiScanner(
+                TEST_PACKAGE_NAME, Binder.getCallingUid(), false, false);
+
+        Bundle bundle = mWifiScanningServiceImpl.getAvailableChannels(
+                WifiScanner.WIFI_BAND_24_GHZ, TEST_PACKAGE_NAME);
+        List<Integer> actual = bundle.getIntegerArrayList(GET_AVAILABLE_CHANNELS_EXTRA);
+
+        List<Integer> expected = Arrays.asList(2400, 2450);
+        assertEquals(expected, actual);
     }
 }
