@@ -17,7 +17,7 @@
  */
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="com.android.server.wifistack.inprocess"
+          package="com.android.wifi.inprocess"
           coreApp="true"
           android:sharedUserId="android.uid.system"
           android:versionCode="220000000"
@@ -28,14 +28,19 @@
     <application
         android:persistent="true"
         android:directBootAware="true"
+        android:process="system"
         android:label="@string/wifiAppLabel">
         <service
             android:name="com.android.server.wifi.WifiStackService"
-            android:directBootAware="true"
-            android:process="system">
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.net.wifi.IWifiStackConnector.InProcess"/>
             </intent-filter>
         </service>
+        <receiver android:name="com.android.server.wifi.BootCompleteReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

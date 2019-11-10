@@ -16,9 +16,6 @@
 
 package com.android.server.wifi;
 
-import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_PERMANENT;
-import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY;
-
 import static com.android.internal.util.Preconditions.checkNotNull;
 import static com.android.server.wifi.ClientModeImpl.WIFI_WORK_SOURCE;
 
@@ -564,23 +561,13 @@ public class WifiConnectivityManager {
         }
         @Override
         public void onNetworkUpdated(WifiConfiguration config) {
-            // User might have changed meteredOverride, so update capabilties
-            mStateMachine.updateCapabilities();
             updatePnoScan();
         }
         @Override
-        public void onNetworkTemporarilyDisabled(WifiConfiguration config, int disableReason) {
-            if (disableReason == DISABLED_NO_INTERNET_TEMPORARY) return;
-            mConnectivityHelper.removeNetworkIfCurrent(config.networkId);
-        }
+        public void onNetworkTemporarilyDisabled(WifiConfiguration config, int disableReason) { }
+
         @Override
         public void onNetworkPermanentlyDisabled(WifiConfiguration config, int disableReason) {
-            // For DISABLED_NO_INTERNET_PERMANENT we do not need to remove the network
-            // because supplicant won't be trying to reconnect. If this is due to a
-            // preventAutomaticReconnect request from ConnectivityService, that service
-            // will disconnect as appropriate.
-            if (disableReason == DISABLED_NO_INTERNET_PERMANENT) return;
-            mConnectivityHelper.removeNetworkIfCurrent(config.networkId);
             updatePnoScan();
         }
         private void updatePnoScan() {
@@ -654,7 +641,7 @@ public class WifiConnectivityManager {
                 + " initialScoreMax " + initialScoreMax());
 
         // Listen to WifiConfigManager network update events
-        mConfigManager.setOnNetworkUpdateListener(new OnNetworkUpdateListener());
+        mConfigManager.addOnNetworkUpdateListener(new OnNetworkUpdateListener());
     }
 
     /** Returns maximum PNO score, before any awards/bonuses. */
@@ -1414,8 +1401,12 @@ public class WifiConnectivityManager {
         }
 
         int maxBlacklistSize = mConnectivityHelper.getMaxNumBlacklistBssid();
-        if (maxBlacklistSize <= 0) {
+        if (maxBlacklistSize < 0) {
             Log.wtf(TAG, "Invalid max BSSID blacklist size:  " + maxBlacklistSize);
+            return;
+        } else if (maxBlacklistSize == 0) {
+            Log.d(TAG, "Skip setting firmware roaming configuration" +
+                    " since max BSSID blacklist size is zero");
             return;
         }
 

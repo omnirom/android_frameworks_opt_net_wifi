@@ -29,6 +29,7 @@ import android.net.TrafficStats;
 import android.net.apf.ApfCapabilities;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiScanner;
 import android.os.Handler;
 import android.os.INetworkManagementService;
@@ -1326,6 +1327,7 @@ public class WifiNative {
             }
             iface.type = Iface.IFACE_TYPE_STA_FOR_SCAN;
             stopSupplicantIfNecessary();
+            iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             Log.i(TAG, "Successfully switched to scan mode on iface=" + iface);
             return true;
         }
@@ -1365,6 +1367,7 @@ public class WifiNative {
                 return false;
             }
             iface.type = Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY;
+            iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             Log.i(TAG, "Successfully switched to connectivity mode on iface=" + iface);
             return true;
         }
@@ -2598,14 +2601,13 @@ public class WifiNative {
         return mSupplicantStaIfaceHal.getCurrentNetworkWpsNfcConfigurationToken(ifaceName);
     }
 
-    /** Remove the request |networkId| from supplicant if it's the current network,
-     * if the current configured network matches |networkId|.
+    /**
+     * Clean HAL cached data for |networkId|.
      *
-     * @param ifaceName Name of the interface.
      * @param networkId network id of the network to be removed from supplicant.
      */
-    public void removeNetworkIfCurrent(@NonNull String ifaceName, int networkId) {
-        mSupplicantStaIfaceHal.removeNetworkIfCurrent(ifaceName, networkId);
+    public void removeNetworkCachedData(int networkId) {
+        mSupplicantStaIfaceHal.removeNetworkCachedData(networkId);
     }
 
     /*
@@ -3028,6 +3030,16 @@ public class WifiNative {
     private long getSupportedFeatureSetInternal(@NonNull String ifaceName) {
         return mSupplicantStaIfaceHal.getAdvancedKeyMgmtCapabilities(ifaceName)
                 | mWifiVendorHal.getSupportedFeatureSet(ifaceName);
+    }
+
+    /**
+     * Get the connection Wifi technology
+     *
+     * @param ifaceName Name of the interface.
+     * @return Wifi technology for connection on this interface
+     */
+    public @WifiInfo.WifiTechnology int getWifiTechnology(@NonNull String ifaceName) {
+        return mSupplicantStaIfaceHal.getWifiTechnology(ifaceName);
     }
 
     /**

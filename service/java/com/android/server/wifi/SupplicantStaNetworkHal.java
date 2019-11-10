@@ -24,7 +24,6 @@ import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiEnterpriseConfig.Ocsp;
-import android.os.HidlSupport.Mutable;
 import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Log;
@@ -33,6 +32,7 @@ import android.util.MutableBoolean;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.ArrayUtils;
+import com.android.server.wifi.util.GeneralUtil.Mutable;
 import com.android.server.wifi.util.NativeUtil;
 
 import org.json.JSONException;
@@ -359,19 +359,11 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, config.SSID + ": failed to set hiddenSSID: " + config.hiddenSSID);
                 return false;
             }
-            // The logic below is skipping WPA2-Enterprise explicit setting of PMF to disabled
-            // in order to allow connection to networks with PMF required. Skipping means that
-            // wpa_supplicant will use the global setting (optional/capable).
-            // TODO(b/130755779): A permanent fix should convert requirePMF to a tri-state variablbe
-            boolean wpa2EnterpriseSkipPmf = !config.requirePMF
-                    && (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP)
-                    || config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X));
+
             /** RequirePMF */
-            if (!wpa2EnterpriseSkipPmf) {
-                if (!setRequirePmf(config.requirePMF)) {
-                    Log.e(TAG, config.SSID + ": failed to set requirePMF: " + config.requirePMF);
-                    return false;
-                }
+            if (!setRequirePmf(config.requirePMF)) {
+                Log.e(TAG, config.SSID + ": failed to set requirePMF: " + config.requirePMF);
+                return false;
             }
             /** Key Management Scheme */
             if (config.allowedKeyManagement.cardinality() != 0) {
@@ -1683,6 +1675,9 @@ public class SupplicantStaNetworkHal {
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
+                return false;
+            } catch (ArrayIndexOutOfBoundsException e) {
+                Log.e(TAG, "ISupplicantStaNetwork." + methodStr + " failed: " + e);
                 return false;
             }
         }
@@ -3316,6 +3311,32 @@ public class SupplicantStaNetworkHal {
                         }
                     });
                     return statusOk.value;
+                } else {
+                    Log.e(TAG, "Cannot get ISupplicantStaNetwork V1.3");
+                    return false;
+                }
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+
+    /** See ISupplicantStaNetwork.hal for documentation */
+    public boolean setPmkCache(ArrayList<Byte> serializedEntry) {
+        synchronized (mLock) {
+            final String methodStr = "setPmkCache";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+
+            try {
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV13;
+
+                iSupplicantStaNetworkV13 = getV1_3StaNetwork();
+                if (iSupplicantStaNetworkV13 != null) {
+                    SupplicantStatus status = iSupplicantStaNetworkV13
+                            .setPmkCache(serializedEntry);
+                    return checkStatusAndLogFailure(status, methodStr);
                 } else {
                     Log.e(TAG, "Cannot get ISupplicantStaNetwork V1.3");
                     return false;

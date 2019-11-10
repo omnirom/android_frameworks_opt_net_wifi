@@ -17,7 +17,7 @@
  */
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="com.android.server.wifistack"
+          package="com.android.wifi"
           coreApp="true"
           android:sharedUserId="android.uid.networkstack"
           android:versionCode="220000000"
@@ -29,7 +29,9 @@
          running in the system server process does not need any permission, and having privileged
          permissions added would cause crashes on startup unless they are also added to the
          privileged permissions whitelist for that package. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.AUTHENTICATE_ACCOUNTS" />
@@ -41,7 +43,7 @@
     <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.DUMP" />
     <uses-permission android:name="android.permission.GET_ACCOUNTS" />
-    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS" />
     <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.LOCAL_MAC_ADDRESS" />
@@ -66,13 +68,10 @@
     <!-- Signature permission defined for wifi module-->
     <uses-permission android:name="android.permission.MAINLINE_WIFI_STACK" />
 
-    <!-- TODO(b/135691051): Need to move to network stack process.
-         "android:process="com.google.android.networkstack"
-         This is not possible currently because hidden API access is denied when run on network
-         stack process -->
     <application
         android:persistent="true"
         android:directBootAware="true"
+        android:process="com.android.networkstack.process"
         android:label="@string/wifiAppLabel">
         <service
             android:name="com.android.server.wifi.WifiStackService"
@@ -81,5 +80,10 @@
                 <action android:name="android.net.wifi.IWifiStackConnector"/>
             </intent-filter>
         </service>
+        <receiver android:name="com.android.server.wifi.BootCompleteReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

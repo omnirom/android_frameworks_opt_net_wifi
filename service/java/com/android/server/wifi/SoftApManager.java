@@ -24,6 +24,7 @@ import android.annotation.NonNull;
 import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
+import android.net.MacAddress;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
@@ -74,7 +75,8 @@ public class SoftApManager implements ActiveModeManager {
 
     private final SoftApStateMachine mStateMachine;
 
-    private final WifiManager.SoftApCallback mCallback;
+    private final Listener mModeListener;
+    private final WifiManager.SoftApCallback mSoftApCallback;
 
     private String mApInterfaceName;
     private String mDataInterfaceName;
@@ -146,6 +148,7 @@ public class SoftApManager implements ActiveModeManager {
                          @NonNull FrameworkFacade framework,
                          @NonNull WifiNative wifiNative,
                          String countryCode,
+                         @NonNull Listener listener,
                          @NonNull WifiManager.SoftApCallback callback,
                          @NonNull WifiApConfigStore wifiApConfigStore,
                          @NonNull SoftApModeConfiguration apConfig,
@@ -156,7 +159,8 @@ public class SoftApManager implements ActiveModeManager {
         mFrameworkFacade = framework;
         mWifiNative = wifiNative;
         mCountryCode = countryCode;
-        mCallback = callback;
+        mModeListener = listener;
+        mSoftApCallback = callback;
         mWifiApConfigStore = wifiApConfigStore;
         mApConfig = apConfig;
         if (mApConfig.getWifiConfiguration() == null) {
@@ -222,6 +226,7 @@ public class SoftApManager implements ActiveModeManager {
         pw.println("mReportedFrequency: " + mReportedFrequency);
         pw.println("mReportedBandwidth: " + mReportedBandwidth);
         pw.println("mStartTimestamp: " + mStartTimestamp);
+        mStateMachine.dump(fd, pw, args);
     }
 
     private String getCurrentStateName() {
@@ -241,7 +246,7 @@ public class SoftApManager implements ActiveModeManager {
      * @param reason Failure reason if the new AP state is in failure state
      */
     private void updateApState(int newState, int currentState, int reason) {
-        mCallback.onStateChanged(newState, reason);
+        mSoftApCallback.onStateChanged(newState, reason);
 
         //send the AP state change broadcast
         final Intent intent = new Intent(WifiManager.WIFI_AP_STATE_CHANGED_ACTION);
@@ -259,6 +264,33 @@ public class SoftApManager implements ActiveModeManager {
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mDataInterfaceName);
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_MODE, mApConfig.getTargetMode());
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
+    private int setMacAddress() {
+        boolean randomize = mContext.getResources().getBoolean(
+                R.bool.config_wifi_ap_mac_randomization_supported);
+        if (!randomize) {
+            MacAddress mac = mWifiNative.getFactoryMacAddress(mApInterfaceName);
+            if (mac == null) {
+                Log.e(TAG, "failed to get factory MAC address");
+                return ERROR_GENERIC;
+            }
+
+            // We're (re-)configuring the factory MAC address. Some drivers may not support setting
+            // the MAC at all, so fail soft in this case.
+            if (!mWifiNative.setMacAddress(mApInterfaceName, mac)) {
+                Log.w(TAG, "failed to reset to factory MAC address; continuing with current MAC");
+            }
+            return SUCCESS;
+        }
+
+        // We're configuring a random MAC address. In this case, driver support is mandatory.
+        MacAddress mac = MacAddress.createRandomUnicastAddress();
+        if (!mWifiNative.setMacAddress(mApInterfaceName, mac)) {
+            Log.e(TAG, "failed to set random MAC address");
+            return ERROR_GENERIC;
+        }
+        return SUCCESS;
     }
 
     private int setCountryCode() {
@@ -301,7 +333,12 @@ public class SoftApManager implements ActiveModeManager {
         Log.d(TAG, "band " + config.apBand + " iface "
                 + mApInterfaceName + " country " + mCountryCode);
 
-        int result = setCountryCode();
+        int result = setMacAddress();
+        if (result != SUCCESS) {
+            return result;
+        }
+
+        result = setCountryCode();
         if (result != SUCCESS) {
             return result;
         }
@@ -572,6 +609,7 @@ public class SoftApManager implements ActiveModeManager {
                                     WifiManager.SAP_START_FAILURE_GENERAL);
                             mWifiMetrics.incrementSoftApStartResult(
                                     false, WifiManager.SAP_START_FAILURE_GENERAL);
+                            mModeListener.onStartFailure();
                             break;
                         }
                         mDataInterfaceName = mWifiNative.getFstDataInterfaceName();
@@ -591,6 +629,7 @@ public class SoftApManager implements ActiveModeManager {
                                           failureReason);
                             stopSoftAp();
                             mWifiMetrics.incrementSoftApStartResult(false, failureReason);
+                            mModeListener.onStartFailure();
                             break;
                         }
                         transitionTo(mStartedState);
@@ -677,8 +716,8 @@ public class SoftApManager implements ActiveModeManager {
                 mNumAssociatedStations = numStations;
                 Log.d(TAG, "Number of associated stations changed: " + mNumAssociatedStations);
 
-                if (mCallback != null) {
-                    mCallback.onNumClientsChanged(mNumAssociatedStations);
+                if (mSoftApCallback != null) {
+                    mSoftApCallback.onNumClientsChanged(mNumAssociatedStations);
                 } else {
                     Log.e(TAG, "SoftApCallback is null. Dropping NumClientsChanged event.");
                 }
@@ -699,8 +738,8 @@ public class SoftApManager implements ActiveModeManager {
             private void setConnectedStations(String Macaddr) {
 
                 mQCNumAssociatedStations++;
-                if (mCallback != null) {
-                    mCallback.onStaConnected(Macaddr,mQCNumAssociatedStations);
+                if (mSoftApCallback != null) {
+                    mSoftApCallback.onStaConnected(Macaddr,mQCNumAssociatedStations);
                 } else {
                     Log.e(TAG, "SoftApCallback is null. Dropping onStaConnected event.");
                 }
@@ -716,8 +755,8 @@ public class SoftApManager implements ActiveModeManager {
 
                 if (mQCNumAssociatedStations > 0)
                      mQCNumAssociatedStations--;
-                if (mCallback != null) {
-                    mCallback.onStaDisconnected(Macaddr, mQCNumAssociatedStations);
+                if (mSoftApCallback != null) {
+                    mSoftApCallback.onStaDisconnected(Macaddr, mQCNumAssociatedStations);
                 } else {
                     Log.e(TAG, "SoftApCallback is null. Dropping onStaDisconnected event.");
                 }
@@ -734,10 +773,11 @@ public class SoftApManager implements ActiveModeManager {
                     Log.d(TAG, "SoftAp is ready for use");
                     updateApState(WifiManager.WIFI_AP_STATE_ENABLED,
                             WifiManager.WIFI_AP_STATE_ENABLING, 0);
+                    mModeListener.onStarted();
                     mWifiMetrics.incrementSoftApStartResult(true, 0);
-                    if (mCallback != null) {
-                        mCallback.onNumClientsChanged(mNumAssociatedStations);
-                        mCallback.onStaConnected("", mQCNumAssociatedStations);
+                    if (mSoftApCallback != null) {
+                        mSoftApCallback.onNumClientsChanged(mNumAssociatedStations);
+                        mSoftApCallback.onStaConnected("", mQCNumAssociatedStations);
                     }
                 } else {
                     // the interface was up, but goes down
@@ -797,6 +837,7 @@ public class SoftApManager implements ActiveModeManager {
                 mIfaceIsUp = false;
                 mIfaceIsDestroyed = false;
                 mStateMachine.quitNow();
+                mModeListener.onStopped();
             }
 
             private void updateUserBandPreferenceViolationMetricsIfNeeded() {

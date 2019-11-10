@@ -19,8 +19,6 @@ package com.android.server.wifi;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
-import android.app.admin.DeviceAdminInfo;
-import android.app.admin.DevicePolicyManagerInternal;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -279,8 +277,7 @@ public class WifiConfigManager {
     /**
      * Local log used for debugging any WifiConfigManager issues.
      */
-    private final LocalLog mLocalLog =
-            new LocalLog(ActivityManager.isLowRamDeviceStatic() ? 128 : 256);
+    private final LocalLog mLocalLog;
     /**
      * Map of configured networks with network id as the key.
      */
@@ -309,6 +306,10 @@ public class WifiConfigManager {
     private final Set<String> mAggressiveMacRandomizationWhitelist;
     private final Set<String> mAggressiveMacRandomizationBlacklist;
 
+    /**
+     * Store the network update listeners.
+     */
+    private final List<OnNetworkUpdateListener> mListeners;
     /**
      * Flag to indicate if only networks with the same psk should be linked.
      * TODO(b/30706406): Remove this flag if unused.
@@ -373,13 +374,9 @@ public class WifiConfigManager {
     private final DeletedEphemeralSsidsStoreData mDeletedEphemeralSsidsStoreData;
     private final RandomizedMacStoreData mRandomizedMacStoreData;
 
-    // Store the network update listener.
-    private OnNetworkUpdateListener mListener = null;
 
     private boolean mPnoFrequencyCullingEnabled = false;
     private boolean mPnoRecencySortingEnabled = false;
-
-
 
     /**
      * Create new instance of WifiConfigManager.
@@ -412,6 +409,7 @@ public class WifiConfigManager {
         mScanDetailCaches = new HashMap<>(16, 0.75f);
         mDeletedEphemeralSsidsToTimeMap = new HashMap<>();
         mRandomizedMacAddressMapping = new HashMap<>();
+        mListeners = new ArrayList<>();
 
         // Register store data for network list and deleted ephemeral SSIDs.
         mNetworkListSharedStoreData = networkListSharedStoreData;
@@ -449,12 +447,18 @@ public class WifiConfigManager {
         mConnectedMacRandomzationSupported = mContext.getResources()
                 .getBoolean(R.bool.config_wifi_connected_mac_randomization_supported);
         mDeviceConfigFacade = deviceConfigFacade;
-        mAggressiveMacRandomizationWhitelist = new ArraySet<String>();
-        mAggressiveMacRandomizationBlacklist = new ArraySet<String>();
+        mAggressiveMacRandomizationWhitelist = new ArraySet<>();
+        mAggressiveMacRandomizationBlacklist = new ArraySet<>();
+
+        mLocalLog = new LocalLog(
+                context.getSystemService(ActivityManager.class).isLowRamDevice() ? 128 : 256);
 
         try {
-            mSystemUiUid = mContext.getPackageManager().getPackageUidAsUser(SYSUI_PACKAGE_NAME,
-                    PackageManager.MATCH_SYSTEM_ONLY, UserHandle.USER_SYSTEM);
+            // TODO(b/141890172): do not hardcode SYSUI_PACKAGE_NAME
+            mSystemUiUid = mContext
+                    .createPackageContextAsUser(SYSUI_PACKAGE_NAME, 0, UserHandle.SYSTEM)
+                    .getPackageManager()
+                    .getPackageUid(SYSUI_PACKAGE_NAME, PackageManager.MATCH_SYSTEM_ONLY);
         } catch (PackageManager.NameNotFoundException e) {
             Log.e(TAG, "Unable to resolve SystemUI's UID.");
         }
@@ -614,7 +618,8 @@ public class WifiConfigManager {
                 }
             }
         }
-        if (!TextUtils.isEmpty(configuration.enterpriseConfig.getPassword())) {
+        if (configuration.enterpriseConfig != null && !TextUtils.isEmpty(
+                configuration.enterpriseConfig.getPassword())) {
             configuration.enterpriseConfig.setPassword(PASSWORD_MASK);
         }
     }
@@ -876,8 +881,10 @@ public class WifiConfigManager {
      *
      * @param config         WifiConfiguration object corresponding to the network to be modified.
      * @param uid            UID of the app requesting the modification.
+     * @param packageName    Package name of the app requesting the modification.
      */
-    private boolean canModifyNetwork(WifiConfiguration config, int uid) {
+    private boolean canModifyNetwork(WifiConfiguration config, int uid,
+            @Nullable String packageName) {
         // System internals can always update networks; they're typically only
         // making meteredHint or meteredOverride changes
         if (uid == Process.SYSTEM_UID) {
@@ -901,31 +908,21 @@ public class WifiConfigManager {
             return true;
         }
 
-        final DevicePolicyManagerInternal dpmi =
-                mWifiPermissionsWrapper.getDevicePolicyManagerInternal();
-
-        final boolean isUidDeviceOwner = dpmi != null && dpmi.isActiveAdminWithPolicy(uid,
-                DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
+        final boolean isDeviceOwner = mWifiPermissionsUtil.isDeviceOwner(uid, packageName);
 
         // If |uid| corresponds to the device owner, allow all modifications.
-        if (isUidDeviceOwner) {
+        if (isDeviceOwner) {
             return true;
         }
 
         final boolean isCreator = (config.creatorUid == uid);
 
-        // Check if device has DPM capability. If it has and |dpmi| is still null, then we
-        // treat this case with suspicion and bail out.
-        if (mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_DEVICE_ADMIN)
-                && dpmi == null) {
-            Log.w(TAG, "Error retrieving DPMI service.");
-            return false;
-        }
-
         // WiFi config lockdown related logic. At this point we know uid is NOT a Device Owner.
-        final boolean isConfigEligibleForLockdown = dpmi != null && dpmi.isActiveAdminWithPolicy(
-                config.creatorUid, DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
+        final boolean isConfigEligibleForLockdown =
+                mWifiPermissionsUtil.isDeviceOwner(config.creatorUid, config.creatorName);
         if (!isConfigEligibleForLockdown) {
+            // App that created the network or settings app (i.e user) has permission to
+            // modify the network.
             return isCreator || mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
         }
 
@@ -933,6 +930,7 @@ public class WifiConfigManager {
         final boolean isLockdownFeatureEnabled = Settings.Global.getInt(resolver,
                 Settings.Global.WIFI_DEVICE_OWNER_CONFIGS_LOCKDOWN, 0) != 0;
         return !isLockdownFeatureEnabled
+                // If not locked down, settings app (i.e user) has permission to modify the network.
                 && mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
     }
 
@@ -952,8 +950,10 @@ public class WifiConfigManager {
         if (uid == android.os.Process.SYSTEM_UID || uid == mSystemUiUid) {
             return true;
         } else {
-            return WifiConfigurationUtil.doesUidBelongToAnyProfile(
-                    uid, mUserManager.getProfiles(mCurrentUserId));
+            UserHandle currentUser = UserHandle.of(mCurrentUserId);
+            UserHandle callingUser = UserHandle.getUserHandleForUid(uid);
+            return currentUser.equals(callingUser)
+                    || mUserManager.isSameProfileGroup(currentUser, callingUser);
         }
     }
 
@@ -1277,7 +1277,7 @@ public class WifiConfigManager {
                 return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
             }
             // Check for the app's permission before we let it update this network.
-            if (!canModifyNetwork(existingInternalConfig, uid)) {
+            if (!canModifyNetwork(existingInternalConfig, uid, packageName)) {
                 Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                         + config.configKey());
                 return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
@@ -1289,7 +1289,7 @@ public class WifiConfigManager {
 
         // Only add networks with proxy settings if the user has permission to
         if (WifiConfigurationUtil.hasProxyChanged(existingInternalConfig, newInternalConfig)
-                && !canModifyProxySettings(uid)) {
+                && !canModifyProxySettings(uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to modify proxy Settings "
                     + config.configKey() + ". Must have NETWORK_SETTINGS,"
                     + " or be device or profile owner.");
@@ -1341,6 +1341,8 @@ public class WifiConfigManager {
         }
 
         if (mDeletedEphemeralSsidsToTimeMap.remove(config.SSID) != null) {
+            updateNetworkSelectionStatus(
+                    newInternalConfig, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Removed from ephemeral blacklist: " + config.SSID);
             }
@@ -1393,7 +1395,8 @@ public class WifiConfigManager {
                 // In this case, new connection for this config won't happen because same
                 // network is already registered as an ephemeral network.
                 // Clear the Ephemeral Network to address the situation.
-                removeNetwork(existingConfig.networkId, mSystemUiUid);
+                removeNetwork(
+                        existingConfig.networkId, existingConfig.creatorUid, config.creatorName);
             }
         }
 
@@ -1413,11 +1416,12 @@ public class WifiConfigManager {
             saveToStore(true);
         }
 
-        if (mListener != null) {
+        for (OnNetworkUpdateListener listener : mListeners) {
+            WifiConfiguration configForListener = new WifiConfiguration(newConfig);
             if (result.isNewNetwork()) {
-                mListener.onNetworkAdded(new WifiConfiguration(newConfig));
+                listener.onNetworkAdded(configForListener);
             } else {
-                mListener.onNetworkUpdated(new WifiConfiguration(newConfig));
+                listener.onNetworkUpdated(configForListener);
             }
         }
         return result;
@@ -1474,7 +1478,7 @@ public class WifiConfigManager {
      * @param uid       UID of the app requesting the network deletion.
      * @return true if successful, false otherwise.
      */
-    public boolean removeNetwork(int networkId, int uid) {
+    public boolean removeNetwork(int networkId, int uid, String packageName) {
         if (!doesUidBelongToCurrentUser(uid)) {
             Log.e(TAG, "UID " + uid + " not visible to the current user");
             return false;
@@ -1483,7 +1487,7 @@ public class WifiConfigManager {
         if (config == null) {
             return false;
         }
-        if (!canModifyNetwork(config, uid)) {
+        if (!canModifyNetwork(config, uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to delete configuration "
                     + config.configKey());
             return false;
@@ -1500,7 +1504,10 @@ public class WifiConfigManager {
         if (!config.ephemeral && !config.isPasspoint()) {
             saveToStore(true);
         }
-        if (mListener != null) mListener.onNetworkRemoved(new WifiConfiguration(config));
+        for (OnNetworkUpdateListener listener : mListeners) {
+            WifiConfiguration configForListener = new WifiConfiguration(config);
+            listener.onNetworkRemoved(configForListener);
+        }
         return true;
     }
 
@@ -1537,8 +1544,8 @@ public class WifiConfigManager {
             }
             localLog("Removing network " + config.SSID
                     + ", application \"" + app.packageName + "\" uninstalled"
-                    + " from user " + UserHandle.getUserId(app.uid));
-            if (removeNetwork(config.networkId, mSystemUiUid)) {
+                    + " from user " + UserHandle.getUserHandleForUid(app.uid));
+            if (removeNetwork(config.networkId, config.creatorUid, config.creatorName)) {
                 removedNetworks.add(config.networkId);
             }
         }
@@ -1558,11 +1565,11 @@ public class WifiConfigManager {
         WifiConfiguration[] copiedConfigs =
                 mConfiguredNetworks.valuesForAllUsers().toArray(new WifiConfiguration[0]);
         for (WifiConfiguration config : copiedConfigs) {
-            if (userId != UserHandle.getUserId(config.creatorUid)) {
+            if (userId != UserHandle.getUserHandleForUid(config.creatorUid).getIdentifier()) {
                 continue;
             }
             localLog("Removing network " + config.SSID + ", user " + userId + " removed");
-            if (removeNetwork(config.networkId, mSystemUiUid)) {
+            if (removeNetwork(config.networkId, config.creatorUid, config.creatorName)) {
                 removedNetworks.add(config.networkId);
             }
         }
@@ -1585,11 +1592,11 @@ public class WifiConfigManager {
         for (WifiConfiguration config : copiedConfigs) {
             if (config.isPasspoint()) {
                 Log.d(TAG, "Removing passpoint network config " + config.configKey());
-                removeNetwork(config.networkId, mSystemUiUid);
+                removeNetwork(config.networkId, config.creatorUid, config.creatorName);
                 didRemove = true;
             } else if (config.ephemeral) {
                 Log.d(TAG, "Removing ephemeral network config " + config.configKey());
-                removeNetwork(config.networkId, mSystemUiUid);
+                removeNetwork(config.networkId, config.creatorUid, config.creatorName);
                 didRemove = true;
             }
         }
@@ -1597,20 +1604,31 @@ public class WifiConfigManager {
     }
 
     /**
-     * Removes the passpoint network configuration matched with {@code fqdn} provided.
+     * Removes the suggestion network configuration matched with {@code configKey} provided.
      *
-     * @param fqdn Fully Qualified Domain Name to remove.
+     * @param configKey Config Key for the corresponding network suggestion.
      * @return true if a network was removed, false otherwise.
      */
-    public boolean removePasspointConfiguredNetwork(String fqdn) {
-        WifiConfiguration[] copiedConfigs =
-                mConfiguredNetworks.valuesForAllUsers().toArray(new WifiConfiguration[0]);
-        for (WifiConfiguration config : copiedConfigs) {
-            if (config.isPasspoint() && TextUtils.equals(fqdn, config.FQDN)) {
-                Log.d(TAG, "Removing passpoint network config " + config.configKey());
-                removeNetwork(config.networkId, mSystemUiUid);
-                return true;
-            }
+    public boolean removeSuggestionConfiguredNetwork(@NonNull String configKey) {
+        WifiConfiguration config = getInternalConfiguredNetwork(configKey);
+        if (config != null && config.ephemeral && config.fromWifiNetworkSuggestion) {
+            Log.d(TAG, "Removing suggestion network config " + config.configKey());
+            return removeNetwork(config.networkId, config.creatorUid, config.creatorName);
+        }
+        return false;
+    }
+
+    /**
+     * Removes the passpoint network configuration matched with {@code configKey} provided.
+     *
+     * @param configKey Config Key for the corresponding passpoint.
+     * @return true if a network was removed, false otherwise.
+     */
+    public boolean removePasspointConfiguredNetwork(@NonNull String configKey) {
+        WifiConfiguration config = getInternalConfiguredNetwork(configKey);
+        if (config != null && config.isPasspoint()) {
+            Log.d(TAG, "Removing passpoint network config " + config.configKey());
+            return removeNetwork(config.networkId, config.creatorUid, config.creatorName);
         }
         return false;
     }
@@ -1628,7 +1646,10 @@ public class WifiConfigManager {
 
         // Clear out all the disable reason counters.
         status.clearDisableReasonCounter();
-        if (mListener != null) mListener.onNetworkEnabled(new WifiConfiguration(config));
+        for (OnNetworkUpdateListener listener : mListeners) {
+            WifiConfiguration configForListener = new WifiConfiguration(config);
+            listener.onNetworkEnabled(configForListener);
+        }
     }
 
     /**
@@ -1642,8 +1663,9 @@ public class WifiConfigManager {
         // Only need a valid time filled in for temporarily disabled networks.
         status.setDisableTime(mClock.getElapsedSinceBootMillis());
         status.setNetworkSelectionDisableReason(disableReason);
-        if (mListener != null) {
-            mListener.onNetworkTemporarilyDisabled(new WifiConfiguration(config), disableReason);
+        for (OnNetworkUpdateListener listener : mListeners) {
+            WifiConfiguration configForListener = new WifiConfiguration(config);
+            listener.onNetworkTemporarilyDisabled(configForListener, disableReason);
         }
     }
 
@@ -1658,8 +1680,9 @@ public class WifiConfigManager {
         status.setDisableTime(
                 NetworkSelectionStatus.INVALID_NETWORK_SELECTION_DISABLE_TIMESTAMP);
         status.setNetworkSelectionDisableReason(disableReason);
-        if (mListener != null) {
-            mListener.onNetworkPermanentlyDisabled(new WifiConfiguration(config), disableReason);
+        for (OnNetworkUpdateListener listener : mListeners) {
+            WifiConfiguration configForListener = new WifiConfiguration(config);
+            listener.onNetworkPermanentlyDisabled(configForListener, disableReason);
         }
     }
 
@@ -1855,7 +1878,8 @@ public class WifiConfigManager {
      * @param uid           uid of the app requesting the update.
      * @return true if it succeeds, false otherwise
      */
-    public boolean enableNetwork(int networkId, boolean disableOthers, int uid) {
+    public boolean enableNetwork(int networkId, boolean disableOthers, int uid,
+                                 String packageName) {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Enabling network " + networkId + " (disableOthers " + disableOthers + ")");
         }
@@ -1873,7 +1897,7 @@ public class WifiConfigManager {
         if (disableOthers) {
             setLastSelectedNetwork(networkId);
         }
-        if (!canModifyNetwork(config, uid)) {
+        if (!canModifyNetwork(config, uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                     + config.configKey());
             return false;
@@ -1893,7 +1917,7 @@ public class WifiConfigManager {
      * @param uid       uid of the app requesting the update.
      * @return true if it succeeds, false otherwise
      */
-    public boolean disableNetwork(int networkId, int uid) {
+    public boolean disableNetwork(int networkId, int uid, String packageName) {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Disabling network " + networkId);
         }
@@ -1910,7 +1934,7 @@ public class WifiConfigManager {
         if (networkId == mLastSelectedNetworkId) {
             clearLastSelectedNetwork();
         }
-        if (!canModifyNetwork(config, uid)) {
+        if (!canModifyNetwork(config, uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                     + config.configKey());
             return false;
@@ -2833,6 +2857,16 @@ public class WifiConfigManager {
         return hiddenList;
     }
 
+    private @Nullable WifiConfiguration getInternalEphemeralConfiguredNetwork(
+            @NonNull String ssid) {
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+            if ((config.ephemeral || config.isPasspoint()) && TextUtils.equals(config.SSID, ssid)) {
+                return config;
+            }
+        }
+        return null;
+    }
+
     /**
      * Check if the provided ephemeral network was deleted by the user or not. This call also clears
      * the SSID from the deleted ephemeral network map, if the duration has expired the
@@ -2851,6 +2885,11 @@ public class WifiConfigManager {
         // Clear the ssid from the map if the age > |DELETED_EPHEMERAL_SSID_EXPIRY_MS|.
         if (nowInMs - deletedTimeInMs > DELETED_EPHEMERAL_SSID_EXPIRY_MS) {
             mDeletedEphemeralSsidsToTimeMap.remove(ssid);
+            WifiConfiguration foundConfig = getInternalEphemeralConfiguredNetwork(ssid);
+            if (foundConfig != null) {
+                updateNetworkSelectionStatus(
+                        foundConfig, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
+            }
             return false;
         }
         return true;
@@ -2872,16 +2911,13 @@ public class WifiConfigManager {
         if (ssid == null) {
             return null;
         }
-        WifiConfiguration foundConfig = null;
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if ((config.ephemeral || config.isPasspoint()) && TextUtils.equals(config.SSID, ssid)) {
-                foundConfig = config;
-                break;
-            }
-        }
+        WifiConfiguration foundConfig = getInternalEphemeralConfiguredNetwork(ssid);
         if (foundConfig == null) return null;
         // Store the ssid & the wall clock time at which the network was disabled.
         mDeletedEphemeralSsidsToTimeMap.put(ssid, mClock.getWallClockMillis());
+        // Also, mark the ephemeral permanently blacklisted. Will be taken out of blacklist
+        // when the ssid is taken out of |mDeletedEphemeralSsidsToTimeMap|.
+        updateNetworkSelectionStatus(foundConfig, NetworkSelectionStatus.DISABLED_BY_WIFI_MANAGER);
         Log.d(TAG, "Forget ephemeral SSID " + ssid + " num="
                 + mDeletedEphemeralSsidsToTimeMap.size());
         if (foundConfig.ephemeral) {
@@ -2992,15 +3028,15 @@ public class WifiConfigManager {
             mPendingUnlockStoreRead = true;
             return new HashSet<>();
         }
-        if (mUserManager.isUserUnlockingOrUnlocked(mCurrentUserId)) {
+        if (mUserManager.isUserUnlockingOrUnlocked(UserHandle.of(mCurrentUserId))) {
             saveToStore(true);
         }
         // Remove any private networks of the old user before switching the userId.
-        Set<Integer> removedNetworkIds = clearInternalUserData(mCurrentUserId);
+        Set<Integer> removedNetworkIds = clearInternalDataForCurrentUser();
         mConfiguredNetworks.setNewUser(userId);
         mCurrentUserId = userId;
 
-        if (mUserManager.isUserUnlockingOrUnlocked(mCurrentUserId)) {
+        if (mUserManager.isUserUnlockingOrUnlocked(UserHandle.of(mCurrentUserId))) {
             handleUserUnlockOrSwitch(mCurrentUserId);
         } else {
             // Cannot read data from new user's CE store file before they log-in.
@@ -3048,9 +3084,10 @@ public class WifiConfigManager {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Handling user stop for " + userId);
         }
-        if (userId == mCurrentUserId && mUserManager.isUserUnlockingOrUnlocked(mCurrentUserId)) {
+        if (userId == mCurrentUserId
+                && mUserManager.isUserUnlockingOrUnlocked(UserHandle.of(mCurrentUserId))) {
             saveToStore(true);
-            clearInternalUserData(mCurrentUserId);
+            clearInternalDataForCurrentUser();
         }
     }
 
@@ -3077,17 +3114,15 @@ public class WifiConfigManager {
      *  - Map of scan detail caches.
      *  - List of deleted ephemeral networks.
      *
-     * @param userId The identifier of the current foreground user, before the switch.
      * @return List of network ID's of all the private networks of the old user which will be
      * removed from memory.
      */
-    private Set<Integer> clearInternalUserData(int userId) {
-        localLog("clearInternalUserData: Clearing user internal data for " + userId);
+    private Set<Integer> clearInternalDataForCurrentUser() {
+        localLog("clearInternalUserData: Clearing user internal data for " + mCurrentUserId);
         Set<Integer> removedNetworkIds = new HashSet<>();
         // Remove any private networks of the old user before switching the userId.
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if (!config.shared && WifiConfigurationUtil.doesUidBelongToAnyProfile(
-                    config.creatorUid, mUserManager.getProfiles(userId))) {
+            if (!config.shared && doesUidBelongToCurrentUser(config.creatorUid)) {
                 removedNetworkIds.add(config.networkId);
                 localLog("clearInternalUserData: removed config."
                         + " netId=" + config.networkId
@@ -3299,8 +3334,7 @@ public class WifiConfigManager {
 
             // Migrate the legacy Passpoint configurations owned by the current user to
             // {@link PasspointManager}.
-            if (config.isLegacyPasspointConfig && WifiConfigurationUtil.doesUidBelongToAnyProfile(
-                        config.creatorUid, mUserManager.getProfiles(mCurrentUserId))) {
+            if (config.isLegacyPasspointConfig && doesUidBelongToCurrentUser(config.creatorUid)) {
                 legacyPasspointNetId.add(config.networkId);
                 // Migrate the legacy Passpoint configuration and add it to PasspointManager.
                 if (!PasspointManager.addLegacyPasspointConfig(config)) {
@@ -3317,8 +3351,7 @@ public class WifiConfigManager {
             // because all networks were previously stored in a central file. We cannot
             // write these private networks to the user specific store until the corresponding
             // user logs in.
-            if (config.shared || !WifiConfigurationUtil.doesUidBelongToAnyProfile(
-                    config.creatorUid, mUserManager.getProfiles(mCurrentUserId))) {
+            if (config.shared || !doesUidBelongToCurrentUser(config.creatorUid)) {
                 sharedConfigurations.add(config);
             } else {
                 userConfigurations.add(config);
@@ -3382,19 +3415,15 @@ public class WifiConfigManager {
     /**
      * Returns true if the given uid has permission to add, update or remove proxy settings
      */
-    private boolean canModifyProxySettings(int uid) {
-        final DevicePolicyManagerInternal dpmi =
-                mWifiPermissionsWrapper.getDevicePolicyManagerInternal();
-        final boolean isUidProfileOwner = dpmi != null && dpmi.isActiveAdminWithPolicy(uid,
-                DeviceAdminInfo.USES_POLICY_PROFILE_OWNER);
-        final boolean isUidDeviceOwner = dpmi != null && dpmi.isActiveAdminWithPolicy(uid,
-                DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
+    private boolean canModifyProxySettings(int uid, String packageName) {
+        final boolean isDeviceOwner = mWifiPermissionsUtil.isDeviceOwner(uid, packageName);
+        final boolean isProfileOwner = mWifiPermissionsUtil.isProfileOwner(uid, packageName);
         final boolean hasNetworkSettingsPermission =
                 mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
         final boolean hasNetworkSetupWizardPermission =
                 mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid);
         // If |uid| corresponds to the device owner, allow all modifications.
-        if (isUidDeviceOwner || isUidProfileOwner || hasNetworkSettingsPermission
+        if (isProfileOwner || isDeviceOwner || hasNetworkSettingsPermission
                 || hasNetworkSetupWizardPermission) {
             return true;
         }
@@ -3402,8 +3431,8 @@ public class WifiConfigManager {
             Log.v(TAG, "UID: " + uid + " cannot modify WifiConfiguration proxy settings."
                     + " hasNetworkSettings=" + hasNetworkSettingsPermission
                     + " hasNetworkSetupWizard=" + hasNetworkSetupWizardPermission
-                    + " DeviceOwner=" + isUidDeviceOwner
-                    + " ProfileOwner=" + isUidProfileOwner);
+                    + " DeviceOwner=" + isDeviceOwner
+                    + " ProfileOwner=" + isProfileOwner);
         }
         return false;
     }
@@ -3411,8 +3440,8 @@ public class WifiConfigManager {
     /**
      * Set the network update event listener
      */
-    public void setOnNetworkUpdateListener(OnNetworkUpdateListener listener) {
-        mListener = listener;
+    public void addOnNetworkUpdateListener(OnNetworkUpdateListener listener) {
+        mListeners.add(listener);
     }
 
     /**
