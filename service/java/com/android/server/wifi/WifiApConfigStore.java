@@ -317,7 +317,7 @@ public class WifiApConfigStore {
 
             int authType = in.readInt();
             config.allowedKeyManagement.set(authType);
-            if (authType != KeyMgmt.NONE) {
+            if (authType != KeyMgmt.NONE && authType != KeyMgmt.OWE) {
                 config.preSharedKey = in.readUTF();
             }
         } catch (IOException e) {
@@ -349,7 +349,7 @@ public class WifiApConfigStore {
             out.writeBoolean(config.hiddenSSID);
             int authType = config.getAuthType();
             out.writeInt(authType);
-            if (authType != KeyMgmt.NONE) {
+            if (authType != KeyMgmt.NONE && authType != KeyMgmt.OWE) {
                 out.writeUTF(config.preSharedKey);
             }
         } catch (IOException e) {
