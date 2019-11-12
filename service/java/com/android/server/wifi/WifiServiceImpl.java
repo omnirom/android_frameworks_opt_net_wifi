@@ -290,7 +290,7 @@ public class WifiServiceImpl extends BaseWifiService {
             String action = intent.getAction();
             if (WifiManager.SUPPLICANT_STATE_CHANGED_ACTION.equals(action)) {
                 SupplicantState state = (SupplicantState) intent.getParcelableExtra(WifiManager.EXTRA_NEW_STATE);
-                if (isCurrentStaShareThisAp() && state == SupplicantState.COMPLETED) {
+                if (isCurrentStaShareThisAp() && state == SupplicantState.COMPLETED && !mSoftApExtendingWifi) {
                     restartSoftApIfNeeded();
                 } else if (mSoftApExtendingWifi && state == SupplicantState.DISCONNECTED) {
                     restartSoftApIfNeeded();
@@ -837,7 +837,7 @@ public class WifiServiceImpl extends BaseWifiService {
 
         setDualSapMode(wifiConfig);
 
-        mSoftApExtendingWifi = isCurrentStaShareThisAp();
+        mSoftApExtendingWifi = (!mWifiApConfigStore.getDualSapStatus()) && isCurrentStaShareThisAp();
         if (mSoftApExtendingWifi) {
             startSoftApInRepeaterMode(mode, wifiConfig);
             return true;
