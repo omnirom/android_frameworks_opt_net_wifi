@@ -349,6 +349,7 @@ public class XmlUtil {
         public static final String XML_TAG_RANDOMIZED_MAC_ADDRESS = "RandomizedMacAddress";
         public static final String XML_TAG_MAC_RANDOMIZATION_SETTING = "MacRandomizationSetting";
         public static final String XML_TAG_SAE_PASSWORD_ID_KEY = "SaePasswordId";
+        public static final String XML_TAG_CARRIER_ID = "CarrierId";
         public static final String XML_TAG_SHARE_THIS_AP = "ShareThisAp";
 
         public static final String XML_TAG_DPP_CONNECTOR = "DppConnector";
@@ -486,6 +487,7 @@ public class XmlUtil {
                     configuration.getRandomizedMacAddress().toString());
             XmlUtil.writeNextValue(out, XML_TAG_MAC_RANDOMIZATION_SETTING,
                     configuration.macRandomizationSetting);
+            XmlUtil.writeNextValue(out, XML_TAG_CARRIER_ID, configuration.carrierId);
 
             XmlUtil.writeNextValue(out, XML_TAG_DPP_CONNECTOR, configuration.dppConnector);
             XmlUtil.writeNextValue(out, XML_TAG_DPP_NETACCESSKEY, configuration.dppNetAccessKey);
@@ -691,6 +693,9 @@ public class XmlUtil {
                     case XML_TAG_MAC_RANDOMIZATION_SETTING:
                         configuration.macRandomizationSetting = (int) value;
                         macRandomizationSettingExists = true;
+                        break;
+                    case XML_TAG_CARRIER_ID:
+                        configuration.carrierId = (int) value;
                         break;
                     default:
                         throw new XmlPullParserException(

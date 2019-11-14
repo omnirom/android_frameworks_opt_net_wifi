@@ -108,15 +108,20 @@ java_library {
         "vendor.qti.hardware.wifi.supplicant-V2.0-java",
         "vendor.qti.hardware.wifi.supplicant-V2.1-java",
         "androidx.annotation_annotation",
-	"bouncycastle-unbundled",
-        "wifi_service_proto",
+        "bouncycastle-unbundled",
         "ksoap2",
         "libnanohttpd",
-        "services.core",
         "services.net",
         "services.wifi",
         "libwificond_aidl-java",
+        "wifi_proto_scorecard",
+        "wifi_proto_metrics",
     ],
+}
+
+filegroup {
+    name: "wifi-jarjar-rules",
+    srcs: [ "jarjar-rules-shared.txt"]
 }
 
 java_defaults {
@@ -130,7 +135,7 @@ java_defaults {
     ],
     // Resources already included in wifi-service
     resource_dirs: [],
-    jarjar_rules: "jarjar-rules-shared.txt",
+    jarjar_rules: ":wifi-jarjar-rules",
     optimize: {
         proguard_flags_files: ["proguard.flags"],
     },
