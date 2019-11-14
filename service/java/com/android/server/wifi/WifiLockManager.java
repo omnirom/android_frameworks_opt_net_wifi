@@ -19,6 +19,7 @@ package com.android.server.wifi;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.net.wifi.WifiManager;
+import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.IBinder;
@@ -28,8 +29,6 @@ import android.os.WorkSource.WorkChain;
 import android.util.Log;
 import android.util.SparseArray;
 import android.util.StatsLog;
-
-import com.android.internal.app.IBatteryStats;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -54,7 +53,7 @@ public class WifiLockManager {
 
     private final Clock mClock;
     private final Context mContext;
-    private final IBatteryStats mBatteryStats;
+    private final BatteryStatsManager mBatteryStats;
     private final FrameworkFacade mFrameworkFacade;
     private final ClientModeImpl mClientModeImpl;
     private final ActivityManager mActivityManager;
@@ -80,7 +79,7 @@ public class WifiLockManager {
     private int mFullLowLatencyLocksReleased;
     private long mCurrentSessionStartTimeMs;
 
-    WifiLockManager(Context context, IBatteryStats batteryStats,
+    WifiLockManager(Context context, BatteryStatsManager batteryStats,
             ClientModeImpl clientModeImpl, FrameworkFacade frameworkFacade, Handler handler,
             WifiNative wifiNative, Clock clock, WifiMetrics wifiMetrics) {
         mContext = context;
@@ -183,10 +182,6 @@ public class WifiLockManager {
      * @return true if the lock was successfully acquired, false if the lockMode was invalid.
      */
     public boolean acquireWifiLock(int lockMode, String tag, IBinder binder, WorkSource ws) {
-        if (!isValidLockMode(lockMode)) {
-            throw new IllegalArgumentException("lockMode =" + lockMode);
-        }
-
         // Make a copy of the WorkSource before adding it to the WakeLock
         // This is to make sure worksource value can not be changed by caller
         // after function returns.
@@ -384,7 +379,13 @@ public class WifiLockManager {
         }
     }
 
-    private static boolean isValidLockMode(int lockMode) {
+    /**
+     * Validate that the lock mode is valid - i.e. one of the supported enumerations.
+     *
+     * @param lockMode The lock mode to verify.
+     * @return true for valid lock modes, false otherwise.
+     */
+    public static boolean isValidLockMode(int lockMode) {
         if (lockMode != WifiManager.WIFI_MODE_FULL
                 && lockMode != WifiManager.WIFI_MODE_SCAN_ONLY
                 && lockMode != WifiManager.WIFI_MODE_FULL_HIGH_PERF
@@ -719,8 +720,6 @@ public class WifiLockManager {
                         StatsLog.WIFI_LOCK_STATE_CHANGED__STATE__OFF,
                         WifiManager.WIFI_MODE_FULL_HIGH_PERF);
             }
-        } catch (RemoteException e) {
-            // nop
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
@@ -730,18 +729,16 @@ public class WifiLockManager {
         long ident = Binder.clearCallingIdentity();
         try {
             if (shouldBlame) {
-                mBatteryStats.noteFullWifiLockAcquired(uid);
+                mBatteryStats.noteFullWifiLockAcquiredFromSource(new WorkSource(uid));
                 StatsLog.write_non_chained(StatsLog.WIFI_LOCK_STATE_CHANGED, uid, null,
                         StatsLog.WIFI_LOCK_STATE_CHANGED__STATE__ON,
                         WifiManager.WIFI_MODE_FULL_LOW_LATENCY);
             } else {
-                mBatteryStats.noteFullWifiLockReleased(uid);
+                mBatteryStats.noteFullWifiLockReleasedFromSource(new WorkSource(uid));
                 StatsLog.write_non_chained(StatsLog.WIFI_LOCK_STATE_CHANGED, uid, null,
                         StatsLog.WIFI_LOCK_STATE_CHANGED__STATE__OFF,
                         WifiManager.WIFI_MODE_FULL_LOW_LATENCY);
             }
-        } catch (RemoteException e) {
-            // nop
         } finally {
             Binder.restoreCallingIdentity(ident);
         }

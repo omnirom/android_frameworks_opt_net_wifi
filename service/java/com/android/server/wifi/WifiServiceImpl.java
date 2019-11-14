@@ -58,7 +58,9 @@ import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ITxPacketCountListener;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiActivityEnergyInfo;
+import android.net.wifi.WifiClient;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
@@ -368,10 +370,6 @@ public class WifiServiceImpl extends BaseWifiService {
                     public void onReceive(Context context, Intent intent) {
                         if (mSettingsStore.handleAirplaneModeToggled()) {
                             mActiveModeWarden.airplaneModeToggled();
-                        }
-                        if (mSettingsStore.isAirplaneModeOn()) {
-                            Log.d(TAG, "resetting country code because Airplane mode is ON");
-                            mCountryCode.airplaneModeEnabled();
                         }
                     }
                 },
@@ -810,24 +808,28 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mLog.info("startSoftAp uid=%").c(Binder.getCallingUid()).flush();
 
-        if (mTetheredSoftApTracker.setEnablingIfAllowed()) {
-            if (!isConcurrentLohsAndTetheringSupported()) {
-                // Take down LOHS if it is up.
-                mLohsSoftApTracker.stopAll();
-            }
-            return startSoftApInternal(wifiConfig, WifiManager.IFACE_IP_MODE_TETHERED);
+        if (!mTetheredSoftApTracker.setEnablingIfAllowed()) {
+            mLog.err("Tethering is already active.").flush();
+            return false;
         }
-        mLog.err("Tethering is already active.").flush();
-        return false;
+
+        if (!isConcurrentLohsAndTetheringSupported()) {
+            // Take down LOHS if it is up.
+            mLohsSoftApTracker.stopAll();
+        }
+        return startSoftApInternal(new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, wifiConfig));
     }
 
     /**
      * Internal method to start softap mode. Callers of this method should have already checked
      * proper permissions beyond the NetworkStack permission.
      */
-    private boolean startSoftApInternal(WifiConfiguration wifiConfig, int mode) {
+    private boolean startSoftApInternal(SoftApModeConfiguration apConfig) {
         mLog.trace("startSoftApInternal uid=% mode=%")
-                .c(Binder.getCallingUid()).c(mode).flush();
+                .c(Binder.getCallingUid()).c(apConfig.getTargetMode()).flush();
+
+        WifiConfiguration wifiConfig = apConfig.getWifiConfiguration();
 
         if (wifiConfig == null && mSettingsStore.isAirplaneModeOn()) {
             Log.d(TAG, "Starting softap in airplane mode. Fallback to 2G band");
@@ -839,18 +841,19 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mSoftApExtendingWifi = (!mWifiApConfigStore.getDualSapStatus()) && isCurrentStaShareThisAp();
         if (mSoftApExtendingWifi) {
-            startSoftApInRepeaterMode(mode, wifiConfig);
+            startSoftApInRepeaterMode(apConfig.getTargetMode(), wifiConfig);
             return true;
         }
 
-        // null wifiConfig is a meaningful input for CMD_SET_AP
-        if (wifiConfig == null || WifiApConfigStore.validateApWifiConfiguration(wifiConfig)) {
-            SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, wifiConfig);
-            mActiveModeWarden.startSoftAp(softApConfig);
-            return true;
+        // null wifiConfig is a meaningful input for CMD_SET_AP; it means to use the persistent
+        // AP config.
+        if (wifiConfig != null && !WifiApConfigStore.validateApWifiConfiguration(wifiConfig)) {
+            Log.e(TAG, "Invalid WifiConfiguration");
+            return false;
         }
-        Log.e(TAG, "Invalid WifiConfiguration");
-        return false;
+
+        mActiveModeWarden.startSoftAp(apConfig);
+        return true;
     }
 
     /**
@@ -904,7 +907,7 @@ public class WifiServiceImpl extends BaseWifiService {
          */
         private final Object mLock = new Object();
         private int mTetheredSoftApState = WIFI_AP_STATE_DISABLED;
-        private int mTetheredSoftApNumClients = 0;
+        private List<WifiClient> mTetheredSoftApConnectedClients = new ArrayList<>();
 
         public int getState() {
             synchronized (mLock) {
@@ -921,8 +924,8 @@ public class WifiServiceImpl extends BaseWifiService {
             }
         }
 
-        public int getNumClients() {
-            return mTetheredSoftApNumClients;
+        public List<WifiClient> getConnectedClients() {
+            return mTetheredSoftApConnectedClients;
         }
 
         private final ExternalCallbackTracker<ISoftApCallback> mRegisteredSoftApCallbacks =
@@ -967,22 +970,22 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         /**
-         * Called when number of connected clients to soft AP changes.
+         * Called when the connected clients to soft AP changes.
          *
-         * @param numClients number of connected clients to soft AP
+         * @param clients connected clients to soft AP
          */
         @Override
-        public void onNumClientsChanged(int numClients) {
-            mTetheredSoftApNumClients = numClients;
+        public void onConnectedClientsChanged(List<WifiClient> clients) {
+            mTetheredSoftApConnectedClients = new ArrayList<>(clients);
 
             Iterator<ISoftApCallback> iterator =
                     mRegisteredSoftApCallbacks.getCallbacks().iterator();
             while (iterator.hasNext()) {
                 ISoftApCallback callback = iterator.next();
                 try {
-                    callback.onNumClientsChanged(numClients);
+                    callback.onConnectedClientsChanged(mTetheredSoftApConnectedClients);
                 } catch (RemoteException e) {
-                    Log.e(TAG, "onNumClientsChanged: remote exception -- " + e);
+                    Log.e(TAG, "onConnectedClientsChanged: remote exception -- " + e);
                     // TODO(b/138863863) remove does nothing, getCallbacks() returns a copy
                     iterator.remove();
                 }
@@ -1039,15 +1042,23 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
-     * Lohs callback
+     * Implements LOHS behavior on top of the existing SoftAp API.
      */
     private final class LohsSoftApTracker implements WifiManager.SoftApCallback {
         @GuardedBy("mLocalOnlyHotspotRequests")
         private final HashMap<Integer, LocalOnlyHotspotRequestInfo>
                 mLocalOnlyHotspotRequests = new HashMap<>();
 
+        /** Currently-active config, to be sent to shared clients registering later. */
         @GuardedBy("mLocalOnlyHotspotRequests")
-        private WifiConfiguration mLocalOnlyHotspotConfig = null;
+        private SoftApModeConfiguration mActiveConfig = null;
+
+        /**
+         * Whether we are currently operating in exclusive mode (i.e. whether a custom config is
+         * active).
+         */
+        @GuardedBy("mLocalOnlyHotspotRequests")
+        private boolean mIsExclusive = false;
 
         @GuardedBy("mLocalOnlyHotspotRequests")
         private String mLohsInterfaceName;
@@ -1187,34 +1198,53 @@ public class WifiServiceImpl extends BaseWifiService {
                             "Caller already has an active LocalOnlyHotspot request");
                 }
 
-                // check current operating state and take action if needed
+                // Never accept exclusive requests (with custom configuration) at the same time as
+                // shared requests.
+                if (mActiveConfig != null) {
+                    boolean requestIsExclusive = request.getCustomConfig() != null;
+                    if (mIsExclusive || requestIsExclusive) {
+                        return LocalOnlyHotspotCallback.ERROR_GENERIC;
+                    }
+                }
+
+                // If a local-only AP is already active, send the current config.
                 if (mLohsInterfaceMode == WifiManager.IFACE_IP_MODE_LOCAL_ONLY) {
-                    // LOHS is already active, send out what is running
                     try {
                         mLog.trace("LOHS already up, trigger onStarted callback").flush();
-                        request.sendHotspotStartedMessage(mLocalOnlyHotspotConfig);
+                        request.sendHotspotStartedMessage(mActiveConfig.getWifiConfiguration());
                     } catch (RemoteException e) {
                         return LocalOnlyHotspotCallback.ERROR_GENERIC;
                     }
-                } else if (mLocalOnlyHotspotRequests.isEmpty()) {
-                    // this is the first request, then set up our config and start LOHS
-                    boolean is5Ghz = hasAutomotiveFeature(mContext)
-                            && mContext.getResources().getBoolean(
-                            com.android.internal.R.bool.config_wifi_local_only_hotspot_5ghz)
-                            && is5GhzSupported();
-
-                    mLocalOnlyHotspotConfig =
-                            WifiApConfigStore.generateLocalOnlyHotspotConfig(mContext,
-                                    is5Ghz ? WifiConfiguration.AP_BAND_5GHZ
-                                            : WifiConfiguration.AP_BAND_2GHZ);
-
-                    startSoftApInternal(mLocalOnlyHotspotConfig,
-                            WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
                 }
 
+                if (mLocalOnlyHotspotRequests.isEmpty()) {
+                    startForFirstRequestLocked(request);
+                }
                 mLocalOnlyHotspotRequests.put(pid, request);
+
                 return LocalOnlyHotspotCallback.REQUEST_REGISTERED;
             }
+        }
+
+        @GuardedBy("mLocalOnlyHotspotRequests")
+        private void startForFirstRequestLocked(LocalOnlyHotspotRequestInfo request) {
+            boolean is5Ghz = hasAutomotiveFeature(mContext)
+                    && mContext.getResources().getBoolean(
+                    com.android.internal.R.bool.config_wifi_local_only_hotspot_5ghz)
+                    && is5GhzSupported();
+
+            int band = is5Ghz ? WifiConfiguration.AP_BAND_5GHZ
+                    : WifiConfiguration.AP_BAND_2GHZ;
+
+            WifiConfiguration wifiConfig = WifiApConfigStore.generateLocalOnlyHotspotConfig(
+                    mContext, band, request.getCustomConfig());
+
+            mActiveConfig = new SoftApModeConfiguration(
+                    WifiManager.IFACE_IP_MODE_LOCAL_ONLY,
+                    wifiConfig);
+            mIsExclusive = (request.getCustomConfig() != null);
+
+            startSoftApInternal(mActiveConfig);
         }
 
         /**
@@ -1250,7 +1280,6 @@ public class WifiServiceImpl extends BaseWifiService {
          * Unregisters LocalOnlyHotspot request and stops the hotspot if needed.
          */
         public void stopByRequest(LocalOnlyHotspotRequestInfo request) {
-
             synchronized (mLocalOnlyHotspotRequests) {
                 if (mLocalOnlyHotspotRequests.remove(request.getPid()) == null) {
                     mLog.trace("LocalOnlyHotspotRequestInfo not found to remove").flush();
@@ -1263,13 +1292,13 @@ public class WifiServiceImpl extends BaseWifiService {
         @GuardedBy("mLocalOnlyHotspotRequests")
         private void stopIfEmptyLocked() {
             if (mLocalOnlyHotspotRequests.isEmpty()) {
-                mLocalOnlyHotspotConfig = null;
+                mActiveConfig = null;
+                mIsExclusive = false;
                 mLohsInterfaceName = null;
                 mLohsInterfaceMode = WifiManager.IFACE_IP_MODE_UNSPECIFIED;
                 stopSoftApInternal(WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
             }
         }
-
 
         /**
          * Helper method to send a HOTSPOT_STARTED message to all registered LocalOnlyHotspotRequest
@@ -1281,7 +1310,7 @@ public class WifiServiceImpl extends BaseWifiService {
         private void sendHotspotStartedMessageToAllLOHSRequestInfoEntriesLocked() {
             for (LocalOnlyHotspotRequestInfo requestor : mLocalOnlyHotspotRequests.values()) {
                 try {
-                    requestor.sendHotspotStartedMessage(mLocalOnlyHotspotConfig);
+                    requestor.sendHotspotStartedMessage(mActiveConfig.getWifiConfiguration());
                 } catch (RemoteException e) {
                     // This will be cleaned up by binder death handling
                 }
@@ -1331,8 +1360,9 @@ public class WifiServiceImpl extends BaseWifiService {
                 mLohsState = state;
             }
         }
+
         @Override
-        public void onNumClientsChanged(int numClients) {
+        public void onConnectedClientsChanged(List<WifiClient> clients) {
             // Nothing to do
         }
 
@@ -1397,7 +1427,7 @@ public class WifiServiceImpl extends BaseWifiService {
             // Update the client about the current state immediately after registering the callback
             try {
                 callback.onStateChanged(mTetheredSoftApTracker.getState(), 0);
-                callback.onNumClientsChanged(mTetheredSoftApTracker.getNumClients());
+                callback.onConnectedClientsChanged(mTetheredSoftApTracker.getConnectedClients());
                 callback.onStaConnected("", mQCSoftApNumClients);
             } catch (RemoteException e) {
                 Log.e(TAG, "registerSoftApCallback: remote exception -- " + e);
@@ -1445,7 +1475,9 @@ public class WifiServiceImpl extends BaseWifiService {
      * see {@link WifiManager#startLocalOnlyHotspot(LocalOnlyHotspotCallback)}
      *
      * @param callback Callback to communicate with WifiManager and allow cleanup if the app dies.
-     * @param packageName String name of the calling package
+     * @param packageName String name of the calling package.
+     * @param customConfig Custom configuration to be applied to the hotspot, or null for a shared
+     *                     hotspot with framework-generated config.
      *
      * @return int return code for attempt to start LocalOnlyHotspot.
      *
@@ -1455,7 +1487,8 @@ public class WifiServiceImpl extends BaseWifiService {
      * have an outstanding request.
      */
     @Override
-    public int startLocalOnlyHotspot(ILocalOnlyHotspotCallback callback, String packageName) {
+    public int startLocalOnlyHotspot(ILocalOnlyHotspotCallback callback, String packageName,
+            SoftApConfiguration customConfig) {
         // first check if the caller has permission to start a local only hotspot
         // need to check for WIFI_STATE_CHANGE and location permission
         final int uid = Binder.getCallingUid();
@@ -1463,13 +1496,21 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mLog.info("start uid=% pid=%").c(uid).c(pid).flush();
 
-        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
-            return LocalOnlyHotspotCallback.ERROR_GENERIC;
-        }
-        enforceLocationPermission(packageName, uid);
-        // also need to verify that Locations services are enabled.
-        if (!Binder.withCleanCallingIdentity(() -> mWifiPermissionsUtil.isLocationModeEnabled())) {
-            throw new SecurityException("Location mode is not enabled.");
+        // Permission requirements are different with/without custom config.
+        if (customConfig == null) {
+            if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+                return LocalOnlyHotspotCallback.ERROR_GENERIC;
+            }
+            enforceLocationPermission(packageName, uid);
+            // also need to verify that Locations services are enabled.
+            if (!Binder.withCleanCallingIdentity(
+                    () -> mWifiPermissionsUtil.isLocationModeEnabled())) {
+                throw new SecurityException("Location mode is not enabled.");
+            }
+        } else {
+            if (!isSettingsOrSuw(Binder.getCallingPid(), Binder.getCallingUid())) {
+                throw new SecurityException(TAG + ": Permission denied");
+            }
         }
 
         // verify that tethering is not disabled
@@ -1495,7 +1536,7 @@ public class WifiServiceImpl extends BaseWifiService {
 
         // now create the new LOHS request info object
         LocalOnlyHotspotRequestInfo request = new LocalOnlyHotspotRequestInfo(callback,
-                new LocalOnlyRequestorCallback());
+                new LocalOnlyRequestorCallback(), customConfig);
 
         return mLohsSoftApTracker.start(pid, request);
     }
@@ -2163,6 +2204,21 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
+     * See {@link android.net.wifi.WifiManager#allowAutojoin(int, boolean)}
+     * @param netId the integer that identifies the network configuration
+     * @param choice the user's choice to allow auto-join
+     */
+    @Override
+    public void allowAutojoin(int netId, boolean choice) {
+        enforceNetworkSettingsPermission();
+
+        int callingUid = Binder.getCallingUid();
+        mLog.info("allowAutojoin=% uid=%").c(choice).c(callingUid).flush();
+        mWifiThreadRunner.post(
+                () -> mWifiConfigManager.allowAutojoin(netId, choice));
+    }
+
+    /**
      * See {@link android.net.wifi.WifiManager#getConnectionInfo()}
      * @return the Wi-Fi information, contained in {@link WifiInfo}.
      */
@@ -2295,7 +2351,7 @@ public class WifiServiceImpl extends BaseWifiService {
         final boolean privilegedFinal = privileged;
         return mWifiThreadRunner.call(
             () -> mPasspointManager.getProviderConfigs(uid, privilegedFinal),
-                Collections.emptyList());
+            Collections.emptyList());
     }
 
     /**
@@ -2736,6 +2792,10 @@ public class WifiServiceImpl extends BaseWifiService {
         // If no UID is provided in worksource, use the calling UID
         WorkSource updatedWs = (ws == null || ws.isEmpty())
                 ? new WorkSource(Binder.getCallingUid()) : ws;
+
+        if (!WifiLockManager.isValidLockMode(lockMode)) {
+            throw new IllegalArgumentException("lockMode =" + lockMode);
+        }
 
         return mWifiThreadRunner.call(() ->
                 mWifiLockManager.acquireWifiLock(lockMode, tag, binder, updatedWs), false);
@@ -3526,16 +3586,16 @@ public class WifiServiceImpl extends BaseWifiService {
         SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, currentStaConfig);
 
         // Remove double quotes in SSID and psk
-        softApConfig.mConfig.SSID = WifiInfo.removeDoubleQuotes(softApConfig.mConfig.SSID);
-        softApConfig.mConfig.preSharedKey = WifiInfo.removeDoubleQuotes(softApConfig.mConfig.preSharedKey);
+        softApConfig.getWifiConfiguration().SSID = WifiInfo.removeDoubleQuotes(softApConfig.getWifiConfiguration().SSID);
+        softApConfig.getWifiConfiguration().preSharedKey = WifiInfo.removeDoubleQuotes(softApConfig.getWifiConfiguration().preSharedKey);
 
         // Get band info from SoftAP configuration
         if (apConfig == null)
-            softApConfig.mConfig.apBand = mWifiApConfigStore.getApConfiguration().apBand;
+            softApConfig.getWifiConfiguration().apBand = mWifiApConfigStore.getApConfiguration().apBand;
         else
-            softApConfig.mConfig.apBand = apConfig.apBand;
+            softApConfig.getWifiConfiguration().apBand = apConfig.apBand;
 
-        Log.d(TAG,"Repeater mode config - " + softApConfig.mConfig);
+        Log.d(TAG,"Repeater mode config - " + softApConfig.getWifiConfiguration());
         mActiveModeWarden.startSoftAp(softApConfig);
     }
 

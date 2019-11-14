@@ -60,7 +60,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.p2p.IWifiP2pManager;
-import android.os.BatteryStats;
+import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
@@ -88,7 +88,6 @@ import androidx.test.filters.SmallTest;
 
 import com.android.dx.mockito.inline.extended.ExtendedMockito;
 import com.android.internal.R;
-import com.android.internal.app.IBatteryStats;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.IState;
 import com.android.internal.util.StateMachine;
@@ -206,9 +205,6 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         Handler handler = new Handler(mP2pThread.getLooper());
         when(p2pm.getP2pStateMachineMessenger()).thenReturn(new Messenger(handler));
-
-        IBinder batteryStatsBinder = mockService(BatteryStats.class, IBatteryStats.class);
-        when(facade.getService(BatteryStats.SERVICE_NAME)).thenReturn(batteryStatsBinder);
 
         doAnswer(new AnswerWithArguments() {
             public void answer(
@@ -388,6 +384,7 @@ public class ClientModeImplTest extends WifiBaseTest {
     @Mock AsyncChannel mNullAsyncChannel;
     @Mock CarrierNetworkConfig mCarrierNetworkConfig;
     @Mock Handler mNetworkAgentHandler;
+    @Mock BatteryStatsManager mBatteryStatsManager;
 
     final ArgumentCaptor<WifiConfigManager.OnNetworkUpdateListener> mConfigUpdateListenerCaptor =
             ArgumentCaptor.forClass(WifiConfigManager.OnNetworkUpdateListener.class);
@@ -443,6 +440,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
         when(mWifiInjector.getWifiLockManager()).thenReturn(mWifiLockManager);
         when(mWifiInjector.getCarrierNetworkConfig()).thenReturn(mCarrierNetworkConfig);
+        when(mWifiInjector.getWifiThreadRunner())
+                .thenReturn(new WifiThreadRunner(new Handler(mLooper.getLooper())));
         when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
                 .thenReturn(Pair.create(Process.INVALID_UID, ""));
         when(mWifiNative.initialize()).thenReturn(true);
@@ -479,10 +478,6 @@ public class ClientModeImplTest extends WifiBaseTest {
                 Settings.Global.WIFI_FREQUENCY_BAND,
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO)).thenReturn(
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO);
-
-        when(mFrameworkFacade.makeSupplicantStateTracker(
-                any(Context.class), any(WifiConfigManager.class),
-                any(Handler.class))).thenReturn(mSupplicantStateTracker);
 
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         when(mWifiPermissionsWrapper.getLocalMacAddressPermission(anyInt()))
@@ -545,7 +540,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         mCmi = new ClientModeImpl(mContext, mFrameworkFacade, mLooper.getLooper(),
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
                 mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
-                mLinkProbeManager);
+                mLinkProbeManager, mBatteryStatsManager, mSupplicantStateTracker);
         mCmi.start();
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
@@ -969,6 +964,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertNull(wifiInfo.getPasspointProviderFriendlyName());
         // Ensure the connection stats for the network is updated.
         verify(mWifiConfigManager).updateNetworkAfterConnect(FRAMEWORK_NETWORK_ID);
+        verify(mWifiConfigManager).updateRandomizedMacExpireTime(any(), anyLong());
 
         // Anonymous Identity is not set.
         assertEquals("", mConnectedNetwork.enterpriseConfig.getAnonymousIdentity());
@@ -1335,32 +1331,44 @@ public class ClientModeImplTest extends WifiBaseTest {
      * that connection request returns with CONNECT_NETWORK_SUCCEEDED.
      */
     @Test
-    public void reconnectToConnectedNetwork() throws Exception {
-        initializeAndAddNetworkAndVerifySuccess();
-
-        verify(mWifiNative).removeAllNetworks(WIFI_IFACE_NAME);
-
-        IActionListener connectActionListener = mock(IActionListener.class);
-        mCmi.connect(null, 0, mock(Binder.class), connectActionListener, 0, Binder.getCallingUid());
-        mLooper.dispatchAll();
-        verify(connectActionListener).onSuccess();
-
-        verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt(), any());
-
-        mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
-        mLooper.dispatchAll();
-
-        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
-                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.COMPLETED));
-        mLooper.dispatchAll();
-
-        assertEquals("ObtainingIpState", getCurrentState().getName());
+    public void reconnectToConnectedNetworkWithNetworkId() throws Exception {
+        connect();
 
         // try to reconnect
-        reset(connectActionListener);
-        mCmi.connect(null, 0, mock(Binder.class), connectActionListener, 0, Binder.getCallingUid());
+        IActionListener connectActionListener = mock(IActionListener.class);
+        mCmi.connect(null, FRAMEWORK_NETWORK_ID, mock(Binder.class), connectActionListener, 0,
+                Binder.getCallingUid());
         mLooper.dispatchAll();
         verify(connectActionListener).onSuccess();
+
+        // Verify that we didn't trigger a second connection.
+        verify(mWifiNative, times(1)).connectToNetwork(eq(WIFI_IFACE_NAME), any());
+    }
+
+    /**
+     * If caller tries to connect to a network that is already connected, the connection request
+     * should succeed.
+     *
+     * Test: Create and connect to a network, then try to reconnect to the same network. Verify
+     * that connection request returns with CONNECT_NETWORK_SUCCEEDED.
+     */
+    @Test
+    public void reconnectToConnectedNetworkWithConfig() throws Exception {
+        connect();
+
+        // try to reconnect
+        WifiConfiguration config = new WifiConfiguration();
+        config.networkId = FRAMEWORK_NETWORK_ID;
+        when(mWifiConfigManager.addOrUpdateNetwork(eq(config), anyInt()))
+                .thenReturn(new NetworkUpdateResult(FRAMEWORK_NETWORK_ID));
+        IActionListener connectActionListener = mock(IActionListener.class);
+        mCmi.connect(config, WifiConfiguration.INVALID_NETWORK_ID, mock(Binder.class),
+                connectActionListener, 0, Binder.getCallingUid());
+        mLooper.dispatchAll();
+        verify(connectActionListener).onSuccess();
+
+        // Verify that we didn't trigger a second connection.
+        verify(mWifiNative, times(1)).connectToNetwork(eq(WIFI_IFACE_NAME), any());
     }
 
     /**
@@ -1397,8 +1405,6 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         mCmi.connect(null, TEST_NETWORK_ID, mock(Binder.class), null, 0, Binder.getCallingUid());
         mLooper.dispatchAll();
-
-        verify(mWifiNative).disconnect(any());
 
         mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
                 new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.DISCONNECTED));
@@ -1835,10 +1841,10 @@ public class ClientModeImplTest extends WifiBaseTest {
     /** Verifies that syncGetSupportedFeatures() masks out capabilities based on system flags. */
     @Test
     public void syncGetSupportedFeatures() {
-        final int featureAware = WifiManager.WIFI_FEATURE_AWARE;
-        final int featureInfra = WifiManager.WIFI_FEATURE_INFRA;
-        final int featureD2dRtt = WifiManager.WIFI_FEATURE_D2D_RTT;
-        final int featureD2apRtt = WifiManager.WIFI_FEATURE_D2AP_RTT;
+        final long featureAware = WifiManager.WIFI_FEATURE_AWARE;
+        final long featureInfra = WifiManager.WIFI_FEATURE_INFRA;
+        final long featureD2dRtt = WifiManager.WIFI_FEATURE_D2D_RTT;
+        final long featureD2apRtt = WifiManager.WIFI_FEATURE_D2AP_RTT;
         final long featureLongBits = 0x1100000000L;
 
         assertEquals(0, testGetSupportedFeaturesCase(0, false));

@@ -29,7 +29,9 @@ import android.net.wifi.WifiScanner.ChannelSpec;
 import android.net.wifi.WifiScanner.PnoSettings;
 import android.net.wifi.WifiScanner.ScanData;
 import android.net.wifi.WifiScanner.ScanSettings;
+import android.net.wifi.WifiScanner.WifiBand;
 import android.net.wifi.WifiStackClient;
+import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Looper;
@@ -45,7 +47,6 @@ import android.util.Pair;
 import android.util.StatsLog;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.app.IBatteryStats;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Protocol;
@@ -110,10 +111,12 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     @Override
-    public Bundle getAvailableChannels(int band) {
+    public Bundle getAvailableChannels(@WifiBand int band, String packageName) {
+        enforcePermission(Binder.getCallingUid(), packageName, false, false, false);
+
         mChannelHelper.updateChannels();
         ChannelSpec[] channelSpecs = mChannelHelper.getAvailableScanChannels(band);
-        ArrayList<Integer> list = new ArrayList<Integer>(channelSpecs.length);
+        ArrayList<Integer> list = new ArrayList<>(channelSpecs.length);
         for (ChannelSpec channelSpec : channelSpecs) {
             list.add(channelSpec.frequency);
         }
@@ -173,29 +176,39 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     /**
+     * @see #enforcePermission(int, String, boolean, boolean, boolean)
+     */
+    private void enforcePermission(int uid, Message msg) throws SecurityException {
+        enforcePermission(uid, getPackageName(msg), isPrivilegedMessage(msg.what),
+                shouldIgnoreLocationSettingsForSingleScan(msg),
+                shouldHideFromAppsForSingleScan(msg));
+    }
+
+    /**
      * Enforce the necessary client permissions for WifiScanner.
      * If the client has NETWORK_STACK permission, then it can "always" send "any" request.
      * If the client has only LOCATION_HARDWARE permission, then it can
      *    a) Only make scan related requests when location is turned on.
      *    b) Can never make one of the privileged requests.
-     *
-     * @param uid Uid of the client.
-     * @param msg {@link Message} of the incoming request.
-     * @throws {@link SecurityException} if the client does not have the necessary permissions.
+     * @param uid uid of the client
+     * @param packageName package name of the client
+     * @param isPrivilegedRequest whether we are checking for a privileged request
+     * @param shouldIgnoreLocationSettings override to ignore location settings
+     * @param shouldHideFromApps override to hide request from AppOps
      */
-    private void enforcePermission(int uid, Message msg) throws SecurityException {
+    private void enforcePermission(int uid, String packageName, boolean isPrivilegedRequest,
+            boolean shouldIgnoreLocationSettings, boolean shouldHideFromApps) {
         try {
-            /** Wifi stack issued requests.*/
+            // Wifi stack issued requests.
             enforceWifiStackPermission(uid);
         } catch (SecurityException e) {
-            /** System-app issued requests. */
-            if (isPrivilegedMessage(msg.what)) {
+            // System-app issued requests
+            if (isPrivilegedRequest) {
                 // Privileged message, only requests from clients with NETWORK_STACK allowed!
                 throw e;
             }
-            mWifiPermissionsUtil.enforceCanAccessScanResultsForWifiScanner(
-                    getPackageName(msg), uid, shouldIgnoreLocationSettingsForSingleScan(msg),
-                    shouldHideFromAppsForSingleScan(msg));
+            mWifiPermissionsUtil.enforceCanAccessScanResultsForWifiScanner(packageName, uid,
+                    shouldIgnoreLocationSettings, shouldHideFromApps);
         }
     }
 
@@ -349,8 +362,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     private WifiSingleScanStateMachine mSingleScanStateMachine;
     private WifiPnoScanStateMachine mPnoScanStateMachine;
     private ClientHandler mClientHandler;
-    // This is retrieved lazily because location service is started after wifi scanner.
-    private final IBatteryStats mBatteryStats;
+    private final BatteryStatsManager mBatteryStats;
     private final AlarmManager mAlarmManager;
     private final WifiMetrics mWifiMetrics;
     private final Clock mClock;
@@ -359,8 +371,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     private final WifiNative mWifiNative;
 
     WifiScanningServiceImpl(Context context, Looper looper,
-            WifiScannerImpl.WifiScannerImplFactory scannerImplFactory, IBatteryStats batteryStats,
-            WifiInjector wifiInjector) {
+            WifiScannerImpl.WifiScannerImplFactory scannerImplFactory,
+            BatteryStatsManager batteryStats, WifiInjector wifiInjector) {
         mContext = context;
         mLooper = looper;
         mScannerImplFactory = scannerImplFactory;
@@ -925,11 +937,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             @Override
             public void enter() {
                 mScanWorkSource = mActiveScans.createMergedWorkSource();
-                try {
-                    mBatteryStats.noteWifiScanStartedFromSource(mScanWorkSource);
-                } catch (RemoteException e) {
-                    loge(e.toString());
-                }
+                mBatteryStats.noteWifiScanStartedFromSource(mScanWorkSource);
                 StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
                         StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__ON);
             }
@@ -937,11 +945,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             @Override
             public void exit() {
                 mActiveScanSettings = null;
-                try {
-                    mBatteryStats.noteWifiScanStoppedFromSource(mScanWorkSource);
-                } catch (RemoteException e) {
-                    loge(e.toString());
-                }
+                mBatteryStats.noteWifiScanStoppedFromSource(mScanWorkSource);
                 StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
                         StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__OFF);
 
@@ -2247,11 +2251,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
 
             int csph = getCsph();
 
-            try {
-                mBatteryStats.noteWifiBatchedScanStartedFromSource(mWorkSource, csph);
-            } catch (RemoteException e) {
-                logw("failed to report scan work: " + e.toString());
-            }
+            mBatteryStats.noteWifiBatchedScanStartedFromSource(mWorkSource, csph);
         }
 
         // TODO(b/27903217, 71530998): This is dead code. Should this be wired up ?
@@ -2259,11 +2259,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             if (mUid == 0)
                 return;
 
-            try {
-                mBatteryStats.noteWifiBatchedScanStoppedFromSource(mWorkSource);
-            } catch (RemoteException e) {
-                logw("failed to cleanup scan work: " + e.toString());
-            }
+            mBatteryStats.noteWifiBatchedScanStoppedFromSource(mWorkSource);
         }
 
         // TODO migrate batterystats to accept scan duration per hour instead of csph
