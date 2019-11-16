@@ -43,7 +43,7 @@
     <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.DUMP" />
     <uses-permission android:name="android.permission.GET_ACCOUNTS" />
-    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS" />
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS_FULL" />
     <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.LOCAL_MAC_ADDRESS" />
@@ -71,12 +71,9 @@
 
     <application
         android:persistent="true"
-        android:directBootAware="true"
-        android:process="com.android.networkstack.process"
-        android:label="@string/wifiAppLabel">
+        android:process="com.android.networkstack.process">
         <service
-            android:name="com.android.server.wifi.WifiStackService"
-            android:directBootAware="true">
+            android:name="com.android.server.wifi.WifiStackService">
             <intent-filter>
                 <action android:name="android.net.wifi.IWifiStackConnector"/>
             </intent-filter>

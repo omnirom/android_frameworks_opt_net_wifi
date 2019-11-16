@@ -54,32 +54,32 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointMatch;
 import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.hotspot2.Utils;
-import com.android.server.wifi.nano.WifiMetricsProto;
-import com.android.server.wifi.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
-import com.android.server.wifi.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
-import com.android.server.wifi.nano.WifiMetricsProto.ExperimentValues;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats.ExperimentProbeCounts;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats.LinkProbeFailureReasonCount;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkSpeedCount;
-import com.android.server.wifi.nano.WifiMetricsProto.NetworkSelectionExperimentDecisions;
-import com.android.server.wifi.nano.WifiMetricsProto.PasspointProfileTypeCount;
-import com.android.server.wifi.nano.WifiMetricsProto.PasspointProvisionStats;
-import com.android.server.wifi.nano.WifiMetricsProto.PasspointProvisionStats.ProvisionFailureCount;
-import com.android.server.wifi.nano.WifiMetricsProto.PnoScanMetrics;
-import com.android.server.wifi.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
-import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
-import com.android.server.wifi.nano.WifiMetricsProto.StaEvent.ConfigInfo;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiIsUnusableEvent;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiLinkLayerUsageStats;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiLockStats;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiNetworkRequestApiLog;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiNetworkSuggestionApiLog;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiToggleStats;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStats;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStatsEntry;
-import com.android.server.wifi.nano.WifiMetricsProto.WpsMetrics;
 import com.android.server.wifi.p2p.WifiP2pMetrics;
+import com.android.server.wifi.proto.nano.WifiMetricsProto;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.ExperimentValues;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats.ExperimentProbeCounts;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats.LinkProbeFailureReasonCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkSpeedCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.NetworkSelectionExperimentDecisions;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PasspointProfileTypeCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PasspointProvisionStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PasspointProvisionStats.ProvisionFailureCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PnoScanMetrics;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent.ConfigInfo;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiIsUnusableEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiLinkLayerUsageStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiLockStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiNetworkRequestApiLog;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiNetworkSuggestionApiLog;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiToggleStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStatsEntry;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WpsMetrics;
 import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.InformationElementUtil;
@@ -1087,8 +1087,8 @@ public class WifiMetrics {
 
     /**
      * End a Connection event record. Call when wifi connection attempt succeeds or fails.
-     * If a Connection event has not been started and is active when .end is called, a new one is
-     * created with zero duration.
+     * If a Connection event has not been started and is active when .end is called, then this
+     * method will do nothing.
      *
      * @param level2FailureCode Level 2 failure code returned by supplicant
      * @param connectivityFailureCode WifiMetricsProto.ConnectionEvent.HLF_X
@@ -1146,6 +1146,9 @@ public class WifiMetrics {
                 break;
             case InformationElementUtil.WifiMode.MODE_11AC  :
                 connectionWifiMode = WifiMetricsProto.RouterFingerPrint.ROUTER_TECH_AC;
+                break;
+            case InformationElementUtil.WifiMode.MODE_11AX  :
+                connectionWifiMode = WifiMetricsProto.RouterFingerPrint.ROUTER_TECH_AX;
                 break;
             default:
                 connectionWifiMode = WifiMetricsProto.RouterFingerPrint.ROUTER_TECH_OTHER;
@@ -2093,13 +2096,6 @@ public class WifiMetrics {
         }
     }
 
-    /** Increment the failure count of SAR sensor listener registration */
-    public void incrementNumSarSensorRegistrationFailures() {
-        synchronized (mLock) {
-            mWifiLogProto.numSarSensorRegistrationFailures++;
-        }
-    }
-
     /**
      * Increment N-Way network selection decision histograms:
      * Counts the size of various sets of scanDetails within a scan, and increment the occurrence
@@ -2574,8 +2570,6 @@ public class WifiMetrics {
                         + mWifiLogProto.numSetupSoftApInterfaceFailureDueToWificond);
                 pw.println("mWifiLogProto.numSetupSoftApInterfaceFailureDueToHostapd="
                         + mWifiLogProto.numSetupSoftApInterfaceFailureDueToHostapd);
-                pw.println("mWifiLogProto.numSarSensorRegistrationFailures="
-                        + mWifiLogProto.numSarSensorRegistrationFailures);
                 pw.println("StaEventList:");
                 for (StaEventWithTime event : mStaEventList) {
                     pw.println(event);

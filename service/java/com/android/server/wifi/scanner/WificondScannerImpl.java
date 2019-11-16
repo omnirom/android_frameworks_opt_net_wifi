@@ -25,7 +25,6 @@ import android.os.Looper;
 import android.os.Message;
 import android.util.Log;
 
-import com.android.internal.R;
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.ScanDetail;
 import com.android.server.wifi.WifiGbk;
@@ -34,6 +33,7 @@ import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.ScanResultUtil;
+import com.android.wifi.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;

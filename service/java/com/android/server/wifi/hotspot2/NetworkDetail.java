@@ -27,7 +27,7 @@ public class NetworkDetail {
 
     private static final boolean DBG = false;
 
-    private static final String TAG = "NetworkDetail:";
+    private static final String TAG = "NetworkDetail";
 
     public enum Ant {
         Private,
@@ -90,6 +90,7 @@ public class NetworkDetail {
      */
     private final int mWifiMode;
     private final int mMaxRate;
+    private final int mMaxNumberSpatialStreams;
 
     /*
      * From Interworking element:
@@ -145,6 +146,14 @@ public class NetworkDetail {
         InformationElementUtil.HtOperation htOperation = new InformationElementUtil.HtOperation();
         InformationElementUtil.VhtOperation vhtOperation =
                 new InformationElementUtil.VhtOperation();
+        InformationElementUtil.HeOperation heOperation = new InformationElementUtil.HeOperation();
+
+        InformationElementUtil.HtCapabilities htCapabilities =
+                new InformationElementUtil.HtCapabilities();
+        InformationElementUtil.VhtCapabilities vhtCapabilities =
+                new InformationElementUtil.VhtCapabilities();
+        InformationElementUtil.HeCapabilities heCapabilities =
+                new InformationElementUtil.HeCapabilities();
 
         InformationElementUtil.ExtendedCapabilities extendedCapabilities =
                 new InformationElementUtil.ExtendedCapabilities();
@@ -176,6 +185,12 @@ public class NetworkDetail {
                     case ScanResult.InformationElement.EID_VHT_OPERATION:
                         vhtOperation.from(ie);
                         break;
+                    case ScanResult.InformationElement.EID_HT_CAPABILITIES:
+                        htCapabilities.from(ie);
+                        break;
+                    case ScanResult.InformationElement.EID_VHT_CAPABILITIES:
+                        vhtCapabilities.from(ie);
+                        break;
                     case ScanResult.InformationElement.EID_INTERWORKING:
                         interworking.from(ie);
                         break;
@@ -196,6 +211,18 @@ public class NetworkDetail {
                         break;
                     case ScanResult.InformationElement.EID_EXTENDED_SUPPORTED_RATES:
                         extendedSupportedRates.from(ie);
+                        break;
+                    case ScanResult.InformationElement.EID_EXTENSION_PRESENT:
+                        switch(ie.idExt) {
+                            case ScanResult.InformationElement.EID_EXT_HE_OPERATION:
+                                heOperation.from(ie);
+                                break;
+                            case ScanResult.InformationElement.EID_EXT_HE_CAPABILITIES:
+                                heCapabilities.from(ie);
+                                break;
+                            default:
+                                break;
+                        }
                         break;
                     default:
                         break;
@@ -271,14 +298,33 @@ public class NetworkDetail {
         int centerFreq0 = 0;
         int centerFreq1 = 0;
 
-        if (vhtOperation.isPresent()) {
-            channelWidth = vhtOperation.getChannelWidth();
-            if (channelWidth != ScanResult.UNSPECIFIED) {
-                centerFreq0 = vhtOperation.getCenterFreq0();
-                centerFreq1 = vhtOperation.getCenterFreq1();
+        // First check if HE Operation IE is present
+        if (heOperation.isPresent()) {
+            // If 6GHz info is present, then parameters should be acquired from HE Operation IE
+            if (heOperation.is6GhzInfoPresent()) {
+                channelWidth = heOperation.getChannelWidth();
+                centerFreq0 = heOperation.getCenterFreq0();
+                centerFreq1 = heOperation.getCenterFreq1();
+            } else if (heOperation.isVhtInfoPresent()) {
+                // VHT Operation Info could be included inside the HE Operation IE
+                vhtOperation.from(heOperation.getVhtInfoElement());
             }
         }
 
+        // Proceed to VHT Operation IE if parameters were not obtained from HE Operation IE
+        // Not operating in 6GHz
+        if (channelWidth == ScanResult.UNSPECIFIED) {
+            if (vhtOperation.isPresent()) {
+                channelWidth = vhtOperation.getChannelWidth();
+                if (channelWidth != ScanResult.UNSPECIFIED) {
+                    centerFreq0 = vhtOperation.getCenterFreq0();
+                    centerFreq1 = vhtOperation.getCenterFreq1();
+                }
+            }
+        }
+
+        // Proceed to HT Operation IE if parameters were not obtained from VHT/HE Operation IEs
+        // Apply to operating in 2.4/5GHz with 20/40MHz channels
         if (channelWidth == ScanResult.UNSPECIFIED) {
             //Either no vht, or vht shows BW is 40/20 MHz
             if (htOperation.isPresent()) {
@@ -295,6 +341,10 @@ public class NetworkDetail {
             mDtimInterval = trafficIndicationMap.mDtimPeriod;
         }
 
+        mMaxNumberSpatialStreams = Math.max(heCapabilities.getMaxNumberSpatialStreams(),
+                Math.max(vhtCapabilities.getMaxNumberSpatialStreams(),
+                htCapabilities.getMaxNumberSpatialStreams()));
+
         int maxRateA = 0;
         int maxRateB = 0;
         // If we got some Extended supported rates, consider them, if not default to 0
@@ -307,21 +357,23 @@ public class NetworkDetail {
             maxRateA = supportedRates.mRates.get(supportedRates.mRates.size() - 1);
             mMaxRate = maxRateA > maxRateB ? maxRateA : maxRateB;
             mWifiMode = InformationElementUtil.WifiMode.determineMode(mPrimaryFreq, mMaxRate,
-                    vhtOperation.isPresent(), htOperation.isPresent(),
+                    heOperation.isPresent(), vhtOperation.isPresent(), htOperation.isPresent(),
                     iesFound.contains(ScanResult.InformationElement.EID_ERP));
         } else {
             mWifiMode = 0;
             mMaxRate = 0;
         }
         if (DBG) {
-            Log.d(TAG, mSSID + "ChannelWidth is: " + mChannelWidth + " PrimaryFreq: " + mPrimaryFreq
-                    + " mCenterfreq0: " + mCenterfreq0 + " mCenterfreq1: " + mCenterfreq1
-                    + (extendedCapabilities.is80211McRTTResponder() ? "Support RTT responder"
-                    : "Do not support RTT responder"));
+            Log.d(TAG, mSSID + "ChannelWidth is: " + mChannelWidth + " PrimaryFreq: "
+                    + mPrimaryFreq + " mCenterfreq0: " + mCenterfreq0 + " mCenterfreq1: "
+                    + mCenterfreq1 + (extendedCapabilities.is80211McRTTResponder()
+                    ? " Support RTT responder" : " Do not support RTT responder")
+                    + " mMaxNumberSpatialStreams: " + mMaxNumberSpatialStreams);
             Log.v("WifiMode", mSSID
                     + ", WifiMode: " + InformationElementUtil.WifiMode.toString(mWifiMode)
                     + ", Freq: " + mPrimaryFreq
                     + ", mMaxRate: " + mMaxRate
+                    + ", HE: " + String.valueOf(heOperation.isPresent())
                     + ", VHT: " + String.valueOf(vhtOperation.isPresent())
                     + ", HT: " + String.valueOf(htOperation.isPresent())
                     + ", ERP: " + String.valueOf(
@@ -362,6 +414,7 @@ public class NetworkDetail {
         mDtimInterval = base.mDtimInterval;
         mWifiMode = base.mWifiMode;
         mMaxRate = base.mMaxRate;
+        mMaxNumberSpatialStreams = base.mMaxNumberSpatialStreams;
     }
 
     public NetworkDetail complete(Map<Constants.ANQPElementType, ANQPElement> anqpElements) {
@@ -471,6 +524,10 @@ public class NetworkDetail {
 
     public int getWifiMode() {
         return mWifiMode;
+    }
+
+    public int getMaxNumberSpatialStreams() {
+        return mMaxNumberSpatialStreams;
     }
 
     public int getDtimInterval() {

@@ -42,6 +42,8 @@ import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.test.TestLooper;
 import android.provider.Settings;
+import android.telephony.SubscriptionInfo;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Pair;
@@ -49,10 +51,10 @@ import android.util.Pair;
 import androidx.test.filters.SmallTest;
 
 import com.android.dx.mockito.inline.extended.ExtendedMockito;
-import com.android.internal.R;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
+import com.android.wifi.R;
 
 import org.junit.After;
 import org.junit.Before;
@@ -113,10 +115,12 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     private static final int TEST_FREQUENCY_3 = 5240;
     private static final MacAddress TEST_RANDOMIZED_MAC =
             MacAddress.fromString("d2:11:19:34:a5:20");
+    private static final int DATA_SUBID = 1;
 
     @Mock private Context mContext;
     @Mock private Clock mClock;
     @Mock private UserManager mUserManager;
+    @Mock private SubscriptionManager mSubscriptionManager;
     @Mock private TelephonyManager mTelephonyManager;
     @Mock private TelephonyManager mDataTelephonyManager;
     @Mock private WifiKeyStore mWifiKeyStore;
@@ -134,6 +138,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     @Mock private FrameworkFacade mFrameworkFacade;
     @Mock private DeviceConfigFacade mDeviceConfigFacade;
     @Mock private CarrierNetworkConfig mCarrierNetworkConfig;
+    @Mock private MacAddressUtil mMacAddressUtil;
 
     private MockResources mResources;
     private InOrder mContextConfigStoreMockOrder;
@@ -144,6 +149,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     private ContentObserver mContentObserverPnoChannelCulling;
     private ContentObserver mContentObserverPnoRecencySorting;
     private MockitoSession mSession;
+    private TelephonyUtil mTelephonyUtil;
 
     /**
      * Setup the mocks and an instance of WifiConfigManager before each test.
@@ -215,6 +221,11 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         when(mWifiInjector.getWifiLastResortWatchdog().shouldIgnoreSsidUpdate())
                 .thenReturn(false);
         when(mWifiInjector.getCarrierNetworkConfig()).thenReturn(mCarrierNetworkConfig);
+        when(mWifiInjector.getMacAddressUtil()).thenReturn(mMacAddressUtil);
+        when(mMacAddressUtil.calculatePersistentMacForConfiguration(any(), any()))
+                .thenReturn(TEST_RANDOMIZED_MAC);
+
+        mTelephonyUtil = new TelephonyUtil(mTelephonyManager, mSubscriptionManager);
         createWifiConfigManager();
         mWifiConfigManager.addOnNetworkUpdateListener(mWcmListener);
         ArgumentCaptor<ContentObserver> observerCaptor =
@@ -230,13 +241,10 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         // static mocking
         mSession = ExtendedMockito.mockitoSession()
                 .mockStatic(WifiConfigStore.class, withSettings().lenient())
-                .spyStatic(WifiConfigurationUtil.class)
                 .strictness(Strictness.LENIENT)
                 .startMocking();
-        when(WifiConfigStore.createUserFiles(anyInt())).thenReturn(mock(List.class));
+        when(WifiConfigStore.createUserFiles(anyInt(), anyBoolean())).thenReturn(mock(List.class));
         when(mTelephonyManager.createForSubscriptionId(anyInt())).thenReturn(mDataTelephonyManager);
-        when(WifiConfigurationUtil.calculatePersistentMacForConfiguration(any(), any()))
-                .thenReturn(TEST_RANDOMIZED_MAC);
     }
 
     /**
@@ -4561,6 +4569,10 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         when(mDataTelephonyManager.getSimState()).thenReturn(TelephonyManager.SIM_STATE_READY);
         when(mDataTelephonyManager.getSimOperator()).thenReturn("321456");
         when(mDataTelephonyManager.getCarrierInfoForImsiEncryption(anyInt())).thenReturn(null);
+        List<SubscriptionInfo> subList = new ArrayList<>() {{
+                add(mock(SubscriptionInfo.class));
+            }};
+        when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(subList);
 
         WifiConfiguration network = WifiConfigurationTestUtil.createEapNetwork();
         WifiConfiguration simNetwork = WifiConfigurationTestUtil.createEapNetwork(
@@ -4576,6 +4588,11 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         verifyAddNetworkToWifiConfigManager(network);
         verifyAddNetworkToWifiConfigManager(simNetwork);
         verifyAddNetworkToWifiConfigManager(peapSimNetwork);
+        MockitoSession mockSession = ExtendedMockito.mockitoSession()
+                .mockStatic(SubscriptionManager.class)
+                .startMocking();
+        when(SubscriptionManager.getDefaultDataSubscriptionId()).thenReturn(DATA_SUBID);
+        when(SubscriptionManager.isValidSubscriptionId(anyInt())).thenReturn(true);
 
         // SIM was removed, resetting SIM Networks
         mWifiConfigManager.resetSimNetworks();
@@ -4592,6 +4609,8 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 mWifiConfigManager.getConfiguredNetwork(peapSimNetwork.networkId);
         assertEquals(expectedIdentity, retrievedPeapSimNetwork.enterpriseConfig.getIdentity());
         assertNotEquals("", retrievedPeapSimNetwork.enterpriseConfig.getAnonymousIdentity());
+
+        mockSession.finishMocking();
     }
 
     /**
@@ -4602,12 +4621,14 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      */
     @Test
     public void testResetSimNetworks_getSimIdentityNull_shouldResetAllNonPeapSimIdentities() {
-        when(mDataTelephonyManager.getSubscriberId()).thenReturn("3214561234567890");
+        when(mDataTelephonyManager.getSubscriberId()).thenReturn("");
         when(mDataTelephonyManager.getSimState()).thenReturn(TelephonyManager.SIM_STATE_READY);
-        when(mDataTelephonyManager.getSimOperator()).thenReturn("321456");
+        when(mDataTelephonyManager.getSimOperator()).thenReturn("");
         when(mDataTelephonyManager.getCarrierInfoForImsiEncryption(anyInt())).thenReturn(null);
-        // null CarrierNetworkConfig => getSimIdentity returns null => PEAP identity unchanged
-        when(mWifiInjector.getCarrierNetworkConfig()).thenReturn(null);
+        List<SubscriptionInfo> subList = new ArrayList<>() {{
+                add(mock(SubscriptionInfo.class));
+            }};
+        when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(subList);
 
         WifiConfiguration peapSimNetwork = WifiConfigurationTestUtil.createEapNetwork(
                 WifiEnterpriseConfig.Eap.PEAP, WifiEnterpriseConfig.Phase2.SIM);
@@ -4625,6 +4646,11 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         simNetwork.enterpriseConfig.setIdentity("identity_eap_sim");
         simNetwork.enterpriseConfig.setAnonymousIdentity("anonymous_identity_eap_sim");
         verifyAddNetworkToWifiConfigManager(simNetwork);
+        MockitoSession mockSession = ExtendedMockito.mockitoSession()
+                .mockStatic(SubscriptionManager.class)
+                .startMocking();
+        when(SubscriptionManager.getDefaultDataSubscriptionId()).thenReturn(DATA_SUBID);
+        when(SubscriptionManager.isValidSubscriptionId(anyInt())).thenReturn(true);
 
         // SIM was removed, resetting SIM Networks
         mWifiConfigManager.resetSimNetworks();
@@ -4643,6 +4669,8 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         assertEquals("identity_peap", retrievedPeapSimNetwork.enterpriseConfig.getIdentity());
         assertEquals("anonymous_identity_peap",
                 retrievedPeapSimNetwork.enterpriseConfig.getAnonymousIdentity());
+
+        mockSession.finishMocking();
     }
 
     /**
@@ -4830,7 +4858,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     private void createWifiConfigManager() {
         mWifiConfigManager =
                 new WifiConfigManager(
-                        mContext, mClock, mUserManager, mTelephonyManager,
+                        mContext, mClock, mUserManager, mTelephonyUtil,
                         mWifiKeyStore, mWifiConfigStore,
                         mWifiPermissionsUtil, mWifiPermissionsWrapper, mWifiInjector,
                         mNetworkListSharedStoreData, mNetworkListUserStoreData,

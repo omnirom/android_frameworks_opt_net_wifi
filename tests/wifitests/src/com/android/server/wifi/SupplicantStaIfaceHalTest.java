@@ -16,6 +16,8 @@
 package com.android.server.wifi;
 
 import static android.net.wifi.WifiManager.WIFI_FEATURE_DPP;
+import static android.net.wifi.WifiManager.WIFI_FEATURE_MBO;
+import static android.net.wifi.WifiManager.WIFI_FEATURE_OCE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OWE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SAE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SUITE_B;
@@ -62,9 +64,9 @@ import android.hardware.wifi.supplicant.V1_3.ConnectionCapabilities;
 import android.hardware.wifi.supplicant.V1_3.WifiTechnology;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
+import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
-import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiSsid;
 import android.os.Handler;
@@ -1725,15 +1727,15 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
     }
 
     /**
-     * Test getWifiTechnology
+     * Test getWifiStandard
      * Should fail if running HAL lower than V1_3
      */
     @Test
-    public void testGetWifiTechnologyV1_2() throws Exception {
+    public void testGetWifiStandardV1_2() throws Exception {
         setupMocksForHalV1_2();
         executeAndValidateInitializationSequenceV1_2();
 
-        assertEquals(WifiInfo.WIFI_TECHNOLOGY_UNKNOWN, mDut.getWifiTechnology(WLAN0_IFACE_NAME));
+        assertEquals(ScanResult.WIFI_STANDARD_UNKNOWN, mDut.getWifiStandard(WLAN0_IFACE_NAME));
     }
 
     private class GetConnCapabilitiesAnswer extends MockAnswerUtil.AnswerWithArguments {
@@ -1751,22 +1753,22 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
     }
 
     /**
-     * Test getWifiTechnology if running with HAL V1_3
+     * Test getWifiStandard if running with HAL V1_3
      */
     @Test
-    public void testGetWifiTechnologyV1_3() throws Exception {
+    public void testGetWifiStandardV1_3() throws Exception {
         setupMocksForHalV1_3();
 
         executeAndValidateInitializationSequenceV1_3();
         int testWifiTechnologyHal = WifiTechnology.VHT;
-        int testWifiTechnologyWifiInfo = WifiInfo.WIFI_TECHNOLOGY_11AC;
+        int testWifiStandardWifiInfo = ScanResult.WIFI_STANDARD_11AC;
 
         doAnswer(new GetConnCapabilitiesAnswer(testWifiTechnologyHal))
                 .when(mISupplicantStaIfaceMockV13).getConnectionCapabilities(any(
                 android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface
                         .getConnectionCapabilitiesCallback.class));
 
-        assertEquals(testWifiTechnologyWifiInfo, mDut.getWifiTechnology(WLAN0_IFACE_NAME));
+        assertEquals(testWifiStandardWifiInfo, mDut.getWifiStandard(WLAN0_IFACE_NAME));
     }
 
     private WifiConfiguration createTestWifiConfiguration() {
@@ -2361,4 +2363,70 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
         }).when(mSupplicantStaNetworkMock)
                 .setPmkCache(any(ArrayList.class));
     }
+
+    private class GetWpaDriverCapabilitiesAnswer extends MockAnswerUtil.AnswerWithArguments {
+        private int mWpaDriverCapabilities;
+
+        GetWpaDriverCapabilitiesAnswer(int wpaDriverCapabilities) {
+            mWpaDriverCapabilities = wpaDriverCapabilities;
+        }
+
+        public void answer(android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface
+                .getWpaDriverCapabilitiesCallback cb) {
+            cb.onValues(mStatusSuccess, mWpaDriverCapabilities);
+        }
+    }
+
+    /**
+     * Test To get wpa driver capabilities API on old HAL, should
+     * return 0 (not supported)
+     */
+    @Test
+    public void tetGetWpaDriverCapabilitiesOldHal() throws Exception {
+        setupMocksForHalV1_2();
+
+        executeAndValidateInitializationSequenceV1_2();
+
+        assertEquals(0, mDut.getWpaDriverFeatureSet(WLAN0_IFACE_NAME));
+    }
+
+    /**
+     * Test Multi Band operation support (MBO).
+     */
+    @Test
+    public void testGetWpaDriverCapabilitiesMbo() throws Exception {
+        setupMocksForHalV1_3();
+
+        executeAndValidateInitializationSequenceV1_3();
+
+        doAnswer(new GetWpaDriverCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_3
+                .WpaDriverCapabilitiesMask.MBO))
+                .when(mISupplicantStaIfaceMockV13).getWpaDriverCapabilities(any(
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface
+                        .getWpaDriverCapabilitiesCallback.class));
+
+        assertEquals(WIFI_FEATURE_MBO, mDut.getWpaDriverFeatureSet(WLAN0_IFACE_NAME));
+    }
+
+    /**
+     * Test Optimized Connectivity support (OCE).
+     */
+    @Test
+    public void testGetWpaDriverCapabilitiesOce() throws Exception {
+        setupMocksForHalV1_3();
+
+        executeAndValidateInitializationSequenceV1_3();
+
+        doAnswer(new GetWpaDriverCapabilitiesAnswer(android.hardware.wifi.supplicant.V1_3
+                .WpaDriverCapabilitiesMask.MBO
+                | android.hardware.wifi.supplicant.V1_3
+                .WpaDriverCapabilitiesMask.OCE))
+                .when(mISupplicantStaIfaceMockV13).getWpaDriverCapabilities(any(
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface
+                        .getWpaDriverCapabilitiesCallback.class));
+
+        assertEquals(WIFI_FEATURE_MBO | WIFI_FEATURE_OCE,
+                mDut.getWpaDriverFeatureSet(WLAN0_IFACE_NAME));
+    }
+
 }

@@ -16,6 +16,8 @@
 package com.android.server.wifi;
 
 import static android.net.wifi.WifiManager.WIFI_FEATURE_DPP;
+import static android.net.wifi.WifiManager.WIFI_FEATURE_MBO;
+import static android.net.wifi.WifiManager.WIFI_FEATURE_OCE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OWE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SAE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SUITE_B;
@@ -44,11 +46,12 @@ import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
 import android.hardware.wifi.supplicant.V1_0.WpsConfigMethods;
 import android.hardware.wifi.supplicant.V1_3.ConnectionCapabilities;
 import android.hardware.wifi.supplicant.V1_3.WifiTechnology;
+import android.hardware.wifi.supplicant.V1_3.WpaDriverCapabilitiesMask;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
+import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
-import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiSsid;
 import android.os.Handler;
 import android.net.wifi.WifiDppConfig;
@@ -3249,35 +3252,93 @@ public class SupplicantStaIfaceHal {
         return keyMgmtMask.value;
     }
 
-    private @WifiInfo.WifiTechnology int getWifiTechFromCap(ConnectionCapabilities capa) {
-        switch(capa.technology) {
-            case WifiTechnology.HE:
-                return WifiInfo.WIFI_TECHNOLOGY_11AX;
-            case WifiTechnology.VHT:
-                return WifiInfo.WIFI_TECHNOLOGY_11AC;
-            case WifiTechnology.HT:
-                return WifiInfo.WIFI_TECHNOLOGY_11N;
-            case WifiTechnology.LEGACY:
-                return WifiInfo.WIFI_TECHNOLOGY_LEGACY;
-            default:
-                return WifiInfo.WIFI_TECHNOLOGY_UNKNOWN;
-        }
-    }
-
     /**
-     * Returns wifi technology for connected network
+     * Get the driver supported features through supplicant.
      *
-     *  This is a v1.3+ HAL feature.
-     *  On error, or if these features are not supported, 0 is returned.
+     * @param ifaceName Name of the interface.
+     * @return bitmask defined by WifiManager.WIFI_FEATURE_*.
      */
-    public @WifiInfo.WifiTechnology int getWifiTechnology(@NonNull String ifaceName) {
-        final String methodStr = "getWifiTechnology";
-        MutableInt wifiTechnology = new MutableInt(WifiInfo.WIFI_TECHNOLOGY_UNKNOWN);
+    public long getWpaDriverFeatureSet(@NonNull String ifaceName) {
+        final String methodStr = "getWpaDriverFeatureSet";
+        MutableInt drvCapabilitiesMask = new MutableInt(0);
+        long featureSet = 0;
 
         if (isV1_3()) {
             ISupplicantStaIface iface = checkSupplicantStaIfaceAndLogFailure(ifaceName, methodStr);
             if (iface == null) {
-                return WifiInfo.WIFI_TECHNOLOGY_UNKNOWN;
+                return 0;
+            }
+            // Get a v1.3 supplicant STA Interface
+            android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface staIfaceV13 =
+                    getStaIfaceMockableV1_3(iface);
+            if (staIfaceV13 == null) {
+                Log.e(TAG, methodStr
+                        + ": SupplicantStaIface is null, cannot get wpa driver features");
+                return 0;
+            }
+
+            try {
+                staIfaceV13.getWpaDriverCapabilities(
+                        (SupplicantStatus statusInternal, int drvCapabilities) -> {
+                            if (statusInternal.code == SupplicantStatusCode.SUCCESS) {
+                                drvCapabilitiesMask.value = drvCapabilities;
+                            }
+                            checkStatusAndLogFailure(statusInternal, methodStr);
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+        } else {
+            Log.i(TAG, "Method " + methodStr + " is not supported in existing HAL");
+            return 0;
+        }
+
+        if ((drvCapabilitiesMask.value & WpaDriverCapabilitiesMask.MBO) != 0) {
+            featureSet |= WIFI_FEATURE_MBO;
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, methodStr + ": MBO supported");
+            }
+            if ((drvCapabilitiesMask.value
+                    & WpaDriverCapabilitiesMask.OCE) != 0) {
+                featureSet |= WIFI_FEATURE_OCE;
+                if (mVerboseLoggingEnabled) {
+                    Log.v(TAG, methodStr + ": OCE supported");
+                }
+            }
+        }
+
+        return featureSet;
+    }
+
+    private @ScanResult.WifiStandard int getWifiStandardFromCap(ConnectionCapabilities capa) {
+        switch(capa.technology) {
+            case WifiTechnology.HE:
+                return ScanResult.WIFI_STANDARD_11AX;
+            case WifiTechnology.VHT:
+                return ScanResult.WIFI_STANDARD_11AC;
+            case WifiTechnology.HT:
+                return ScanResult.WIFI_STANDARD_11N;
+            case WifiTechnology.LEGACY:
+                return ScanResult.WIFI_STANDARD_LEGACY;
+            default:
+                return ScanResult.WIFI_STANDARD_UNKNOWN;
+        }
+    }
+
+    /**
+     * Returns wifi standard for connected network
+     *
+     *  This is a v1.3+ HAL feature.
+     *  On error, or if these features are not supported, 0 is returned.
+     */
+    public @ScanResult.WifiStandard int getWifiStandard(@NonNull String ifaceName) {
+        final String methodStr = "getWifiStandard";
+        MutableInt wifiStandard = new MutableInt(ScanResult.WIFI_STANDARD_UNKNOWN);
+
+        if (isV1_3()) {
+            ISupplicantStaIface iface = checkSupplicantStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) {
+                return ScanResult.WIFI_STANDARD_UNKNOWN;
             }
 
             // Get a v1.3 supplicant STA Interface
@@ -3287,7 +3348,7 @@ public class SupplicantStaIfaceHal {
             if (staIfaceV13 == null) {
                 Log.e(TAG, methodStr
                         + ": SupplicantStaIface is null, cannot get Connection Capabilities");
-                return WifiInfo.WIFI_TECHNOLOGY_UNKNOWN;
+                return ScanResult.WIFI_STANDARD_UNKNOWN;
             }
 
             try {
@@ -3295,7 +3356,8 @@ public class SupplicantStaIfaceHal {
                         (SupplicantStatus statusInternal,
                          ConnectionCapabilities connCapabilitiesInternal) -> {
                             if (statusInternal.code == SupplicantStatusCode.SUCCESS) {
-                                wifiTechnology.value = getWifiTechFromCap(connCapabilitiesInternal);
+                                wifiStandard.value =
+                                        getWifiStandardFromCap(connCapabilitiesInternal);
                             }
                             checkStatusAndLogFailure(statusInternal, methodStr);
                         });
@@ -3306,7 +3368,7 @@ public class SupplicantStaIfaceHal {
             Log.e(TAG, "Method " + methodStr + " is not supported in existing HAL");
         }
 
-        return wifiTechnology.value;
+        return wifiStandard.value;
     }
 
     /**
@@ -3850,6 +3912,45 @@ public class SupplicantStaIfaceHal {
 
     protected DppEventCallback getDppCallback() {
         return mDppCallback;
+    }
+
+   /**
+     * Set MBO cellular data availability.
+     *
+     * @param ifaceName Name of the interface.
+     * @param available true means cellular data available, false otherwise.
+     * @return None.
+     */
+    public boolean setMboCellularDataStatus(@NonNull String ifaceName, boolean available) {
+        final String methodStr = "setMboCellularDataStatus";
+
+        if (isV1_3()) {
+            ISupplicantStaIface iface = checkSupplicantStaIfaceAndLogFailure(ifaceName, methodStr);
+            if (iface == null) {
+                return false;
+            }
+
+            // Get a v1.3 supplicant STA Interface
+            android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface staIfaceV13 =
+                    getStaIfaceMockableV1_3(iface);
+            if (staIfaceV13 == null) {
+                Log.e(TAG, methodStr
+                        + ": SupplicantStaIface is null, cannot update cell status");
+                return false;
+            }
+
+            try {
+                SupplicantStatus status = staIfaceV13.setMboCellularDataStatus(available);
+                return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+        } else {
+            Log.e(TAG, "Method " + methodStr + " is not supported in existing HAL");
+            return false;
+        }
+
+        return false;
     }
 
     protected vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface

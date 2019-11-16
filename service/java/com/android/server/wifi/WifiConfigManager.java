@@ -41,19 +41,18 @@ import android.os.Process;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.LocalLog;
 import android.util.Log;
 import android.util.Pair;
 
-import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
+import com.android.wifi.R;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -275,14 +274,15 @@ public class WifiConfigManager {
     private final Clock mClock;
     private final UserManager mUserManager;
     private final BackupManagerProxy mBackupManagerProxy;
-    private final TelephonyManager mTelephonyManager;
     private final WifiKeyStore mWifiKeyStore;
     private final WifiConfigStore mWifiConfigStore;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
     private final WifiInjector mWifiInjector;
+    private final MacAddressUtil mMacAddressUtil;
     private boolean mConnectedMacRandomzationSupported;
     private final Mac mMac;
+    private final TelephonyUtil mTelephonyUtil;
 
     /**
      * Local log used for debugging any WifiConfigManager issues.
@@ -393,7 +393,7 @@ public class WifiConfigManager {
      */
     WifiConfigManager(
             Context context, Clock clock, UserManager userManager,
-            TelephonyManager telephonyManager, WifiKeyStore wifiKeyStore,
+            TelephonyUtil telephonyUtil, WifiKeyStore wifiKeyStore,
             WifiConfigStore wifiConfigStore,
             WifiPermissionsUtil wifiPermissionsUtil,
             WifiPermissionsWrapper wifiPermissionsWrapper,
@@ -408,7 +408,7 @@ public class WifiConfigManager {
         mClock = clock;
         mUserManager = userManager;
         mBackupManagerProxy = new BackupManagerProxy();
-        mTelephonyManager = telephonyManager;
+        mTelephonyUtil = telephonyUtil;
         mWifiKeyStore = wifiKeyStore;
         mWifiConfigStore = wifiConfigStore;
         mWifiPermissionsUtil = wifiPermissionsUtil;
@@ -472,7 +472,8 @@ public class WifiConfigManager {
         } catch (PackageManager.NameNotFoundException e) {
             Log.e(TAG, "Unable to resolve SystemUI's UID.");
         }
-        mMac = WifiConfigurationUtil.obtainMacRandHashFunction(Process.WIFI_UID);
+        mMacAddressUtil = mWifiInjector.getMacAddressUtil();
+        mMac = mMacAddressUtil.obtainMacRandHashFunction(Process.WIFI_UID);
         if (mMac == null) {
             Log.wtf(TAG, "Failed to obtain secret for MAC randomization."
                     + " All randomized MAC addresses are lost!");
@@ -571,7 +572,7 @@ public class WifiConfigManager {
                 mRandomizedMacAddressMapping.remove(config.getSsidAndSecurityTypeString());
             }
         }
-        return WifiConfigurationUtil.calculatePersistentMacForConfiguration(config, mMac);
+        return mMacAddressUtil.calculatePersistentMacForConfiguration(config, mMac);
     }
 
     /**
@@ -1148,6 +1149,7 @@ public class WifiConfigManager {
 
         // Copy over macRandomizationSetting
         internalConfig.macRandomizationSetting = externalConfig.macRandomizationSetting;
+        internalConfig.carrierId = externalConfig.carrierId;
 
         // Copy over the DPP configuration parameters if set.
         if (externalConfig.dppConnector != null) {
@@ -3008,13 +3010,13 @@ public class WifiConfigManager {
     public void resetSimNetworks() {
         if (mVerboseLoggingEnabled) localLog("resetSimNetworks");
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if (!TelephonyUtil.isSimConfig(config)) {
+            if (config.enterpriseConfig == null
+                    || !config.enterpriseConfig.requireSimCredential()) {
                 continue;
             }
             if (config.enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.PEAP) {
-                Pair<String, String> currentIdentity = TelephonyUtil.getSimIdentity(
-                        mTelephonyManager, new TelephonyUtil(), config,
-                        mWifiInjector.getCarrierNetworkConfig());
+                Pair<String, String> currentIdentity =
+                        mTelephonyUtil.getSimIdentity(config);
                 if (mVerboseLoggingEnabled) {
                     Log.d(TAG, "New identity for config " + config + ": " + currentIdentity);
                 }
@@ -3330,7 +3332,8 @@ public class WifiConfigManager {
         if (mDeferredUserUnlockRead) {
             Log.i(TAG, "Handling user unlock before loading from store.");
             List<WifiConfigStore.StoreFile> userStoreFiles =
-                    WifiConfigStore.createUserFiles(mCurrentUserId);
+                    WifiConfigStore.createUserFiles(
+                            mCurrentUserId, mFrameworkFacade.isNiapModeOn(mContext));
             if (userStoreFiles == null) {
                 Log.wtf(TAG, "Failed to create user store files");
                 return false;
@@ -3369,7 +3372,8 @@ public class WifiConfigManager {
     private boolean loadFromUserStoreAfterUnlockOrSwitch(int userId) {
         try {
             List<WifiConfigStore.StoreFile> userStoreFiles =
-                    WifiConfigStore.createUserFiles(userId);
+                    WifiConfigStore.createUserFiles(
+                            userId, mFrameworkFacade.isNiapModeOn(mContext));
             if (userStoreFiles == null) {
                 Log.e(TAG, "Failed to create user store files");
                 return false;
@@ -3379,8 +3383,8 @@ public class WifiConfigManager {
             Log.wtf(TAG, "Reading from new store failed. All saved private networks are lost!", e);
             return false;
         } catch (XmlPullParserException e) {
-            Log.wtf(TAG, "XML deserialization of store failed. All saved private networks are" +
-                    "lost!", e);
+            Log.wtf(TAG, "XML deserialization of store failed. All saved private networks are "
+                    + "lost!", e);
             return false;
         }
         loadInternalDataFromUserStore(mNetworkListUserStoreData.getConfigurations(),
