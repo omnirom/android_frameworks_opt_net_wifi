@@ -5748,7 +5748,8 @@ public class ClientModeImpl extends StateMachine {
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
                         updateWifiGenerationInfo();
-                        mWifiConnectivityManager.trackBssid(mLastBssid, true, reasonCode);
+                        // TODO(b/i144863648): trackBssid has been removed
+                        //mWifiConnectivityManager.trackBssid(mLastBssid, true, reasonCode);
                         // We need to get the updated pseudonym from supplicant for EAP-SIM/AKA/AKA'
                         if (config.enterpriseConfig != null
                                 && TelephonyUtil.isSimEapMethod(
