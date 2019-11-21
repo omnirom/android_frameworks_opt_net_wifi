@@ -34,10 +34,13 @@ public class ApConfigUtil {
     public static final int DEFAULT_AP_BAND = WifiConfiguration.AP_BAND_2GHZ;
     public static final int DEFAULT_AP_CHANNEL = 6;
     public static final int HIGHEST_2G_AP_CHANNEL = 14;
+    public static final int DEFAULT_AP_OPER_CLASS = 0;
+
     /* Return code for updateConfiguration. */
     public static final int SUCCESS = 0;
     public static final int ERROR_NO_CHANNEL = 1;
     public static final int ERROR_GENERIC = 2;
+    public static final int ERROR_NO_OPER_CLASS = 3;
 
     /* Random number generator used for AP channel selection. */
     private static final Random sRandom = new Random();
@@ -55,7 +58,38 @@ public class ApConfigUtil {
         } else if (frequency >= 5170  &&  frequency <= 5865) {
             /* DFS is included. */
             return (frequency - 5170) / 5 + 34;
+        } else if (frequency >= 5945  &&  frequency <= 7125) {
+            return (frequency - 5940) / 5;
         }
+        return -1;
+    }
+
+    /**
+     * Convert 6G channel number to operating class.
+     * @param channel channel number to convert
+     * @return operating class associated with given channel number, -1 if no match
+     */
+    public static int convertChannelToOperClass(int channel) {
+        int bw;
+        bw = channelToBw6ghz(channel);
+        if (bw == -1)
+            return -1;
+        return (131 + bw);
+    }
+
+    public static int channelToBw6ghz(int idx) {
+        /* channels: 1, 5, 9, 13... */
+        if ((idx & 0x3) == 0x1)
+            return 0; /* 20mhz */
+        /* channels 3, 11, 19... */
+        if ((idx & 0x7) == 0x3)
+            return 1; /* 40mhz */
+        /* channels 7, 23, 39.. */
+        if ((idx & 0xf) == 0x7)
+           return 2; /* 80mhz */
+        /* channels 15, 47, 79...*/
+        if ((idx & 0x1f) == 0xf)
+           return 3; /* 160mhz */
 
         return -1;
     }
@@ -65,14 +99,16 @@ public class ApConfigUtil {
      * @param apBand one of the value of WifiConfiguration.AP_BAND_*.
      * @param allowed2GChannels list of allowed 2GHz channels
      * @param allowed5GFreqList list of allowed 5GHz frequencies
+     * @param allowed6GFreqList list of allowed 6GHz frequencies
      * @return a valid channel number on success, -1 on failure.
      */
     public static int chooseApChannel(int apBand,
                                       ArrayList<Integer> allowed2GChannels,
-                                      int[] allowed5GFreqList) {
+                                      int[] allowed5GFreqList, int[] allowed6GFreqList) {
         if (apBand != WifiConfiguration.AP_BAND_2GHZ
                 && apBand != WifiConfiguration.AP_BAND_5GHZ
-                        && apBand != WifiConfiguration.AP_BAND_ANY) {
+                        && apBand != WifiConfiguration.AP_BAND_6GHZ
+                                && apBand != WifiConfiguration.AP_BAND_ANY) {
             Log.e(TAG, "Invalid band: " + apBand);
             return -1;
         }
@@ -92,19 +128,28 @@ public class ApConfigUtil {
             return allowed2GChannels.get(index).intValue();
         }
 
+        /* 6G. */
+        if (allowed6GFreqList != null && allowed6GFreqList.length > 0 &&
+             apBand == WifiConfiguration.AP_BAND_6GHZ) {
+            /* Pick a random channel from the list of supported channels. */
+            return convertFrequencyToChannel(
+                    allowed6GFreqList[sRandom.nextInt(allowed6GFreqList.length)]);
+        }
+
         /* 5G without DFS. */
-        if (allowed5GFreqList != null && allowed5GFreqList.length > 0) {
+        else if (allowed5GFreqList != null && allowed5GFreqList.length > 0 &&
+                  apBand == WifiConfiguration.AP_BAND_5GHZ) {
             /* Pick a random channel from the list of supported channels. */
             return convertFrequencyToChannel(
                     allowed5GFreqList[sRandom.nextInt(allowed5GFreqList.length)]);
         }
 
-        Log.e(TAG, "No available channels on 5GHz band");
-        return -1;
+            Log.e(TAG, "No available channels on 5GHz/6GHz band");
+            return -1;
     }
 
     /**
-     * Update AP band and channel based on the provided country code and band.
+     * Update AP band, channel and operating class based on the provided country code and band.
      * This will also set
      * @param wifiNative reference to WifiNative
      * @param countryCode country code
@@ -116,17 +161,19 @@ public class ApConfigUtil {
                                             String countryCode,
                                             ArrayList<Integer> allowed2GChannels,
                                             WifiConfiguration config) {
-        /* Use default band and channel for device without HAL. */
+        /* Use default band, channel and operaring class for device without HAL. */
         if (!wifiNative.isHalStarted()) {
             config.apBand = DEFAULT_AP_BAND;
             config.apChannel = DEFAULT_AP_CHANNEL;
+            config.apOperClass = DEFAULT_AP_OPER_CLASS;
             return SUCCESS;
         }
 
-        /* Country code is mandatory for 5GHz band. */
-        if (config.apBand == WifiConfiguration.AP_BAND_5GHZ
+        /* Country code is mandatory for 5GHz & 6GHz band. */
+        if ((config.apBand == WifiConfiguration.AP_BAND_5GHZ ||
+              config.apBand == WifiConfiguration.AP_BAND_6GHZ)
                 && countryCode == null) {
-            Log.e(TAG, "5GHz band is not allowed without country code");
+            Log.e(TAG, "5GHz band and 6GHz are not allowed without country code");
             return ERROR_GENERIC;
         }
 
@@ -134,11 +181,22 @@ public class ApConfigUtil {
         if (config.apChannel == 0) {
             config.apChannel = chooseApChannel(
                     config.apBand, allowed2GChannels,
-                    wifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ));
+                    wifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ),
+                    wifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_6_GHZ));
             if (config.apChannel == -1) {
                 /* We're not able to get channel from wificond. */
                 Log.e(TAG, "Failed to get available channel.");
                 return ERROR_NO_CHANNEL;
+            }
+        }
+        if (config.apBand == WifiConfiguration.AP_BAND_6GHZ) {
+            /* 6G. */
+            if (config.apChannel != -1 || config.apChannel != 0) {
+                config.apOperClass = convertChannelToOperClass(config.apChannel);
+                if (config.apOperClass == -1) {
+                    Log.e(TAG, "Failed to get available operating class.");
+                    return ERROR_NO_OPER_CLASS;
+                }
             }
         }
 

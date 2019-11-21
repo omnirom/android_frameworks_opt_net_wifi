@@ -2737,6 +2737,15 @@ public class WifiServiceImpl extends BaseWifiService {
                 com.android.internal.R.bool.config_wifi_dual_band_support);
     }
 
+    @Override
+    public boolean is6GHzBandSupported() {
+        if (mVerboseLoggingEnabled) {
+            mLog.info("is6GHzBandSupported() uid=%").c(Binder.getCallingUid()).flush();
+        }
+
+        return mClientModeImpl.is6GhzBandSupported();
+    }
+
     private int getMaxApInterfacesCount() {
         //TODO (b/123227116): pull it from the HAL
         return mContext.getResources().getInteger(

@@ -97,6 +97,8 @@ public class WifiNative {
     private String mFstSlaveIface;
     private String mFstGroupName;
     private String mFstMuxInterface;
+    private boolean mIs6GhzBandSupportedInitialized = false;
+    private boolean mIs6GhzBandSupported = true;
 
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
@@ -1493,6 +1495,7 @@ public class WifiNative {
      * WifiScanner.WIFI_BAND_24_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY
+     * WifiScanner.WIFI_BAND_6_GHZ
      * @return frequencies vector of valid frequencies (MHz), or null for error.
      * @throws IllegalArgumentException if band is not recognized.
      */
@@ -2059,6 +2062,24 @@ public class WifiNative {
      */
      public String getCapabilities(@NonNull String ifaceName, String capaType) {
          return mSupplicantStaIfaceHal.getCapabilities(ifaceName, capaType);
+    }
+
+    /**
+     * Get 6Ghz band supported info from driver
+     *
+     * @return true if 6Ghz band supported, otherwise false.
+     */
+     public boolean is6GhzBandSupported() {
+         if (mIs6GhzBandSupportedInitialized)
+             return mIs6GhzBandSupported;
+         int[] ChannelsFor6GhzBand = mWificondControl.getChannelsForBand(
+                                      WifiScanner.WIFI_BAND_6_GHZ);
+         if (ChannelsFor6GhzBand == null)
+             return false;
+         // set initialized flag to true as channel info is fetched successfully.
+         mIs6GhzBandSupportedInitialized = true;
+         mIs6GhzBandSupported = (ChannelsFor6GhzBand.length != 0);
+         return mIs6GhzBandSupported;
     }
 
     /**

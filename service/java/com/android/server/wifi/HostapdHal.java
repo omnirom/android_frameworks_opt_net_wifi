@@ -74,6 +74,8 @@ public class HostapdHal {
     private int mForcedApChannel;
     private final List<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange>
             mVendorAcsChannelRanges;
+    private final List<vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.AcsFrequencyRange>
+            mVendorAcsFrequencyRanges;
     private String mCountryCode = null;
 
     // Hostapd HAL interface objects
@@ -156,6 +158,8 @@ public class HostapdHal {
 
         mVendorAcsChannelRanges = toVendorAcsChannelRanges(context.getResources().getString(
                 R.string.config_wifi_softap_acs_supported_channel_list));
+        mVendorAcsFrequencyRanges = toVendorAcsFrequencyRanges(context.getResources().getString(
+                R.string.config_wifi_softap_acs_supported_frequency_list));
     }
 
     /**
@@ -706,6 +710,29 @@ public class HostapdHal {
         return bandType;
     }
 
+    private static int getVendorBand(WifiConfiguration localConfig) {
+        int bandType;
+        switch (localConfig.apBand) {
+            case WifiConfiguration.AP_BAND_2GHZ:
+                bandType = vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_2_GHZ;
+                break;
+            case WifiConfiguration.AP_BAND_5GHZ:
+                bandType = vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_5_GHZ;
+                break;
+            case WifiConfiguration.AP_BAND_ANY:
+                bandType = vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_2_GHZ |
+			vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_5_GHZ |
+			vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_6_GHZ;
+                break;
+            case WifiConfiguration.AP_BAND_6GHZ:
+                bandType = vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_6_GHZ;
+                break;
+            default:
+                throw new IllegalArgumentException();
+        }
+        return bandType;
+    }
+
     /**
      * Convert channel list string like '1-6,11' to list of AcsChannelRanges
      */
@@ -828,6 +855,30 @@ public class HostapdHal {
     }
 
     /**
+     * Uses the IServiceManager to check if the device is running V1_2 of the hostapd vendor HAL from
+     * the VINTF for the device.
+     * @return true if supported, false otherwise.
+     */
+    private boolean isVendorV1_2() {
+        synchronized (mLock) {
+            if (mIServiceManager == null) {
+                Log.e(TAG, "isVendorV1_2: called but mServiceManager is null!?");
+                return false;
+            }
+            try {
+                return (mIServiceManager.getTransport(
+                        vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.kInterfaceName,
+                        HAL_INSTANCE_NAME)
+                        != IServiceManager.Transport.EMPTY);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Exception while operating on IServiceManager: " + e);
+                handleRemoteException(e, "getTransport");
+                return false;
+            }
+        }
+    }
+
+    /**
      * Link to death for IHostapdVendor object.
      * @return true on success, false otherwise.
      */
@@ -892,7 +943,12 @@ public class HostapdHal {
             vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
             vendorIfaceParams.bridgeIfaceName = "";
             try {
-                ifaceParams.channelParams.band = getBand(config);
+                if (config.apBand != config.AP_BAND_6GHZ) {
+                    ifaceParams.channelParams.band = getBand(config);
+                } else if (config.apBand == config.AP_BAND_6GHZ && !isVendorV1_2()) {
+                    Log.e(TAG, "Unrecognized apBand " + config.apBand);
+                    return false;
+                }
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Unrecognized apBand " + config.apBand);
                 return false;
@@ -921,6 +977,12 @@ public class HostapdHal {
             nwParams.encryptionType = getEncryptionType(config);
             nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
 
+            vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.VendorNetworkParams vNetworkParams = new vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.VendorNetworkParams();
+            vNetworkParams.V1_0.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
+            vNetworkParams.V1_0.isHidden = config.hiddenSSID;
+            vNetworkParams.vendorEncryptionType = getEncryptionType(config);
+            vNetworkParams.V1_0.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+
             if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
             try {
                 if (apConfigStore.getDualSapStatus()) {
@@ -928,7 +990,65 @@ public class HostapdHal {
                     vendorIfaceParams.bridgeIfaceName = (bridgeIfaceName != null) ? bridgeIfaceName : "";
                 }
 
-                if (isVendorV1_1()) {
+                if (isVendorV1_2()) {
+                    vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor iHostapdVendorV1_2 =
+                        getHostapdVendorMockableV1_2();
+                    if (iHostapdVendorV1_2 == null) {
+                        Log.e(TAG, "Failed to get V1_2.IHostapdVendor");
+                        return false;
+                    }
+                    setLogLevel(mVerboseLoggingEnabled);
+                    vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams
+                         vendorIfaceParams1_1 =
+                            new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams();
+                    vendorIfaceParams1_1.VendorV1_0 = vendorIfaceParams;
+                    vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
+                    vendorIfaceParams1_1.vendorEncryptionType = getVendorEncryptionType(config);
+                    vendorIfaceParams1_1.oweTransIfaceName = (config.oweTransIfaceName != null) ? config.oweTransIfaceName : "";
+                    vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.VendorIfaceParams
+                         vendorIfaceParams1_2 =
+                            new vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.VendorIfaceParams();
+                    vendorIfaceParams1_2.VendorV1_1 = vendorIfaceParams1_1;
+                    vendorIfaceParams1_2.VendorV1_1.vendorChannelParams = vendorIfaceParams1_1.vendorChannelParams;
+                    try {
+                        vendorIfaceParams1_2.channelParams.bandMask = getVendorBand(config);
+                    } catch (IllegalArgumentException e) {
+                        Log.e(TAG, "Unrecognized apBand " + config.apBand);
+                        return false;
+                    }
+                    if (mEnableAcs) {
+                        for (vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.AcsFrequencyRange freq : mVendorAcsFrequencyRanges) {
+                            if (vendorIfaceParams1_2.channelParams.bandMask ==
+                                 vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_2_GHZ &&
+                                  freq.start > 2400 && freq.end < 2500) {
+                                vendorIfaceParams1_2.channelParams.acsChannelFreqRangesMhz.add(freq);
+                            } else if (vendorIfaceParams1_2.channelParams.bandMask ==
+                                        vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_5_GHZ &&
+                                         freq.start > 4900 && freq.end < 5900) {
+                                vendorIfaceParams1_2.channelParams.acsChannelFreqRangesMhz.add(freq);
+                            } else if (vendorIfaceParams1_2.channelParams.bandMask ==
+                                        vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.BandMask.BAND_6_GHZ &&
+                                         freq.start > 5900) {
+                                vendorIfaceParams1_2.channelParams.acsChannelFreqRangesMhz.add(freq);
+                            }
+                        }
+                    }
+                    HostapdStatus status =
+                        iHostapdVendorV1_2.addVendorAccessPoint_1_2(vendorIfaceParams1_2, vNetworkParams);
+                    if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                        HostapdVendorIfaceHalCallbackV1_1 vendorcallback_1_1 =
+                            new HostapdVendorIfaceHalCallbackV1_1(ifaceName, listener);
+                        if (vendorcallback_1_1 != null) {
+                            if (!registerVendorCallback_1_1(ifaceParams.ifaceName, vendorcallback_1_1)) {
+                                Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                                return false;
+                            }
+                        } else {
+                            Log.e(TAG, "Failed to create vendorcallback instance");
+                        }
+                        return true;
+                    }
+                } else if (isVendorV1_1()) {
                     vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor iHostapdVendorV1_1 =
                         getHostapdVendorMockableV1_1();
                     if (iHostapdVendorV1_1 == null) {
@@ -1049,6 +1169,19 @@ public class HostapdHal {
         }
     }
 
+    @VisibleForTesting
+    protected vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor getHostapdVendorMockableV1_2()
+            throws RemoteException {
+        synchronized (mLock) {
+            try {
+                return vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.castFrom(mIHostapdVendor);
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "Failed to get IHostapdVendorV1_2", e);
+                return null;
+            }
+        }
+    }
+
     /**
      * Convert channel list string like '1-6,11' to list of AcsChannelRanges
      */
@@ -1087,6 +1220,46 @@ public class HostapdHal {
             acsChannelRanges.add(acsChannelRange);
         }
         return acsChannelRanges;
+    }
+
+    /**
+     * Convert frequency list string like '5945-6540,6544' to list of AcsFreRanges
+     */
+    private List<vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.AcsFrequencyRange>
+            toVendorAcsFrequencyRanges(String frequencyListStr) {
+        ArrayList<vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.AcsFrequencyRange> acsFreqRanges =
+                new ArrayList<>();
+        String[] frequencyRanges = frequencyListStr.split(",");
+        for (String frequencyRange : frequencyRanges) {
+            vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.AcsFrequencyRange acsFrequencyRange =
+                    new vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.AcsFrequencyRange();
+            try {
+                if (frequencyRange.contains("-")) {
+                    String[] frequencies  = frequencyRange.split("-");
+                    if (frequencies.length != 2) {
+                        Log.e(TAG, "Unrecognized frequency range, length is " + frequencies.length);
+                        continue;
+                    }
+                    int start = Integer.parseInt(frequencies[0]);
+                    int end = Integer.parseInt(frequencies[1]);
+                    if (start > end) {
+                        Log.e(TAG, "Invalid frequency range, from " + start + " to " + end);
+                        continue;
+                    }
+                    acsFrequencyRange.start = start;
+                    acsFrequencyRange.end = end;
+                } else {
+                    acsFrequencyRange.start = Integer.parseInt(frequencyRange);
+                    acsFrequencyRange.end = acsFrequencyRange.start;
+                }
+            } catch (NumberFormatException e) {
+                // Ignore malformed value
+                Log.e(TAG, "Malformed frequency value detected: " + e);
+                continue;
+            }
+            acsFreqRanges.add(acsFrequencyRange);
+        }
+        return acsFreqRanges;
     }
 
     /**

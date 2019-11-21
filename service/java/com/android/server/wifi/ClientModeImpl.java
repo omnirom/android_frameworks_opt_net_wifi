@@ -3329,6 +3329,10 @@ public class ClientModeImpl extends StateMachine {
                 mInterfaceName, WifiNative.BLUETOOTH_COEXISTENCE_MODE_SENSE);
     }
 
+    public boolean is6GhzBandSupported() {
+        return mWifiNative.is6GhzBandSupported();
+    }
+
     public String getCapabilities(String capaType) {
 
         return mWifiNative.getCapabilities(mInterfaceName, capaType);

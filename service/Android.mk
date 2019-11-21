@@ -45,6 +45,7 @@ LOCAL_STATIC_JAVA_LIBRARIES := \
 	android.hardware.wifi.hostapd-V1.1-java \
 	vendor.qti.hardware.wifi.hostapd-V1.0-java \
 	vendor.qti.hardware.wifi.hostapd-V1.1-java \
+	vendor.qti.hardware.wifi.hostapd-V1.2-java \
 	android.hardware.wifi.supplicant-V1.0-java \
 	vendor.qti.hardware.wifi.supplicant-V2.0-java \
 	vendor.qti.hardware.wifi.supplicant-V2.1-java \

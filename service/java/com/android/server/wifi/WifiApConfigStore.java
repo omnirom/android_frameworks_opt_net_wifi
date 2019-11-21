@@ -259,7 +259,8 @@ public class WifiApConfigStore {
         if (mRequiresApBandConversion) {
             // some devices are unable to support 5GHz only operation, check for 5GHz and
             // move to ANY if apBand conversion is required.
-            if (config.apBand == WifiConfiguration.AP_BAND_5GHZ) {
+            if ((config.apBand == WifiConfiguration.AP_BAND_5GHZ) ||
+                 (config.apBand == WifiConfiguration.AP_BAND_6GHZ)) {
                 Log.w(TAG, "Supplied ap config band was 5GHz only, converting to ANY");
                 WifiConfiguration convertedConfig = new WifiConfiguration(config);
                 convertedConfig.apBand = WifiConfiguration.AP_BAND_ANY;
