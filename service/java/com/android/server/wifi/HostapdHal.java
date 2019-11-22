@@ -65,6 +65,7 @@ public class HostapdHal {
     private boolean mVerboseLoggingEnabled = false;
     private final Handler mEventHandler;
     private final boolean mEnableAcs;
+    private final boolean mAcsShouldExcludeDfs;
     private final boolean mEnableIeee80211AC;
     private final List<android.hardware.wifi.hostapd.V1_1.IHostapd.AcsChannelRange>
             mAcsChannelRanges;
@@ -140,6 +141,7 @@ public class HostapdHal {
     public HostapdHal(Context context, Looper looper) {
         mEventHandler = new Handler(looper);
         mEnableAcs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported);
+        mAcsShouldExcludeDfs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_should_exclude_dfs);
         mEnableIeee80211AC =
                 context.getResources().getBoolean(R.bool.config_wifi_softap_ieee80211ac_supported);
         mAcsChannelRanges = toAcsChannelRanges(context.getResources().getString(
@@ -356,7 +358,9 @@ public class HostapdHal {
             }
             if (mEnableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
-                ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                if(mAcsShouldExcludeDfs) {
+                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                }
             } else {
                 // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
                 // is not supported.
@@ -868,7 +872,9 @@ public class HostapdHal {
             }
             if (mEnableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
-                ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                if(mAcsShouldExcludeDfs) {
+                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                }
             } else {
                 // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
                 // is not supported.
