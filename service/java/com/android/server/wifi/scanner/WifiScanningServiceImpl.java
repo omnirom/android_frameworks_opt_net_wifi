@@ -31,6 +31,7 @@ import android.net.wifi.WifiScanner.ScanData;
 import android.net.wifi.WifiScanner.ScanSettings;
 import android.net.wifi.WifiScanner.WifiBand;
 import android.net.wifi.WifiStackClient;
+import android.os.BadParcelableException;
 import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
@@ -59,7 +60,7 @@ import com.android.server.wifi.WifiInjector;
 import com.android.server.wifi.WifiLog;
 import com.android.server.wifi.WifiMetrics;
 import com.android.server.wifi.WifiNative;
-import com.android.server.wifi.nano.WifiMetricsProto;
+import com.android.server.wifi.proto.nano.WifiMetricsProto;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
 import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiHandler;
@@ -111,8 +112,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     @Override
-    public Bundle getAvailableChannels(@WifiBand int band, String packageName) {
-        enforcePermission(Binder.getCallingUid(), packageName, false, false, false);
+    public Bundle getAvailableChannels(@WifiBand int band, String packageName,
+            @Nullable String featureId) {
+        enforcePermission(Binder.getCallingUid(), packageName, featureId, false, false, false);
 
         mChannelHelper.updateChannels();
         ChannelSpec[] channelSpecs = mChannelHelper.getAvailableScanChannels(band);
@@ -157,6 +159,17 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         return bundle.getString(WifiScanner.REQUEST_PACKAGE_NAME_KEY);
     }
 
+    // For non-privileged requests, retrieve the bundled featureId name for app-op & permission
+    // checks.
+    private String getFeatureId(Message msg) {
+        if (!(msg.obj instanceof Bundle)) {
+            return null;
+        }
+        Bundle bundle = (Bundle) msg.obj;
+        return bundle.getString(WifiScanner.REQUEST_FEATURE_ID_KEY);
+    }
+
+
     // Check if we should ignore location settings if this is a single scan request.
     private boolean shouldIgnoreLocationSettingsForSingleScan(Message msg) {
         if (msg.what != WifiScanner.CMD_START_SINGLE_SCAN) return false;
@@ -176,11 +189,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     /**
-     * @see #enforcePermission(int, String, boolean, boolean, boolean)
+     * @see #enforcePermission(int, String, String, boolean, boolean, boolean)
      */
     private void enforcePermission(int uid, Message msg) throws SecurityException {
-        enforcePermission(uid, getPackageName(msg), isPrivilegedMessage(msg.what),
-                shouldIgnoreLocationSettingsForSingleScan(msg),
+        enforcePermission(uid, getPackageName(msg), getFeatureId(msg),
+                isPrivilegedMessage(msg.what), shouldIgnoreLocationSettingsForSingleScan(msg),
                 shouldHideFromAppsForSingleScan(msg));
     }
 
@@ -192,12 +205,14 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
      *    b) Can never make one of the privileged requests.
      * @param uid uid of the client
      * @param packageName package name of the client
+     * @param featureId The feature in the package of the client
      * @param isPrivilegedRequest whether we are checking for a privileged request
      * @param shouldIgnoreLocationSettings override to ignore location settings
      * @param shouldHideFromApps override to hide request from AppOps
      */
-    private void enforcePermission(int uid, String packageName, boolean isPrivilegedRequest,
-            boolean shouldIgnoreLocationSettings, boolean shouldHideFromApps) {
+    private void enforcePermission(int uid, String packageName, @Nullable String featureId,
+            boolean isPrivilegedRequest, boolean shouldIgnoreLocationSettings,
+            boolean shouldHideFromApps) {
         try {
             // Wifi stack issued requests.
             enforceWifiStackPermission(uid);
@@ -207,8 +222,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 // Privileged message, only requests from clients with NETWORK_STACK allowed!
                 throw e;
             }
-            mWifiPermissionsUtil.enforceCanAccessScanResultsForWifiScanner(packageName, uid,
-                    shouldIgnoreLocationSettings, shouldHideFromApps);
+            mWifiPermissionsUtil.enforceCanAccessScanResultsForWifiScanner(packageName, featureId,
+                    uid, shouldIgnoreLocationSettings, shouldHideFromApps);
         }
     }
 
@@ -872,11 +887,23 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                             replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST, "params null");
                             return HANDLED;
                         }
-                        scanParams.setDefusable(true);
-                        ScanSettings scanSettings =
-                                scanParams.getParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY);
-                        WorkSource workSource =
-                                scanParams.getParcelable(WifiScanner.SCAN_PARAMS_WORK_SOURCE_KEY);
+                        ScanSettings scanSettings = null;
+                        WorkSource workSource = null;
+                        try {
+                            scanSettings =
+                                    scanParams.getParcelable(
+                                            WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY);
+                            workSource =
+                                    scanParams.getParcelable(
+                                            WifiScanner.SCAN_PARAMS_WORK_SOURCE_KEY);
+                        } catch (BadParcelableException e) {
+                            Log.e(TAG, "Failed to get parcelable params", e);
+                            logCallback("singleScanInvalidRequest",  ci, handler,
+                                    "bad parcel params");
+                            replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST,
+                                    "bad parcel params");
+                            return HANDLED;
+                        }
                         if (validateScanRequest(ci, handler, scanSettings)) {
                             mWifiMetrics.incrementOneshotScanCount();
                             if (scanSettings.band == WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY
@@ -1449,11 +1476,21 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                             replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST, "params null");
                             return HANDLED;
                         }
-                        scanParams.setDefusable(true);
-                        ScanSettings scanSettings =
-                                scanParams.getParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY);
-                        WorkSource workSource =
-                                scanParams.getParcelable(WifiScanner.SCAN_PARAMS_WORK_SOURCE_KEY);
+                        ScanSettings scanSettings = null;
+                        WorkSource workSource = null;
+                        try {
+                            scanSettings =
+                                    scanParams.getParcelable(
+                                            WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY);
+                            workSource =
+                                    scanParams.getParcelable(
+                                            WifiScanner.SCAN_PARAMS_WORK_SOURCE_KEY);
+                        } catch (BadParcelableException e) {
+                            Log.e(TAG, "Failed to get parcelable params", e);
+                            replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST,
+                                    "bad parcel params");
+                            return HANDLED;
+                        }
                         if (addBackgroundScanRequest(ci, msg.arg2, scanSettings, workSource)) {
                             replySucceeded(msg);
                         } else {
@@ -1941,9 +1978,17 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                             replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST, "params null");
                             return HANDLED;
                         }
-                        pnoParams.setDefusable(true);
-                        PnoSettings pnoSettings =
-                                pnoParams.getParcelable(WifiScanner.PNO_PARAMS_PNO_SETTINGS_KEY);
+                        PnoSettings pnoSettings = null;
+                        try {
+                            pnoSettings =
+                                    pnoParams.getParcelable(
+                                            WifiScanner.PNO_PARAMS_PNO_SETTINGS_KEY);
+                        } catch (BadParcelableException e) {
+                            Log.e(TAG, "Failed to get parcelable params", e);
+                            replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST,
+                                    "bad parcel params");
+                            return HANDLED;
+                        }
                         if (mScannerImplsTracker.isHwPnoSupported(pnoSettings.isConnected)) {
                             deferMessage(msg);
                             transitionTo(mHwPnoScanState);
@@ -1984,11 +2029,21 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                             replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST, "params null");
                             return HANDLED;
                         }
-                        pnoParams.setDefusable(true);
-                        PnoSettings pnoSettings =
-                                pnoParams.getParcelable(WifiScanner.PNO_PARAMS_PNO_SETTINGS_KEY);
-                        ScanSettings scanSettings =
-                                pnoParams.getParcelable(WifiScanner.PNO_PARAMS_SCAN_SETTINGS_KEY);
+                        PnoSettings pnoSettings = null;
+                        ScanSettings scanSettings = null;
+                        try {
+                            pnoSettings =
+                                    pnoParams.getParcelable(
+                                            WifiScanner.PNO_PARAMS_PNO_SETTINGS_KEY);
+                            scanSettings =
+                                    pnoParams.getParcelable(
+                                            WifiScanner.PNO_PARAMS_SCAN_SETTINGS_KEY);
+                        } catch (BadParcelableException e) {
+                            Log.e(TAG, "Failed to get parcelable params", e);
+                            replyFailed(msg, WifiScanner.REASON_INVALID_REQUEST,
+                                    "bad parcel params");
+                            return HANDLED;
+                        }
                         if (addHwPnoScanRequest(ci, msg.arg2, scanSettings, pnoSettings)) {
                             replySucceeded(msg);
                         } else {

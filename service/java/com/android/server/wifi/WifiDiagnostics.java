@@ -18,6 +18,9 @@ package com.android.server.wifi;
 
 import android.annotation.NonNull;
 import android.content.Context;
+import android.content.Intent;
+import android.os.BugreportParams;
+import android.os.UserHandle;
 import android.util.ArraySet;
 import android.util.Base64;
 import android.util.Log;
@@ -27,10 +30,10 @@ import android.content.Intent;
 import android.net.wifi.WifiManager;
 import android.os.UserHandle;
 
-import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.ByteArrayRingBuffer;
 import com.android.server.wifi.util.StringUtil;
+import com.android.wifi.R;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -63,6 +66,14 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
 
     private static final String TAG = "WifiDiags";
     private static final boolean DBG = true;
+
+    // TODO (b/143494985): Use formal API instead of sending this intent.
+    private static final String INTENT_BUGREPORT_REQUESTED =
+            "com.android.internal.intent.action.BUGREPORT_REQUESTED";
+    private static final String SHELL_APP_PACKAGE = "com.android.shell";
+    private static final String EXTRA_TITLE = "android.intent.extra.TITLE";
+    private static final String EXTRA_DESCRIPTION = "android.intent.extra.DESCRIPTION";
+    private static final String EXTRA_BUGREPORT_TYPE = "android.intent.extra.BUGREPORT_TYPE";
 
     /** log level flags; keep these consistent with wifi_logger.h */
 
@@ -125,6 +136,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private boolean mIsLoggingEventHandlerRegistered;
     private WifiNative.RingBufferStatus[] mRingBuffers;
     private WifiNative.RingBufferStatus mPerPacketRingBuffer;
+    private final Context mContext;
     private final BuildProperties mBuildProperties;
     private final WifiLog mLog;
     private final LastMileLogger mLastMileLogger;
@@ -132,8 +144,8 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private final WifiMetrics mWifiMetrics;
     private int mMaxRingBufferSizeBytes;
     private final List<Integer> mFatalFirmwareAlertErrorCodeList;
+    private final boolean mBugreportEnabled;
     private WifiInjector mWifiInjector;
-    private Context mContext;
     private Clock mClock;
 
     /** Interfaces started logging */
@@ -149,7 +161,10 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
                 R.integer.config_wifi_logger_ring_buffer_verbose_size_limit_kb) * 1024;
         int[] fatalFirmwareAlertErrorCodeArray = context.getResources().getIntArray(
                 R.array.config_wifi_fatal_firmware_alert_error_code_list);
+        mBugreportEnabled = context.getResources().getBoolean(
+                R.bool.config_wifi_diagnostics_bugreport_enabled);
 
+        mContext = context;
         mBuildProperties = buildProperties;
         mIsLoggingEventHandlerRegistered = false;
         mMaxRingBufferSizeBytes = RING_BUFFER_BYTE_LIMIT_SMALL;
@@ -160,7 +175,6 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         mJavaRuntime = wifiInjector.getJavaRuntime();
         mWifiMetrics = wifiInjector.getWifiMetrics();
         mWifiInjector = wifiInjector;
-        mContext = context;
         mClock = clock;
     }
 
@@ -304,18 +318,33 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         pw.println("--------------------------------------------------------------------");
     }
 
-    @Override
     /**
      * Initiates a system-level bugreport, in a non-blocking fashion.
      */
+    @Override
     public void takeBugReport(String bugTitle, String bugDetail) {
-        if (mBuildProperties.isUserBuild()) {
+        if (mBuildProperties.isUserBuild() || !mBugreportEnabled) {
             return;
         }
 
+        // TODO (b/143494985): Use formal API instead of sending this intent.
+        // The below code snippet is copied from ActivityManager.requestBugReportWithDescription()
+        // Create intent to trigger Bugreport API via Shell
+        Intent triggerShellBugreport = new Intent();
+        triggerShellBugreport.setAction(INTENT_BUGREPORT_REQUESTED);
+        triggerShellBugreport.setPackage(SHELL_APP_PACKAGE);
+        triggerShellBugreport.putExtra(EXTRA_BUGREPORT_TYPE, BugreportParams.BUGREPORT_MODE_WIFI);
+        triggerShellBugreport.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+        triggerShellBugreport.addFlags(Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND);
+        if (bugTitle != null) {
+            triggerShellBugreport.putExtra(EXTRA_TITLE, bugTitle);
+        }
+        if (bugDetail != null) {
+            triggerShellBugreport.putExtra(EXTRA_DESCRIPTION, bugDetail);
+        }
         try {
-            mWifiInjector.getActivityManagerService().requestWifiBugReport(
-                    bugTitle, bugDetail);
+            // Send broadcast to shell to trigger bugreport using Bugreport API
+            mContext.sendBroadcastAsUser(triggerShellBugreport, UserHandle.CURRENT);
         } catch (Exception e) {  // diagnostics should never crash system_server
             mLog.err("error taking bugreport: %").c(e.getClass().getName()).flush();
         }
