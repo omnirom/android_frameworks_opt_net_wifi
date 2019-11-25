@@ -38,6 +38,7 @@ import static com.android.server.wifi.LocalOnlyHotspotRequestInfo.HOTSPOT_NO_ERR
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -1496,7 +1497,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         doThrow(new SecurityException()).when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.CHANGE_WIFI_STATE),
                                                 eq("WifiService"));
-        mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
     }
 
     /**
@@ -1509,7 +1511,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 .when(mWifiPermissionsUtil).enforceLocationPermission(eq(TEST_PACKAGE_NAME),
                                                                       eq(TEST_FEATURE_ID),
                                                                       anyInt());
-        mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
     }
 
     /**
@@ -1519,7 +1522,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test(expected = SecurityException.class)
     public void testStartLocalOnlyHotspotThrowsSecurityExceptionWithoutLocationEnabled() {
         when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(false);
-        mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
     }
 
     /**
@@ -1530,7 +1534,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(true);
 
         when(mFrameworkFacade.isAppForeground(any(), anyInt())).thenReturn(false);
-        int result = mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        int result = mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
         assertEquals(LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE, result);
     }
 
@@ -1568,7 +1573,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(true);
         when(mFrameworkFacade.isAppForeground(any(), anyInt())).thenReturn(true);
         mLooper.dispatchAll();
-        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
         assertEquals(ERROR_INCOMPATIBLE_MODE, returnCode);
     }
 
@@ -1582,7 +1588,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mUserManager.hasUserRestrictionForUser(
                 eq(UserManager.DISALLOW_CONFIG_TETHERING), any()))
                 .thenReturn(true);
-        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
         assertEquals(ERROR_TETHERING_DISALLOWED, returnCode);
     }
 
@@ -1594,7 +1601,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         registerLOHSRequestFull();
 
         // now do the second request that will fail
-        mWifiServiceImpl.startLocalOnlyHotspot(mLohsCallback, TEST_PACKAGE_NAME);
+        mWifiServiceImpl.startLocalOnlyHotspot(
+                mLohsCallback, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
     }
 
     /**
@@ -2551,7 +2559,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         ILocalOnlyHotspotCallback callback2 = mock(ILocalOnlyHotspotCallback.class);
         when(callback2.asBinder()).thenReturn(mock(IBinder.class));
 
-        int result = mWifiServiceImpl.startLocalOnlyHotspot(callback2, TEST_PACKAGE_NAME);
+        int result = mWifiServiceImpl.startLocalOnlyHotspot(
+                callback2, TEST_PACKAGE_NAME, TEST_FEATURE_ID, null);
         assertEquals(LocalOnlyHotspotCallback.REQUEST_REGISTERED, result);
         mLooper.dispatchAll();
 
@@ -3977,7 +3986,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         mLooper.startAutoDispatch();
-        assertNull(mWifiServiceImpl.getFactoryMacAddresses());
+        assertArrayEquals(new String[0], mWifiServiceImpl.getFactoryMacAddresses());
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         verify(mClientModeImpl, never()).getFactoryMacAddress();
     }
@@ -3990,7 +3999,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mClientModeImpl.getFactoryMacAddress()).thenReturn(null);
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         mLooper.startAutoDispatch();
-        assertNull(mWifiServiceImpl.getFactoryMacAddresses());
+        assertArrayEquals(new String[0], mWifiServiceImpl.getFactoryMacAddresses());
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         verify(mClientModeImpl).getFactoryMacAddress();
     }

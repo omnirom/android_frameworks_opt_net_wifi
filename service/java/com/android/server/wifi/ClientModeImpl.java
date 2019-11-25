@@ -2518,7 +2518,7 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void sendLinkConfigurationChangedBroadcast() {
-        Intent intent = new Intent(WifiManager.LINK_CONFIGURATION_CHANGED_ACTION);
+        Intent intent = new Intent(WifiManager.ACTION_LINK_CONFIGURATION_CHANGED);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_LINK_PROPERTIES, new LinkProperties(mLinkProperties));
         mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
@@ -3309,6 +3309,7 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_BLUETOOTH_ADAPTER_STATE_CHANGE:
                     mBluetoothConnectionActive =
                             (message.arg1 != BluetoothAdapter.STATE_DISCONNECTED);
+                    mWifiConnectivityManager.setBluetoothConnected(mBluetoothConnectionActive);
                     break;
                 case CMD_ENABLE_RSSI_POLL:
                     mEnableRssiPolling = (message.arg1 == 1);
@@ -4228,6 +4229,7 @@ public class ClientModeImpl extends StateMachine {
                             != BluetoothAdapter.STATE_DISCONNECTED);
                     mWifiNative.setBluetoothCoexistenceScanMode(
                             mInterfaceName, mBluetoothConnectionActive);
+                    mWifiConnectivityManager.setBluetoothConnected(mBluetoothConnectionActive);
                     break;
                 case CMD_SET_SUSPEND_OPT_ENABLED:
                     if (message.arg1 == 1) {
