@@ -33,7 +33,7 @@ import static com.android.server.wifi.WifiMetricsTestUtil.buildInt32Count;
 import static com.android.server.wifi.WifiMetricsTestUtil.buildLinkProbeFailureReasonCount;
 import static com.android.server.wifi.WifiMetricsTestUtil.buildLinkProbeFailureStaEvent;
 import static com.android.server.wifi.WifiMetricsTestUtil.buildLinkProbeSuccessStaEvent;
-import static com.android.server.wifi.nano.WifiMetricsProto.StaEvent.TYPE_LINK_PROBE;
+import static com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent.TYPE_LINK_PROBE;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -81,26 +81,26 @@ import com.android.server.wifi.hotspot2.NetworkDetail;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointMatch;
 import com.android.server.wifi.hotspot2.PasspointProvider;
-import com.android.server.wifi.nano.WifiMetricsProto;
-import com.android.server.wifi.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
-import com.android.server.wifi.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
-import com.android.server.wifi.nano.WifiMetricsProto.HistogramBucketInt32;
-import com.android.server.wifi.nano.WifiMetricsProto.Int32Count;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats.ExperimentProbeCounts;
-import com.android.server.wifi.nano.WifiMetricsProto.LinkProbeStats.LinkProbeFailureReasonCount;
-import com.android.server.wifi.nano.WifiMetricsProto.NetworkSelectionExperimentDecisions;
-import com.android.server.wifi.nano.WifiMetricsProto.PasspointProfileTypeCount;
-import com.android.server.wifi.nano.WifiMetricsProto.PasspointProvisionStats;
-import com.android.server.wifi.nano.WifiMetricsProto.PnoScanMetrics;
-import com.android.server.wifi.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
-import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiIsUnusableEvent;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiRadioUsage;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStats;
-import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStatsEntry;
-import com.android.server.wifi.nano.WifiMetricsProto.WpsMetrics;
 import com.android.server.wifi.p2p.WifiP2pMetrics;
+import com.android.server.wifi.proto.nano.WifiMetricsProto;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.HistogramBucketInt32;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.Int32Count;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats.ExperimentProbeCounts;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats.LinkProbeFailureReasonCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.NetworkSelectionExperimentDecisions;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PasspointProfileTypeCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PasspointProvisionStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.PnoScanMetrics;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.SoftApConnectedClientsEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiIsUnusableEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiRadioUsage;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStatsEntry;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WpsMetrics;
 import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.ExternalCallbackTracker;
 
@@ -400,7 +400,6 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final boolean LINK_SPEED_COUNTS_LOGGING_SETTING = true;
     private static final int DATA_STALL_MIN_TX_BAD_SETTING = 5;
     private static final int DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX_SETTING = 75;
-    private static final int NUM_SAR_SENSOR_LISTENER_REGISTRATION_FAILURES = 5;
     private static final int NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS = 4;
     private static final int NUM_ADD_OR_UPDATE_NETWORK_CALLS = 5;
     private static final int NUM_ENABLE_NETWORK_CALLS = 6;
@@ -854,9 +853,6 @@ public class WifiMetricsTest extends WifiBaseTest {
         for (int i = 0; i < NUM_WPS_CANCELLATION; i++) {
             mWifiMetrics.incrementWpsCancellationCount();
         }
-        for (int i = 0; i < NUM_SAR_SENSOR_LISTENER_REGISTRATION_FAILURES; i++) {
-            mWifiMetrics.incrementNumSarSensorRegistrationFailures();
-        }
         for (int i = 0; i < NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS; i++) {
             mWifiMetrics.incrementOneshotScanWithDfsCount();
         }
@@ -1200,9 +1196,6 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.experimentValues.wifiDataStallMinTxBad);
         assertEquals(DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX_SETTING,
                 mDecodedProto.experimentValues.wifiDataStallMinTxSuccessWithoutRx);
-
-        assertEquals(NUM_SAR_SENSOR_LISTENER_REGISTRATION_FAILURES,
-                mDecodedProto.numSarSensorRegistrationFailures);
         assertEquals(NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS,
                 mDecodedProto.numOneshotHasDfsChannelScans);
         assertEquals(NUM_ADD_OR_UPDATE_NETWORK_CALLS, mDecodedProto.numAddOrUpdateNetworkCalls);

@@ -16,6 +16,10 @@
 
 package com.android.server.wifi;
 
+import android.annotation.Nullable;
+import android.util.Log;
+
+import com.android.server.wifi.util.WifiConfigStoreEncryptionUtil;
 import com.android.server.wifi.util.XmlUtil;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -32,6 +36,7 @@ import java.util.Set;
  * deleted ephemeral SSIDs (XML block data inside <DeletedEphemeralSSIDList> tag).
  */
 public class DeletedEphemeralSsidsStoreData implements WifiConfigStore.StoreData {
+    private static final String TAG = "DeletedEphemeralSsidsStoreData";
     private static final String XML_TAG_SECTION_HEADER_DELETED_EPHEMERAL_SSID_LIST =
             "DeletedEphemeralSSIDList";
     private static final String XML_TAG_SSID_LIST = "SSIDList";
@@ -44,7 +49,8 @@ public class DeletedEphemeralSsidsStoreData implements WifiConfigStore.StoreData
     }
 
     @Override
-    public void serializeData(XmlSerializer out)
+    public void serializeData(XmlSerializer out,
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
             throws XmlPullParserException, IOException {
         if (mSsidToTimeMap != null) {
             XmlUtil.writeNextValue(out, XML_TAG_SSID_LIST, mSsidToTimeMap);
@@ -52,7 +58,9 @@ public class DeletedEphemeralSsidsStoreData implements WifiConfigStore.StoreData
     }
 
     @Override
-    public void deserializeData(XmlPullParser in, int outerTagDepth)
+    public void deserializeData(XmlPullParser in, int outerTagDepth,
+            @WifiConfigStore.Version int version,
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
             throws XmlPullParserException, IOException {
         // Ignore empty reads.
         if (in == null) {
@@ -79,9 +87,10 @@ public class DeletedEphemeralSsidsStoreData implements WifiConfigStore.StoreData
                     }
                     break;
                 default:
-                    throw new XmlPullParserException("Unknown tag under "
+                    Log.w(TAG, "Unknown tag under "
                             + XML_TAG_SECTION_HEADER_DELETED_EPHEMERAL_SSID_LIST
                             + ": " + valueName[0]);
+                    break;
             }
         }
     }

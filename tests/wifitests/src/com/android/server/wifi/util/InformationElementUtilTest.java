@@ -28,6 +28,7 @@ import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.WifiBaseTest;
 import com.android.server.wifi.hotspot2.NetworkDetail;
+import com.android.server.wifi.util.InformationElementUtil.HeOperation;
 import com.android.server.wifi.util.InformationElementUtil.HtOperation;
 import com.android.server.wifi.util.InformationElementUtil.VhtOperation;
 
@@ -245,6 +246,23 @@ public class InformationElementUtilTest extends WifiBaseTest {
         assertEquals("First result should have data of 1 byte", 1, results[0].bytes.length);
         assertEquals("First result should have data set to 0x00",
                 invalidLengthTagWithSSIDBytes[2], results[0].bytes[0]);
+    }
+
+    /**
+     * Test parseInformationElement with an element that uses extension IE
+     */
+    @Test
+    public void parseInformationElementWithExtensionId() throws IOException {
+        byte[] testByteArray = new byte[] {(byte) 0xFF, (byte) 0x02, (byte) 0x01, (byte) 0x40};
+        InformationElement[] results =
+                InformationElementUtil.parseInformationElements(testByteArray);
+        assertEquals("Parsed results should have 1 element", 1, results.length);
+        assertEquals("First result should have id = EID_EXTENSION_PRESENT",
+                InformationElement.EID_EXTENSION_PRESENT, results[0].id);
+        assertEquals("First result should have idExt = 0x01", 0x01, results[0].idExt);
+        assertEquals("First result should have data of 1 byte", 1, results[0].bytes.length);
+        assertEquals("First result should have data set to 0x40",
+                testByteArray[3], results[0].bytes[0]);
     }
 
     /**
@@ -1168,6 +1186,271 @@ public class InformationElementUtilTest extends WifiBaseTest {
         assertEquals(ScanResult.CHANNEL_WIDTH_80MHZ_PLUS_MHZ, vhtOperation.getChannelWidth());
         assertEquals(5270, vhtOperation.getCenterFreq0());
         assertEquals(5180, vhtOperation.getCenterFreq1());
+    }
+
+    /**
+     * Verify that the expected HE Operation information element is parsed and retrieved from the
+     * list of IEs.
+     * In this test case Channel is in 6GHz band and channel width is 80MHz
+     *
+     * @throws Exception
+     */
+    @Test
+    public void getHeOperationElement80Mhz() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_EXTENSION_PRESENT;
+        ie.idExt = InformationElement.EID_EXT_HE_OPERATION;
+        /**
+         * HE Operation Format:
+         * | HE Operation Info | BSS Color | Basic HE-MCS | VHT Info  | Cohosted BSS| 6GH Info |
+         *          3                1            2           0/3           0/1         0/5
+         *
+         * HE Operation Info:
+         *    |  Misc | VHT Operatoin Info | Misc | 6 GHz Operation Info Present | reserved |
+         * bits:  14           1              2                   1                   6
+         *
+         * 6GHz Info Format:
+         * | Primary Channel | Control | Center Freq Seg 0 | Center Freq Seg 1 | Min Rate |
+         *         1             1               1                  1               1
+         *
+         * Control Field:
+         *       | Channel Width | Reserved |
+         * bits:        2             6
+         *
+         */
+        ie.bytes = new byte[]{(byte) 0x00, (byte) 0x00, (byte) 0x02,  //HE Operation Info
+                              (byte) 0x00, (byte) 0x00, (byte) 0x00,  // BSS Color and HE-MCS
+                              (byte) 0x10, (byte) 0x02, (byte) 0x14, (byte) 0x00, (byte) 0x00};
+
+        HeOperation heOperation = new HeOperation();
+        heOperation.from(ie);
+
+        assertTrue(heOperation.isPresent());
+        assertTrue(heOperation.is6GhzInfoPresent());
+        assertFalse(heOperation.isVhtInfoPresent());
+        assertEquals(ScanResult.CHANNEL_WIDTH_80MHZ, heOperation.getChannelWidth());
+        assertEquals(6040, heOperation.getCenterFreq0());
+        assertEquals(0, heOperation.getCenterFreq1());
+    }
+
+    /**
+     * Verify that the expected HE Operation information element is parsed and retrieved from the
+     * list of IEs.
+     * In this test case Channel is in 6GHz band and channel width is 160MHz
+     *
+     * @throws Exception
+     */
+    @Test
+    public void getHeOperationElement160Mhz() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_EXTENSION_PRESENT;
+        ie.idExt = InformationElement.EID_EXT_HE_OPERATION;
+        /**
+         * HE Operation Format:
+         * | HE Operation Info | BSS Color | Basic HE-MCS | VHT Info  | Cohosted BSS| 6GH Info |
+         *          3                1            2           0/3           0/1         0/5
+         *
+         * HE Operation Info:
+         *    |  Misc | VHT Operatoin Info | Misc | 6 GHz Operation Info Present | reserved |
+         * bits:  14           1              2                   1                   6
+         *
+         * 6GHz Info Format:
+         * | Primary Channel | Control | Center Freq Seg 0 | Center Freq Seg 1 | Min Rate |
+         *         1             1               1                  1               1
+         *
+         * Control Field:
+         *       | Channel Width | Reserved |
+         * bits:        2             6
+         *
+         */
+        ie.bytes = new byte[]{(byte) 0x00, (byte) 0x00, (byte) 0x02,  //HE Operation Info
+                              (byte) 0x00, (byte) 0x00, (byte) 0x00,  // BSS Color and HE-MCS
+                              (byte) 0x10, (byte) 0x03, (byte) 0x14, (byte) 0x1C, (byte) 0x00};
+
+        HeOperation heOperation = new HeOperation();
+        heOperation.from(ie);
+
+        assertTrue(heOperation.isPresent());
+        assertTrue(heOperation.is6GhzInfoPresent());
+        assertFalse(heOperation.isVhtInfoPresent());
+        assertEquals(ScanResult.CHANNEL_WIDTH_160MHZ, heOperation.getChannelWidth());
+        assertEquals(6040, heOperation.getCenterFreq0());
+        assertEquals(6080, heOperation.getCenterFreq1());
+    }
+
+    /**
+     * Verify that the expected HE Operation information element is parsed and retrieved from the
+     * list of IEs.
+     * In this test case Channel is not in 6GHz band and VHT info not present
+     *
+     * @throws Exception
+     */
+    @Test
+    public void getHeOperationElementNo6GHzNoVht() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_EXTENSION_PRESENT;
+        ie.idExt = InformationElement.EID_EXT_HE_OPERATION;
+        /**
+         * HE Operation Format:
+         * | HE Operation Info | BSS Color | Basic HE-MCS | VHT Info  | Cohosted BSS| 6GH Info |
+         *          3                1            2           0/3           0/1         0/5
+         *
+         * HE Operation Info:
+         *    |  Misc | VHT Operatoin Info | Misc | 6 GHz Operation Info Present | reserved |
+         * bits:  14           1              2                   1                   6
+         *
+         */
+        ie.bytes = new byte[] {
+            (byte) 0x00, (byte) 0x00, (byte) 0x00,  //HE Operation Info
+            (byte) 0x00, (byte) 0x00, (byte) 0x00   // BSS Color and HE-MCS
+        };
+
+        HeOperation heOperation = new HeOperation();
+        heOperation.from(ie);
+
+        assertTrue(heOperation.isPresent());
+        assertFalse(heOperation.is6GhzInfoPresent());
+        assertFalse(heOperation.isVhtInfoPresent());
+        assertEquals(ScanResult.UNSPECIFIED, heOperation.getChannelWidth());
+        assertEquals(0, heOperation.getCenterFreq0());
+        assertEquals(0, heOperation.getCenterFreq1());
+    }
+
+    /**
+     * Verify that the expected HE Operation information element is parsed and retrieved from the
+     * list of IEs.
+     * In this test case Channel is not in 6GHz band and VHT info is present
+     * channel width is 80 MHz
+     *
+     * @throws Exception
+     */
+    @Test
+    public void getHeOperationElementNo6GHzWithVht() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_EXTENSION_PRESENT;
+        ie.idExt = InformationElement.EID_EXT_HE_OPERATION;
+        /**
+         * HE Operation Format:
+         * | HE Operation Info | BSS Color | Basic HE-MCS | VHT Info  | Cohosted BSS| 6GH Info |
+         *          3                1            2           0/3           0/1         0/5
+         *
+         * HE Operation Info:
+         *    |  Misc | VHT Operatoin Info | Misc | 6 GHz Operation Info Present | reserved |
+         * bits:  14           1              2                   1                   6
+         *
+         * VHT Operation Info Format:
+         * | Channel Width | Channel Center Freq Seg 0 | Channel Center Freq Seg 1 |
+         *         1                      1                      1
+         */
+        ie.bytes = new byte[]{(byte) 0x00, (byte) 0x40, (byte) 0x00,  //HE Operation Info
+                              (byte) 0x00, (byte) 0x00, (byte) 0x00,  // BSS Color and HE-MCS
+                              (byte) 0x01, (byte) 0x28, (byte) 0x00};
+
+        HeOperation heOperation = new HeOperation();
+        heOperation.from(ie);
+
+        assertTrue(heOperation.isPresent());
+        assertFalse(heOperation.is6GhzInfoPresent());
+        assertTrue(heOperation.isVhtInfoPresent());
+        assertEquals(ScanResult.UNSPECIFIED, heOperation.getChannelWidth());
+        assertEquals(0, heOperation.getCenterFreq0());
+        assertEquals(0, heOperation.getCenterFreq1());
+
+        VhtOperation vhtOperation = new VhtOperation();
+        vhtOperation.from(heOperation.getVhtInfoElement());
+        assertEquals(ScanResult.CHANNEL_WIDTH_80MHZ, vhtOperation.getChannelWidth());
+        assertEquals(5200, vhtOperation.getCenterFreq0());
+        assertEquals(0, vhtOperation.getCenterFreq1());
+    }
+    /**
+     * Verify that the expected max number of spatial stream is parsed correctly from
+     * HT capabilities IE
+     *
+     * HT capabilities IE Format:
+     * | HT Capability Information | A-MPDU Parameters | Supported MCS Set
+     *               2                      1                   16
+     * | HT Extended Capabilities | Transmit Beamforming Capabilities | ASEL Capabilities |
+     *               2                      4                                   1
+     *
+     *  Supported MCS Set Format:
+     *    B0                   B8                    B16                  B23
+     *  | Rx MCS Bitmask 1SS | Rx MCS Bitmask 2SS  | Rx MCS Bitmask 3SS | Rx MCS Bitmask 4SS
+     */
+    @Test
+    public void getMaxNumberSpatialStreamsWithHtCapabilitiesIE() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_HT_CAPABILITIES;
+        ie.bytes = new byte[]{(byte) 0xee, (byte) 0x01, (byte) 0x17, (byte) 0xff, (byte) 0xff,
+                (byte) 0xff, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00,
+                (byte) 0x00, (byte) 0x00, (byte) 0x00};
+        InformationElementUtil.HtCapabilities htCapabilities =
+                new InformationElementUtil.HtCapabilities();
+        htCapabilities.from(ie);
+        assertEquals(3, htCapabilities.getMaxNumberSpatialStreams());
+        assertEquals(true, htCapabilities.isPresent());
+    }
+
+    /**
+     * Verify that the expected max number of spatial stream is parsed correctly from
+     * VHT capabilities IE
+     */
+    @Test
+    public void getMaxNumberSpatialStreamsWithVhtCapabilitiesIE() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_VHT_CAPABILITIES;
+        /**
+         * VHT Capabilities IE Format:
+         * | VHT capabilities Info |  Supported VHT-MCS and NSS Set |
+         *           4                              8
+         *
+         * Supported VHT-MCS set Format:
+         *   B0                B2                B4                B6
+         * | Max MCS For 1SS | Max MCS For 2SS | Max MCS For 3SS | Max MCS For 4SS
+         *   B8                B10               B12               B14
+         * | Max MCS For 5SS | Max MCS For 6SS | Max MCS For 7SS | Max MCS For 8SS
+         */
+        ie.bytes = new byte[]{(byte) 0x92, (byte) 0x01, (byte) 0x80, (byte) 0x33, (byte) 0xaa,
+                (byte) 0xff, (byte) 0x00, (byte) 0x00, (byte) 0xaa, (byte) 0xff, (byte) 0x00,
+                (byte) 0x00};
+        InformationElementUtil.VhtCapabilities vhtCapabilities =
+                new InformationElementUtil.VhtCapabilities();
+        vhtCapabilities.from(ie);
+        assertEquals(4, vhtCapabilities.getMaxNumberSpatialStreams());
+        assertEquals(true, vhtCapabilities.isPresent());
+    }
+
+    /**
+     * Verify that the expected max number of spatial stream is parsed correctly from
+     * HE capabilities IE
+     */
+    @Test
+    public void getMaxNumberSpatialStreamsWithHeCapabilitiesIE() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_EXTENSION_PRESENT;
+        ie.idExt = InformationElement.EID_EXT_HE_CAPABILITIES;
+        /**
+         * HE Capabilities IE Format:
+         * | HE MAC Capabilities Info | HE PHY Capabilities Info | Supported HE-MCS and NSS Set |
+         *           6                              11                     4
+         *
+         * Supported HE-MCS set Format:
+         *   B0                B2                B4                B6
+         * | Max MCS For 1SS | Max MCS For 2SS | Max MCS For 3SS | Max MCS For 4SS
+         *   B8                B10               B12               B14
+         * | Max MCS For 5SS | Max MCS For 6SS | Max MCS For 7SS | Max MCS For 8SS
+         */
+        ie.bytes = new byte[]{(byte) 0x09, (byte) 0x01, (byte) 0x00, (byte) 0x02, (byte) 0x40,
+                (byte) 0x04, (byte) 0x70, (byte) 0x0c, (byte) 0x80, (byte) 0x00, (byte) 0x07,
+                (byte) 0x80, (byte) 0x04, (byte) 0x00, (byte) 0xaa, (byte) 0xaa, (byte) 0xaa,
+                (byte) 0xaa, (byte) 0x7f, (byte) 0x1c, (byte) 0xc7, (byte) 0x71, (byte) 0x1c,
+                (byte) 0xc7, (byte) 0x71};
+        InformationElementUtil.HeCapabilities heCapabilities =
+                new InformationElementUtil.HeCapabilities();
+        heCapabilities.from(ie);
+        assertEquals(8, heCapabilities.getMaxNumberSpatialStreams());
+        assertEquals(true, heCapabilities.isPresent());
     }
 
     // TODO: SAE, OWN, SUITE_B

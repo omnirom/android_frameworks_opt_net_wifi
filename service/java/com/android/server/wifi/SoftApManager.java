@@ -26,6 +26,7 @@ import android.content.Intent;
 import android.database.ContentObserver;
 import android.net.MacAddress;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApInfo;
 import android.net.wifi.WifiClient;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
@@ -38,7 +39,6 @@ import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
 
-import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.IState;
 import com.android.internal.util.Preconditions;
@@ -48,7 +48,9 @@ import com.android.internal.util.WakeupMessage;
 import com.android.server.wifi.WifiNative.InterfaceCallback;
 import com.android.server.wifi.WifiNative.SoftApListener;
 import com.android.server.wifi.util.ApConfigUtil;
+import com.android.server.wifi.wificond.IApInterfaceEventCallback;
 import com.android.server.wifi.wificond.NativeWifiClient;
+import com.android.wifi.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -95,8 +97,8 @@ public class SoftApManager implements ActiveModeManager {
     @NonNull
     private SoftApModeConfiguration mApConfig;
 
-    private int mReportedFrequency = -1;
-    private int mReportedBandwidth = -1;
+    @NonNull
+    private SoftApInfo mCurrentSoftApInfo = new SoftApInfo();
 
     private List<WifiClient> mConnectedClients = new ArrayList<>();
     private int mQCNumAssociatedStations = 0;
@@ -244,8 +246,7 @@ public class SoftApManager implements ActiveModeManager {
         pw.println("mApConfig.wifiConfiguration.hiddenSSID: " + wifiConfig.hiddenSSID);
         pw.println("mConnectedClients.size(): " + mConnectedClients.size());
         pw.println("mTimeoutEnabled: " + mTimeoutEnabled);
-        pw.println("mReportedFrequency: " + mReportedFrequency);
-        pw.println("mReportedBandwidth: " + mReportedBandwidth);
+        pw.println("mCurrentSoftApInfo " + mCurrentSoftApInfo);
         pw.println("mStartTimestamp: " + mStartTimestamp);
         mStateMachine.dump(fd, pw, args);
     }
@@ -819,6 +820,55 @@ public class SoftApManager implements ActiveModeManager {
                 return clients;
             }
 
+            private void setSoftApChannel(int freq, int bandwidth) {
+                int apBandwidth;
+
+                Log.d(TAG, "Channel switched. Frequency: " + freq
+                        + " Bandwidth: " + bandwidth);
+                switch(bandwidth) {
+                    case IApInterfaceEventCallback.BANDWIDTH_INVALID:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_INVALID;
+                        break;
+                    case IApInterfaceEventCallback.BANDWIDTH_20_NOHT:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_20MHZ_NOHT;
+                        break;
+                    case IApInterfaceEventCallback.BANDWIDTH_20:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_20MHZ;
+                        break;
+                    case IApInterfaceEventCallback.BANDWIDTH_40:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_40MHZ;
+                        break;
+                    case IApInterfaceEventCallback.BANDWIDTH_80:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_80MHZ;
+                        break;
+                    case IApInterfaceEventCallback.BANDWIDTH_80P80:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_80MHZ_PLUS_MHZ;
+                        break;
+                    case IApInterfaceEventCallback.BANDWIDTH_160:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_160MHZ;
+                        break;
+                    default:
+                        apBandwidth = SoftApInfo.CHANNEL_WIDTH_INVALID;
+                        break;
+                }
+
+                if (freq == mCurrentSoftApInfo.getFrequency()
+                        && apBandwidth == mCurrentSoftApInfo.getBandwidth()) {
+                    return; // no change
+                }
+
+                mCurrentSoftApInfo.setFrequency(freq);
+                mCurrentSoftApInfo.setBandwidth(apBandwidth);
+                mSoftApCallback.onInfoChanged(mCurrentSoftApInfo);
+
+                // ignore invalid freq and softap disable case for metrics
+                if (freq > 0 && apBandwidth != SoftApInfo.CHANNEL_WIDTH_INVALID) {
+                    mWifiMetrics.addSoftApChannelSwitchedEvent(mCurrentSoftApInfo.getFrequency(),
+                            mCurrentSoftApInfo.getBandwidth(), mApConfig.getTargetMode());
+                    updateUserBandPreferenceViolationMetricsIfNeeded();
+                }
+            }
+
             private void onUpChanged(boolean isUp) {
                 if (isUp == mIfaceIsUp) {
                     return;  // no change
@@ -881,6 +931,7 @@ public class SoftApManager implements ActiveModeManager {
                 mQCNumAssociatedStations = 0;
                 setConnectedClients(new ArrayList<>());
                 cancelTimeoutMessage();
+
                 // Need this here since we are exiting |Started| state and won't handle any
                 // future CMD_INTERFACE_STATUS_CHANGED events after this point
                 mWifiMetrics.addSoftApUpChangedEvent(false, mApConfig.getTargetMode());
@@ -895,18 +946,19 @@ public class SoftApManager implements ActiveModeManager {
                 mRole = ROLE_UNSPECIFIED;
                 mStateMachine.quitNow();
                 mModeListener.onStopped();
+                setSoftApChannel(0, SoftApInfo.CHANNEL_WIDTH_INVALID);
             }
 
             private void updateUserBandPreferenceViolationMetricsIfNeeded() {
                 int band = mApConfig.getWifiConfiguration().apBand;
                 boolean bandPreferenceViolated =
                         (band == WifiConfiguration.AP_BAND_2GHZ
-                                && ScanResult.is5GHz(mReportedFrequency))
-                                || (band == WifiConfiguration.AP_BAND_5GHZ
-                                && ScanResult.is24GHz(mReportedFrequency));
+                            && ScanResult.is5GHz(mCurrentSoftApInfo.getFrequency()))
+                        || (band == WifiConfiguration.AP_BAND_5GHZ
+                            && ScanResult.is24GHz(mCurrentSoftApInfo.getFrequency()));
                 if (bandPreferenceViolated) {
                     Log.e(TAG, "Channel does not satisfy user band preference: "
-                            + mReportedFrequency);
+                            + mCurrentSoftApInfo.getFrequency());
                     mWifiMetrics.incrementNumSoftApUserBandPreferenceUnsatisfied();
                 }
             }
@@ -926,13 +978,11 @@ public class SoftApManager implements ActiveModeManager {
                         setConnectedClients((List<NativeWifiClient>) message.obj);
                         break;
                     case CMD_SOFT_AP_CHANNEL_SWITCHED:
-                        mReportedFrequency = message.arg1;
-                        mReportedBandwidth = message.arg2;
-                        Log.d(TAG, "Channel switched. Frequency: " + mReportedFrequency
-                                + " Bandwidth: " + mReportedBandwidth);
-                        mWifiMetrics.addSoftApChannelSwitchedEvent(mReportedFrequency,
-                                mReportedBandwidth, mApConfig.getTargetMode());
-                        updateUserBandPreferenceViolationMetricsIfNeeded();
+                        if (message.arg1 < 0) {
+                            Log.e(TAG, "Invalid ap channel frequency: " + message.arg1);
+                            break;
+                        }
+                        setSoftApChannel(message.arg1, message.arg2);
                         break;
                     case CMD_CONNECTED_STATIONS:
                         if (message.obj == null) {

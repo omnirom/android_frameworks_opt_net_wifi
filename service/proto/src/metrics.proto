@@ -18,11 +18,12 @@ syntax = "proto2";
 
 package com_android_server_wifi;
 
-option java_package = "com.android.server.wifi";
+option java_package = "com.android.server.wifi.proto";
 option java_outer_classname = "WifiMetricsProto";
 
 // The information about the Wifi events.
 message WifiLog {
+  reserved 122;
 
   // Session information that gets logged for every Wifi connection.
   repeated ConnectionEvent connection_event = 1;
@@ -471,9 +472,6 @@ message WifiLog {
   // with rssi (dBm) and rssi^2 sums (dBm^2)
   repeated LinkSpeedCount link_speed_counts = 121;
 
-  // Number of times the SarManager failed to register SAR sensor listener
-  optional int32 num_sar_sensor_registration_failures = 122;
-
   // Hardware revision (EVT, DVT, PVT etc.)
   optional string hardware_revision = 124;
 
@@ -633,6 +631,9 @@ message RouterFingerPrint {
 
     // When the channel is not one of the above.
     ROUTER_TECH_OTHER = 6;
+
+    // Router Channel AX.
+    ROUTER_TECH_AX = 7;
   }
 
   optional RoamType roam_type = 1;

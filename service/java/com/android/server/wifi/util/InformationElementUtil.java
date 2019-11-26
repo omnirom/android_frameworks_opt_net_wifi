@@ -31,7 +31,7 @@ import java.util.BitSet;
 
 public class InformationElementUtil {
     private static final String TAG = "InformationElementUtil";
-
+    private static final boolean DBG = false;
     public static InformationElement[] parseInformationElements(byte[] bytes) {
         if (bytes == null) {
             return new InformationElement[0];
@@ -42,6 +42,7 @@ public class InformationElementUtil {
         boolean found_ssid = false;
         while (data.remaining() > 1) {
             int eid = data.get() & Constants.BYTE_MASK;
+            int eidExt = 0;
             int elementLength = data.get() & Constants.BYTE_MASK;
 
             if (elementLength > data.remaining() || (eid == InformationElement.EID_SSID
@@ -53,10 +54,14 @@ public class InformationElementUtil {
             }
             if (eid == InformationElement.EID_SSID) {
                 found_ssid = true;
+            } else if (eid == InformationElement.EID_EXTENSION_PRESENT) {
+                eidExt = data.get() & Constants.BYTE_MASK;
+                elementLength--;
             }
 
             InformationElement ie = new InformationElement();
             ie.id = eid;
+            ie.idExt = eidExt;
             ie.bytes = new byte[elementLength];
             data.get(ie.bytes);
             infoElements.add(ie);
@@ -131,9 +136,12 @@ public class InformationElementUtil {
     }
 
     public static class BssLoad {
-        public int stationCount = 0;
-        public int channelUtilization = 0;
-        public int capacity = 0;
+        public static final int INVALID = -1;
+        public static final int MAX_CHANNEL_UTILIZATION = 255;
+        public static final int MIN_CHANNEL_UTILIZATION = 0;
+        public int stationCount = INVALID;
+        public int channelUtilization = INVALID;
+        public int capacity = INVALID;
 
         public void from(InformationElement ie) {
             if (ie.id != InformationElement.EID_BSS_LOAD) {
@@ -294,6 +302,310 @@ public class InformationElementUtil {
             mCenterFreqIndex1 = ie.bytes[1] & Constants.BYTE_MASK;
             mCenterFreqIndex2 = ie.bytes[2] & Constants.BYTE_MASK;
         }
+    }
+
+    /**
+     * HeOperation: represents the HE Operation IE
+     */
+    public static class HeOperation {
+
+        private static final int HE_OPERATION_BASIC_LENGTH = 6;
+        private static final int VHT_OPERATION_INFO_PRESENT_MASK = 0x40;
+        private static final int HE_6GHZ_INFO_PRESENT_MASK = 0x02;
+        private static final int HE_6GHZ_CH_WIDTH_MASK = 0x03;
+        private static final int CO_HOSTED_BSS_PRESENT_MASK = 0x80;
+        private static final int VHT_OPERATION_INFO_START_INDEX = 6;
+        private static final int HE_BW_80_80_160 = 3;
+
+        private boolean mPresent = false;
+        private boolean mVhtInfoPresent = false;
+        private boolean m6GhzInfoPresent = false;
+        private int mChannelWidth;
+        private int mPrimaryChannel;
+        private int mCenterFreqSeg0;
+        private int mCenterFreqSeg1;
+        private InformationElement mVhtInfo = null;
+
+        /**
+         * Returns whether the HE Information Element is present.
+         */
+        public boolean isPresent() {
+            return mPresent;
+        }
+
+        /**
+         * Returns whether VHT Information field is present.
+         */
+        public boolean isVhtInfoPresent() {
+            return mVhtInfoPresent;
+        }
+
+        /**
+         * Returns the VHT Information Element if it exists
+         * otherwise, return null.
+         */
+        public InformationElement getVhtInfoElement() {
+            return mVhtInfo;
+        }
+
+        /**
+         * Returns whether the 6GHz information field is present.
+         */
+        public boolean is6GhzInfoPresent() {
+            return m6GhzInfoPresent;
+        }
+
+        /**
+         * Returns the Channel BW
+         * Only applicable to 6GHz band
+         */
+        public int getChannelWidth() {
+            if (!m6GhzInfoPresent) {
+                return ScanResult.UNSPECIFIED;
+            } else if (mChannelWidth == 0) {
+                return ScanResult.CHANNEL_WIDTH_20MHZ;
+            } else if (mChannelWidth == 1) {
+                return ScanResult.CHANNEL_WIDTH_40MHZ;
+            } else if (mChannelWidth == 2) {
+                return ScanResult.CHANNEL_WIDTH_80MHZ;
+            } else if (Math.abs(mCenterFreqSeg1 - mCenterFreqSeg0) == 8) {
+                return ScanResult.CHANNEL_WIDTH_160MHZ;
+            } else {
+                return ScanResult.CHANNEL_WIDTH_80MHZ_PLUS_MHZ;
+            }
+        }
+
+        /**
+         * Returns the primary channel frequency
+         * Only applicable for 6GHz channels
+         */
+        public int getPrimaryFreq() {
+            return (mPrimaryChannel * 5) + 5940;
+        }
+
+        /**
+         * Returns the center frequency for the primary channel
+         * Only applicable to 6GHz channels
+         */
+        public int getCenterFreq0() {
+            if (m6GhzInfoPresent) {
+                if (mCenterFreqSeg0 == 0) {
+                    return 0;
+                } else {
+                    return (mCenterFreqSeg0 * 5) + 5940;
+                }
+            } else {
+                return 0;
+            }
+        }
+
+        /**
+         * Returns the center frequency for the secondary channel
+         * Only applicable to 6GHz channels
+         */
+        public int getCenterFreq1() {
+            if (m6GhzInfoPresent) {
+                if (mCenterFreqSeg1 == 0) {
+                    return 0;
+                } else {
+                    return (mCenterFreqSeg1 * 5) + 5940;
+                }
+            } else {
+                return 0;
+            }
+        }
+
+        /** Parse HE Operation IE */
+        public void from(InformationElement ie) {
+            if (ie.id != InformationElement.EID_EXTENSION_PRESENT
+                    || ie.idExt != InformationElement.EID_EXT_HE_OPERATION) {
+                throw new IllegalArgumentException("Element id is not HE_OPERATION");
+            }
+
+            // Make sure the byte array length is at least the fixed size
+            if (ie.bytes.length < HE_OPERATION_BASIC_LENGTH) {
+                if (DBG) {
+                    Log.w(TAG, "Invalid HE_OPERATION len: " + ie.bytes.length);
+                }
+                // Skipping parsing of the IE
+                return;
+            }
+
+            mVhtInfoPresent = (ie.bytes[1] & VHT_OPERATION_INFO_PRESENT_MASK) != 0;
+            m6GhzInfoPresent = (ie.bytes[2] & HE_6GHZ_INFO_PRESENT_MASK) != 0;
+            boolean coHostedBssPresent = (ie.bytes[1] & CO_HOSTED_BSS_PRESENT_MASK) != 0;
+            int expectedLen = HE_OPERATION_BASIC_LENGTH + (mVhtInfoPresent ? 3 : 0)
+                    + (coHostedBssPresent ? 1 : 0) + (m6GhzInfoPresent ? 5 : 0);
+
+            // Make sure the byte array length is at least fitting the known parameters
+            if (ie.bytes.length < expectedLen) {
+                if (DBG) {
+                    Log.w(TAG, "Invalid HE_OPERATION len: " + ie.bytes.length);
+                }
+                // Skipping parsing of the IE
+                return;
+            }
+
+            // Passed all checks, IE is ready for decoding
+            mPresent = true;
+
+            if (mVhtInfoPresent) {
+                mVhtInfo = new InformationElement();
+                mVhtInfo.id = InformationElement.EID_VHT_OPERATION;
+                mVhtInfo.bytes = new byte[5];
+                System.arraycopy(ie.bytes, VHT_OPERATION_INFO_START_INDEX, mVhtInfo.bytes, 0, 3);
+            }
+
+            if (m6GhzInfoPresent) {
+                int startIndx = VHT_OPERATION_INFO_START_INDEX + (mVhtInfoPresent ? 3 : 0)
+                        + (coHostedBssPresent ? 1 : 0);
+
+                mChannelWidth = ie.bytes[startIndx + 1] & HE_6GHZ_CH_WIDTH_MASK;
+                mPrimaryChannel = ie.bytes[startIndx] & Constants.BYTE_MASK;
+                mCenterFreqSeg0 = ie.bytes[startIndx + 2] & Constants.BYTE_MASK;
+                mCenterFreqSeg1 = ie.bytes[startIndx + 3] & Constants.BYTE_MASK;
+            }
+        }
+    }
+
+    /**
+     * HtCapabilities: represents the HT Capabilities IE
+     */
+    public static class HtCapabilities {
+        private int mMaxNumberSpatialStreams  = 1;
+        private boolean mPresent = false;
+        /** Returns whether HT Capabilities IE is present */
+        public boolean isPresent() {
+            return mPresent;
+        }
+        /**
+         * Returns max number of spatial streams if HT Capabilities IE is found and parsed,
+         * or 1 otherwise
+         */
+        public int getMaxNumberSpatialStreams() {
+            return mMaxNumberSpatialStreams;
+        }
+
+        /** Parse HT Capabilities IE */
+        public void from(InformationElement ie) {
+            if (ie.id != InformationElement.EID_HT_CAPABILITIES) {
+                throw new IllegalArgumentException("Element id is not HT_CAPABILITIES: " + ie.id);
+            }
+            if (ie.bytes.length < 26) {
+                if (DBG) {
+                    Log.w(TAG, "Invalid HtCapabilities len: " + ie.bytes.length);
+                }
+                return;
+            }
+            int stream1 = ie.bytes[3] & Constants.BYTE_MASK;
+            int stream2 = ie.bytes[4] & Constants.BYTE_MASK;
+            int stream3 = ie.bytes[5] & Constants.BYTE_MASK;
+            int stream4 = ie.bytes[6] & Constants.BYTE_MASK;
+            if (DBG) {
+                Log.d(TAG, "HT Rx MCS set4: " + Integer.toHexString(stream4));
+                Log.d(TAG, "HT Rx MCS set3: " + Integer.toHexString(stream3));
+                Log.d(TAG, "HT Rx MCS set2: " + Integer.toHexString(stream2));
+                Log.d(TAG, "HT Rx MCS set1: " + Integer.toHexString(stream1));
+            }
+            mMaxNumberSpatialStreams = (stream4 > 0) ? 4 :
+                    ((stream3 > 0) ? 3 :
+                    ((stream2 > 0) ? 2 : 1));
+            mPresent = true;
+        }
+    }
+
+    /**
+     * VhtCapabilities: represents the VHT Capabilities IE
+     */
+    public static class VhtCapabilities {
+        private int mMaxNumberSpatialStreams = 1;
+        private boolean mPresent = false;
+        /** Returns whether VHT Capabilities IE is present */
+        public boolean isPresent() {
+            return mPresent;
+        }
+        /**
+         * Returns max number of spatial streams if VHT Capabilities IE is found and parsed,
+         * or 1 otherwise
+         */
+        public int getMaxNumberSpatialStreams() {
+            return mMaxNumberSpatialStreams;
+        }
+        /** Parse VHT Capabilities IE */
+        public void from(InformationElement ie) {
+            if (ie.id != InformationElement.EID_VHT_CAPABILITIES) {
+                throw new IllegalArgumentException("Element id is not VHT_CAPABILITIES: " + ie.id);
+            }
+            if (ie.bytes.length < 12) {
+                if (DBG) {
+                    Log.w(TAG, "Invalid VHT_CAPABILITIES len: " + ie.bytes.length);
+                }
+                return;
+            }
+            int mcsMap = ((ie.bytes[5] & Constants.BYTE_MASK) << 8)
+                    + (ie.bytes[4] & Constants.BYTE_MASK);
+            mMaxNumberSpatialStreams = parseMaxNumberSpatialStreamsFromMcsMap(mcsMap);
+            mPresent = true;
+        }
+    }
+
+    /**
+     * HeCapabilities: represents the HE Capabilities IE
+     */
+    public static class HeCapabilities {
+        private int mMaxNumberSpatialStreams = 1;
+        private boolean mPresent = false;
+        /** Returns whether HE Capabilities IE is present */
+        public boolean isPresent() {
+            return mPresent;
+        }
+        /**
+         * Returns max number of spatial streams if HE Capabilities IE is found and parsed,
+         * or 1 otherwise
+         */
+        public int getMaxNumberSpatialStreams() {
+            return mMaxNumberSpatialStreams;
+        }
+        /** Parse HE Capabilities IE */
+        public void from(InformationElement ie) {
+            if (ie.id != InformationElement.EID_EXTENSION_PRESENT
+                    || ie.idExt != InformationElement.EID_EXT_HE_CAPABILITIES) {
+                throw new IllegalArgumentException("Element id is not HE_CAPABILITIES: " + ie.id);
+            }
+            if (ie.bytes.length < 21) {
+                if (DBG) {
+                    Log.w(TAG, "Invalid HE_CAPABILITIES len: " + ie.bytes.length);
+                }
+                return;
+            }
+            int mcsMap = ((ie.bytes[18] & Constants.BYTE_MASK) << 8)
+                    + (ie.bytes[17] & Constants.BYTE_MASK);
+            mMaxNumberSpatialStreams = parseMaxNumberSpatialStreamsFromMcsMap(mcsMap);
+            mPresent = true;
+        }
+    }
+
+    private static int parseMaxNumberSpatialStreamsFromMcsMap(int mcsMap) {
+        int maxNumberSpatialStreams = 1;
+        for (int i = 8; i >= 1; --i) {
+            int streamMap = mcsMapToStreamMap(mcsMap, i);
+            // 3 means unsupported
+            if (streamMap != 3) {
+                maxNumberSpatialStreams = i;
+                break;
+            }
+        }
+        if (DBG) {
+            for (int i = 8; i >= 1; --i) {
+                int streamMap = mcsMapToStreamMap(mcsMap, i);
+                Log.d(TAG, "Rx MCS set " + i + " : " + streamMap);
+            }
+        }
+        return maxNumberSpatialStreams;
+    }
+
+    private static int mcsMapToStreamMap(int mcsMap, int i) {
+        return (mcsMap >> ((i - 1) * 2)) & 0x3;
     }
 
     public static class Interworking {
@@ -823,7 +1135,7 @@ public class InformationElementUtil {
                     isHt = true;
                 } else if (ie.id == InformationElement.EID_VHT_CAPABILITIES) {
                     isVht = true;
-                } else if (ie.id == InformationElement.EID_EXTENSION &&
+                } else if (ie.id == InformationElement.EID_EXTENSION_PRESENT &&
                       ie.bytes != null && ie.bytes.length > 0 &&
                       ((ie.bytes[0] & 0xFF) == InformationElement.EID_EXT_HE_CAPABILITIES)) {
                     isHe = true;
@@ -1066,7 +1378,7 @@ public class InformationElementUtil {
     }
 
     /**
-     * This util class determines the 802.11 standard (a/b/g/n/ac) being used
+     * This util class determines the 802.11 standard (a/b/g/n/ac/ax) being used
      */
     public static class WifiMode {
         public static final int MODE_UNDEFINED = 0; // Unknown/undefined
@@ -1075,15 +1387,18 @@ public class InformationElementUtil {
         public static final int MODE_11G = 3;       // 802.11g
         public static final int MODE_11N = 4;       // 802.11n
         public static final int MODE_11AC = 5;      // 802.11ac
+        public static final int MODE_11AX = 6;      // 802.11ax
         //<TODO> add support for 802.11ad and be more selective instead of defaulting to 11A
 
         /**
-         * Use frequency, max supported rate, and the existence of VHT, HT & ERP fields in scan
+         * Use frequency, max supported rate, and the existence of HE, VHT, HT & ERP fields in scan
          * scan result to determine the 802.11 Wifi standard being used.
          */
-        public static int determineMode(int frequency, int maxRate, boolean foundVht,
-                boolean foundHt, boolean foundErp) {
-            if (foundVht) {
+        public static int determineMode(int frequency, int maxRate, boolean foundHe,
+                boolean foundVht, boolean foundHt, boolean foundErp) {
+            if (foundHe) {
+                return MODE_11AX;
+            } else if (foundVht) {
                 return MODE_11AC;
             } else if (foundHt) {
                 return MODE_11N;
@@ -1115,6 +1430,8 @@ public class InformationElementUtil {
                     return "MODE_11N";
                 case MODE_11AC:
                     return "MODE_11AC";
+                case MODE_11AX:
+                    return "MODE_11AX";
                 default:
                     return "MODE_UNDEFINED";
             }
