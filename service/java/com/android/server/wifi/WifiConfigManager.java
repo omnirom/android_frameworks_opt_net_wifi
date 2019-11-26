@@ -3477,4 +3477,14 @@ public class WifiConfigManager {
         return getConfiguredNetworks(true, true, targetUid, staId);
     }
 
+    /**
+     * @param netId The network ID of the config to record fallback attempt time
+     */
+    public void recordWpa2FallbackAttemptTimeStamp(int netId) {
+        WifiConfiguration config = getInternalConfiguredNetwork(netId);
+        if (config == null) {
+            return;
+        }
+        config.lastWpa2FallbackAttemptTime = mClock.getWallClockMillis();
+    }
 }

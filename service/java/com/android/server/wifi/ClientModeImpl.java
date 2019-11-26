@@ -122,6 +122,7 @@ import com.android.server.wifi.nano.WifiMetricsProto.WifiIsUnusableEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.WifiUsabilityStats;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import com.android.server.wifi.util.NativeUtil;
+import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.TelephonyUtil.SimAuthRequestData;
 import com.android.server.wifi.util.TelephonyUtil.SimAuthResponseData;
@@ -181,6 +182,11 @@ public class ClientModeImpl extends StateMachine {
      * the corresponding BSSID.
      */
     private boolean mDidBlackListBSSID = false;
+
+    // Counter to track consecutive assoc rejects from WPA3 transition mode AP
+    // to fallback to WPA2 connection
+    private int mSaeNetworkConsecutiveAssocRejectCounter;
+    private static final int WPA2_FALLBACK_THRESHOLD = 3;
 
     /**
      * Log with error attribute
@@ -3615,6 +3621,32 @@ public class ClientModeImpl extends StateMachine {
         }
     }
 
+     /**
+     * Dynamically change the MAC address to use the locally randomized
+     * MAC address generated for wpa2 fallback attempt.
+     * @param config WifiConfiguration of WPA2 fallback network
+     */
+    private void configureRandomizedMacAddressForWpa2Fallback(WifiConfiguration config) {
+        try {
+            MacAddress currentMac = MacAddress.fromString(mWifiNative.getMacAddress(mInterfaceName));
+            MacAddress newMac = MacAddress.createRandomUnicastAddress();
+            mWifiConfigManager.setNetworkRandomizedMacAddress(config.networkId, newMac);
+            if (!WifiConfiguration.isValidMacAddressForRandomization(newMac)) {
+                Log.wtf(TAG, "Config generated an invalid MAC address");
+            } else if (currentMac.equals(newMac)) {
+                Log.d(TAG, "No changes in MAC address");
+            } else {
+                boolean setMacSuccess =
+                        mWifiNative.setMacAddress(mInterfaceName, newMac);
+                Log.d(TAG, "Wpa2FallbackMacRandomization SSID(" + config.getPrintableSsid()
+                        + "). setMacAddress(" + newMac.toString() + ") from "
+                        + currentMac.toString() + " = " + setMacSuccess);
+            }
+        } catch (NullPointerException | IllegalArgumentException e) {
+            Log.e(TAG, "Exception in configureRandomizedMacAddressForWpa2Fallback: " + e.toString());
+        }
+    }
+
     /**
      * Sets the current MAC to the factory MAC address.
      */
@@ -4251,6 +4283,10 @@ public class ClientModeImpl extends StateMachine {
                             .noteConnectionFailureAndTriggerIfNeeded(
                                     getTargetSsid(), bssid,
                                     WifiLastResortWatchdog.FAILURE_CODE_ASSOCIATION);
+                    if (timedOut) {
+                        // Check for WPA2 fallback attempt
+                        attemptWpa2FallbackConnectionIfRequired(bssid);
+                    }
                     break;
                 case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
                     mWifiDiagnostics.captureBugReportData(
@@ -4529,6 +4565,16 @@ public class ClientModeImpl extends StateMachine {
 
                     reportConnectionAttemptStart(config, mTargetRoamBSSID,
                             WifiMetricsProto.ConnectionEvent.ROAM_UNRELATED);
+
+                    boolean isWpa2FallbackActive = config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)
+                         && ((mClock.getWallClockMillis() - config.lastWpa2FallbackAttemptTime) < (30 * 60 * 1000));
+                    if (isWpa2FallbackActive) {
+                        Log.i(TAG,"Fallback to WPA2 PSK for "+ config.configKey());
+                        config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.SAE);
+                        config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+                        config.requirePMF = false;
+                    }
+
                     if (config.macRandomizationSetting
                             == WifiConfiguration.RANDOMIZATION_PERSISTENT
                             && mConnectedMacRandomzationSupported) {
@@ -5283,6 +5329,7 @@ public class ClientModeImpl extends StateMachine {
 
         @Override
         public void enter() {
+            mSaeNetworkConsecutiveAssocRejectCounter = 0;
             mRssiPollToken++;
             if (mEnableRssiPolling) {
                 mLinkProbeManager.resetOnNewConnection();
@@ -7146,5 +7193,52 @@ public class ClientModeImpl extends StateMachine {
             return true;
 
         return false;
+    }
+
+    private void attemptWpa2FallbackConnectionIfRequired(String bssid) {
+        if (mTargetWifiConfiguration != null &&
+                mTargetWifiConfiguration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+            mSaeNetworkConsecutiveAssocRejectCounter++;
+            Log.i(TAG,"mSaeNetworkConsecutiveAssocRejectCounter = " +  mSaeNetworkConsecutiveAssocRejectCounter);
+            ScanDetailCache scanDetailCache = mWifiConfigManager.getScanDetailCacheForNetwork(
+                                                  mTargetWifiConfiguration.networkId);
+            if (scanDetailCache != null && scanDetailCache.size() > 0) {
+                boolean transitionModeApFound = false;
+                for (ScanDetail scanDetail : scanDetailCache.values()) {
+                    ScanResult scanResult = scanDetail.getScanResult();
+                    if (scanResult == null ||
+                        ((mClock.getWallClockMillis() - scanResult.seen) > (15 * 60 * 1000)) ||
+                        !ScanResultUtil.isScanResultForPskSaeTransitionNetwork(scanResult))
+                        continue;
+                    Log.i(TAG,"Transition mode bssid found");
+                    transitionModeApFound = true;
+                    break;
+                }
+
+                if (transitionModeApFound &&
+                        mSaeNetworkConsecutiveAssocRejectCounter >= WPA2_FALLBACK_THRESHOLD) {
+                    Log.i(TAG,"Attempt WPA2 fallback connection");
+                    mSaeNetworkConsecutiveAssocRejectCounter = 0;
+                    mWifiConfigManager.recordWpa2FallbackAttemptTimeStamp(mTargetNetworkId);
+                    WifiConfiguration config = mWifiConfigManager.getConfiguredNetworkWithoutMasking(mTargetNetworkId);
+                    config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.SAE);
+                    config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+                    config.requirePMF = false;
+                    configureRandomizedMacAddressForWpa2Fallback(config);
+                    String currentMacAddress = mWifiNative.getMacAddress(mInterfaceName);
+                    mWifiInfo.setMacAddress(currentMacAddress);
+                    if (bssid != null) {
+                        mWifiConnectivityManager.trackBssid(bssid, true, 0);
+                    }
+                    mWifiConfigManager.updateNetworkSelectionStatus(mTargetNetworkId,
+                                    WifiConfiguration.NetworkSelectionStatus
+                                    .NETWORK_SELECTION_ENABLE);
+                    Log.i(TAG, "Connecting with " + currentMacAddress + " as the mac address");
+                    if (mWifiNative.connectToNetwork(mInterfaceName, config)) {
+                        mTargetWifiConfiguration = config;
+                    }
+                }
+            }
+        }
     }
 }
