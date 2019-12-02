@@ -380,7 +380,9 @@ public class WifiCandidates {
         CandidateImpl candidate = new CandidateImpl(key,
                 scanDetail, config, evaluatorId, evaluatorScore, perBssid,
                 Math.min(Math.max(lastSelectionWeightBetweenZeroAndOne, 0.0), 1.0),
-                config.networkId == mCurrentNetworkId,
+                (mCurrentNetworkId != WifiConfiguration.INVALID_NETWORK_ID
+                 && (config.networkId == mCurrentNetworkId
+                     || config.linkedNetworkId == mCurrentNetworkId)),
                 bssid.equals(mCurrentBssid));
         mCandidates.put(key, candidate);
         return true;

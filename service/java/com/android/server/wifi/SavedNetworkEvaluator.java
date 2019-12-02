@@ -22,6 +22,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.telephony.SubscriptionManager;
 import android.util.LocalLog;
+import android.util.Log;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
@@ -144,7 +145,8 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         }
 
         if (lastUserSelectedNetworkId != WifiConfiguration.INVALID_NETWORK_ID
-                && lastUserSelectedNetworkId == network.networkId) {
+                && ((lastUserSelectedNetworkId == network.networkId)
+                     || (lastUserSelectedNetworkId == network.linkedNetworkId))) {
             if (timeDifference > 0) {
                 int decay = (int) (timeDifference / LAST_SELECTION_AWARD_DECAY_MSEC);
                 int bonus = Math.max(mLastSelectionAward - decay, 0);
@@ -155,7 +157,9 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         }
 
         // Same network award.
-        if (currentNetwork != null && network.networkId == currentNetwork.networkId) {
+        if (currentNetwork != null
+                && ((network.networkId == currentNetwork.networkId)
+                    || (network.linkedNetworkId == currentNetwork.networkId))) {
             score += mSameNetworkAward;
             sbuf.append(" Same network bonus: ").append(mSameNetworkAward).append(",");
 
@@ -202,6 +206,10 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         WifiConfiguration candidate = null;
         StringBuffer scoreHistory = new StringBuffer();
 
+        if (connected && mStaId == WifiManager.STA_PRIMARY) {
+            mWifiConfigManager.addOrUpdateLinkedEphemeralNetworks(currentNetwork.networkId, currentBssid, scanDetails);
+        }
+
         for (ScanDetail scanDetail : scanDetails) {
             ScanResult scanResult = scanDetail.getScanResult();
 
@@ -221,7 +229,9 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
              * {@link PasspointNetworkEvaluator} and {@link ScoredNetworkEvaluator}
              * respectively.
              */
-            if (network.isPasspoint() || network.isEphemeral()) {
+            if (network.isPasspoint()
+                || (network.isEphemeral()
+                    && !isEphemeralNetworkAllowed(connected, currentNetwork, network))) {
                 continue;
             }
 
@@ -298,4 +308,20 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
     public void setStaId(int id) {
         mStaId = id;
     }
+
+     private boolean isEphemeralNetworkAllowed(boolean connected,
+                             WifiConfiguration currentNetwork,
+                             WifiConfiguration network) {
+         if (mStaId != WifiManager.STA_PRIMARY || network == null
+              || !connected || currentNetwork == null) {
+             return false;
+         }
+
+         if (mWifiConfigManager.isLinkedEphemeralNetwork(network.networkId)
+                 && network.linkedNetworkId == currentNetwork.networkId) {
+             return true;
+         }
+
+         return false;
+     }
 }

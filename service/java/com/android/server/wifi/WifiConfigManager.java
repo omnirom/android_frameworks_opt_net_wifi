@@ -53,6 +53,7 @@ import android.util.Pair;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -293,6 +294,8 @@ public class WifiConfigManager {
      * Stores a map of NetworkId to ScanDetailCache.
      */
     private final Map<Integer, ScanDetailCache> mScanDetailCaches;
+
+    private HashMap<Integer, Integer> mLinkedEphemeralNetworkIds = new HashMap<>();
     /**
      * Framework keeps a list of ephemeral SSIDs that where deleted by user,
      * framework knows not to autoconnect again even if the app/scorer recommends it.
@@ -1354,6 +1357,7 @@ public class WifiConfigManager {
                 // network is already registered as an ephemeral network.
                 // Clear the Ephemeral Network to address the situation.
                 removeNetwork(existingConfig.networkId, mSystemUiUid);
+                mLinkedEphemeralNetworkIds.remove(existingConfig.networkId);
             }
         }
 
@@ -1556,6 +1560,7 @@ public class WifiConfigManager {
                 didRemove = true;
             }
         }
+        mLinkedEphemeralNetworkIds.clear();
         return didRemove;
     }
 
@@ -3086,6 +3091,7 @@ public class WifiConfigManager {
         mDeletedEphemeralSsidsToTimeMap.clear();
         mRandomizedMacAddressMapping.clear();
         mScanDetailCaches.clear();
+        mLinkedEphemeralNetworkIds.clear();
         clearLastSelectedNetwork();
         qtiClearLastSelectedNetwork(WifiConfiguration.INVALID_NETWORK_ID);
     }
@@ -3113,6 +3119,7 @@ public class WifiConfigManager {
                         + " netId=" + config.networkId
                         + " configKey=" + config.configKey());
                 mConfiguredNetworks.remove(config.networkId);
+                mLinkedEphemeralNetworkIds.remove(config.networkId);
             }
         }
         mDeletedEphemeralSsidsToTimeMap.clear();
@@ -3623,5 +3630,174 @@ public class WifiConfigManager {
         }
         internalConfig.linkedConfigurations = null;
         attemptNetworkLinking(internalConfig);
+    }
+
+    private String getLowerCaseSsidPrefix(String ssid, String suffix) {
+         if (ssid == null || suffix == null) {
+             return null;
+         }
+
+         String ssidLower = ssid.toLowerCase();
+         String suffixLower = suffix.toLowerCase();
+         int suffixIndex = ssidLower.indexOf(suffixLower);
+         if (suffixIndex < 1) {
+             return null;
+         }
+
+         return ssidLower.substring(0, suffixIndex);
+    }
+
+    private boolean isQualifiedForNetworkLinking(WifiConfiguration config, String currentBssid) {
+        if (config == null || config.ephemeral)
+            return false;
+
+        // config AKM should be PSK
+        if (!WifiConfigurationUtil.isConfigForPskNetwork(config))
+            return false;
+
+
+        // SSID should contain "2g"/"2G" with valid prefix
+        if (getLowerCaseSsidPrefix(config.getPrintableSsid(), "2g") == null) {
+            return false;
+        }
+
+        // no.of bssids of the SSID in scan cache should be less than configured limit
+        ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(config.networkId);
+        if (scanDetailCache == null || scanDetailCache.size() == 0 ||
+            scanDetailCache.size() > LINK_CONFIGURATION_MAX_SCAN_CACHE_ENTRIES) {
+            return false;
+        }
+
+        // current BSSID shouldn't be 5G network
+        if (currentBssid != null) {
+            ScanDetail scanDetail = scanDetailCache.getScanDetail(currentBssid);
+            if (scanDetail != null) {
+                ScanResult result = scanDetail.getScanResult();
+                if (result.is5GHz())
+                    return false;
+            }
+        }
+
+        // no 5Ghz bssid should present in scan cache
+        for (ScanDetail scanDetail : scanDetailCache.values()) {
+            ScanResult result = scanDetail.getScanResult();
+            if (result.is5GHz())
+                return false;
+        }
+
+        return true;
+    }
+
+    public boolean isLinkedEphemeralNetwork(int networkId) {
+        if (networkId == WifiConfiguration.INVALID_NETWORK_ID) {
+            return false;
+        }
+
+        return mLinkedEphemeralNetworkIds.containsKey(networkId);
+    }
+
+    public void addOrUpdateLinkedEphemeralNetworks(int networkId, String currentBssid,
+                    List<ScanDetail> scanDetails) {
+        if (!isUnsavedNetworkLinkingFeatureEnabled()) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "unsaved network linking disabled");
+            }
+            return;
+        }
+
+        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
+        if (config == null || currentBssid == null || scanDetails == null
+            || !isQualifiedForNetworkLinking(config, currentBssid)) {
+            return;
+        }
+
+        String ssid2gPrefix = getLowerCaseSsidPrefix(config.getPrintableSsid(), "2g");
+        Log.i(TAG, config.getPrintableSsid() + " Qualified for notwork linking"
+                       + " with ssid2gPrefix = " + ssid2gPrefix);
+
+        for (ScanDetail scanDetail : scanDetails) {
+            ScanResult scanResult = scanDetail.getScanResult();
+            if (scanResult.is24GHz() || !ScanResultUtil.isScanResultForPskNetwork(scanResult))
+                continue;
+
+            if (!currentBssid.regionMatches(true, 0, scanResult.BSSID, 0,
+                     LINK_CONFIGURATION_BSSID_MATCH_LENGTH))
+                continue;
+
+             // SSID should contain "5g"/"5G" with valid prefix
+            String ssid5gPrefix = getLowerCaseSsidPrefix(scanResult.SSID, "5g");
+            Log.i(TAG, "ssid5gPrefix: " + ssid5gPrefix);
+            if(ssid5gPrefix == null || !ssid5gPrefix.equals(ssid2gPrefix)) {
+                continue;
+            }
+
+            if (getConfiguredNetworkForScanDetail(scanDetail) != null)
+                continue;
+
+            WifiConfiguration ephemeralConfig =
+                     ScanResultUtil.createNetworkFromScanResult(scanResult);
+
+            ephemeralConfig.staId = WifiManager.STA_PRIMARY;
+            ephemeralConfig.ephemeral = true;
+            ephemeralConfig.creatorUid = config.creatorUid;
+            ephemeralConfig.creatorName = config.creatorName;
+            ephemeralConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+            ephemeralConfig.requirePMF = false;
+            ephemeralConfig.preSharedKey = config.preSharedKey;
+            ephemeralConfig.noInternetAccessExpected = config.noInternetAccessExpected;
+            ephemeralConfig.setIpConfiguration(new IpConfiguration(config.getIpConfiguration()));
+            NetworkUpdateResult result = addOrUpdateNetwork(ephemeralConfig, config.creatorUid);
+            if (!result.isSuccess()) {
+                Log.e(TAG, "Failed to add ephemeral network" + ephemeralConfig.configKey());
+                continue;
+            }
+            if (!updateNetworkSelectionStatus(result.getNetworkId(),
+                WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE)) {
+                Log.e(TAG, "Failed to make ephemeral network "
+                                + ephemeralConfig.configKey() + " selectable");
+                continue;
+            }
+
+            WifiConfiguration internalConfig = getInternalConfiguredNetwork(result.getNetworkId());
+
+            if (internalConfig == null) {
+                Log.e(TAG, "Failed to fetch configured ephemeral network "
+                                + ephemeralConfig.configKey());
+                continue;
+            }
+
+            Log.i(TAG, "added ephemeral network" + internalConfig.configKey()
+                                + " linked with " + config.configKey());
+            internalConfig.linkedNetworkId = config.networkId;
+            mLinkedEphemeralNetworkIds.put(internalConfig.networkId, config.networkId);
+        }
+    }
+
+    public boolean saveToStoreIfLinkedEphemeralNetwork(int networkId) {
+        if (!isLinkedEphemeralNetwork(networkId)) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "not linked ephemeral network!");
+            }
+            return false;
+        }
+
+        WifiConfiguration internalConfig = getInternalConfiguredNetwork(networkId);
+
+        if (internalConfig == null || !internalConfig.ephemeral) {
+            Log.e(TAG, "Cannot find linked ephemeral network!");
+            mLinkedEphemeralNetworkIds.remove(networkId);
+            return false;
+        }
+
+        internalConfig.ephemeral = false;
+        internalConfig.linkedNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
+
+        mLinkedEphemeralNetworkIds.remove(networkId);
+        saveToStore(true);
+        sendConfiguredNetworkChangedBroadcast(internalConfig, WifiManager.CHANGE_REASON_ADDED);
+        if (mListener != null) {
+            mListener.onSavedNetworkAdded(internalConfig.networkId);
+        }
+        return true;
     }
 }
