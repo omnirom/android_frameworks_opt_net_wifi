@@ -836,8 +836,8 @@ public class WifiServiceImpl extends BaseWifiService {
 
         WifiConfiguration wifiConfig = apConfig.getWifiConfiguration();
 
-        if (wifiConfig == null && mSettingsStore.isAirplaneModeOn()) {
-            Log.d(TAG, "Starting softap in airplane mode. Fallback to 2G band");
+        if (wifiConfig == null && TextUtils.isEmpty(mCountryCode.getCountryCode())) {
+            Log.d(TAG, "Starting softap without country code. Fallback to 2G band");
             wifiConfig = new WifiConfiguration(mWifiApConfigStore.getApConfiguration());
             wifiConfig.apBand = WifiConfiguration.AP_BAND_2GHZ;
         }
