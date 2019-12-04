@@ -15,7 +15,6 @@
  */
 package com.android.server.wifi;
 
-import android.annotation.NonNull;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 
@@ -47,7 +46,7 @@ public class ScanResultMatchInfo {
     /**
      * Fetch network type from network configuration.
      */
-    private static @WifiConfiguration.SecurityType int getNetworkType(WifiConfiguration config) {
+    public static @WifiConfiguration.SecurityType int getNetworkType(WifiConfiguration config) {
         if (WifiConfigurationUtil.isConfigForSaeNetwork(config)) {
             return WifiConfiguration.SECURITY_TYPE_SAE;
         } else if (WifiConfigurationUtil.isConfigForPskNetwork(config)) {
@@ -83,7 +82,7 @@ public class ScanResultMatchInfo {
     /**
      * Fetch network type from scan result.
      */
-    private static @WifiConfiguration.SecurityType int getNetworkType(ScanResult scanResult) {
+    public static @WifiConfiguration.SecurityType int getNetworkType(ScanResult scanResult) {
         if (ScanResultUtil.isScanResultForSaeNetwork(scanResult)) {
             return WifiConfiguration.SECURITY_TYPE_SAE;
         } else if (ScanResultUtil.isScanResultForPskNetwork(scanResult)) {
@@ -135,25 +134,6 @@ public class ScanResultMatchInfo {
     /**
      * Checks for equality of network type.
      */
-    public boolean networkTypeEquals(@NonNull ScanResultMatchInfo other) {
-        boolean networkTypeEquals;
-        // Detect <SSID, PSK+SAE> scan result and say it is equal to <SSID, PSK> configuration
-        if (other.pskSaeInTransitionMode && networkType == WifiConfiguration.SECURITY_TYPE_PSK
-                || (pskSaeInTransitionMode
-                && other.networkType == WifiConfiguration.SECURITY_TYPE_PSK)) {
-            networkTypeEquals = true;
-        } else if ((networkType == WifiConfiguration.SECURITY_TYPE_OPEN
-                && other.oweInTransitionMode) || (oweInTransitionMode
-                && other.networkType == WifiConfiguration.SECURITY_TYPE_OPEN)) {
-            // Special case we treat Enhanced Open and Open as equals. This is done to support the
-            // case where a saved network is Open but we found an OWE in transition network.
-            networkTypeEquals = true;
-        } else {
-            networkTypeEquals = networkType == other.networkType;
-        }
-        return networkTypeEquals;
-    }
-
     @Override
     public boolean equals(Object otherObj) {
         if (this == otherObj) {
@@ -162,10 +142,8 @@ public class ScanResultMatchInfo {
             return false;
         }
         ScanResultMatchInfo other = (ScanResultMatchInfo) otherObj;
-        if (!Objects.equals(networkSsid, other.networkSsid)) {
-            return false;
-        }
-        return networkTypeEquals(other);
+        return Objects.equals(networkSsid, other.networkSsid)
+                && networkType == other.networkType;
     }
 
     @Override

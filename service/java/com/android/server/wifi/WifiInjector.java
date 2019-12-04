@@ -159,6 +159,7 @@ public class WifiInjector {
     private final TelephonyUtil mTelephonyUtil;
     private WifiChannelUtilization mWifiChannelUtilization;
     private final KeyStore mKeyStore;
+    private final ThroughputPredictor mThroughputPredictor;
 
     public WifiInjector(Context context) {
         if (context == null) {
@@ -240,9 +241,6 @@ public class WifiInjector {
                 SystemProperties.get(BOOT_DEFAULT_WIFI_COUNTRY_CODE),
                 mContext.getResources()
                         .getBoolean(R.bool.config_wifi_revert_country_code_on_cellular_loss));
-        mWifiApConfigStore = new WifiApConfigStore(
-                mContext,this, wifiHandler, mBackupManagerProxy, mFrameworkFacade);
-
         // WifiConfigManager/Store objects and their dependencies.
         KeyStore keyStore = null;
         try {
@@ -253,7 +251,7 @@ public class WifiInjector {
         mWifiKeyStore = new WifiKeyStore(mKeyStore);
         // New config store
         mWifiConfigStore = new WifiConfigStore(mContext, wifiHandler, mClock, mWifiMetrics,
-                WifiConfigStore.createSharedFile(mFrameworkFacade.isNiapModeOn(mContext)));
+                WifiConfigStore.createSharedFiles(mFrameworkFacade.isNiapModeOn(mContext)));
         SubscriptionManager subscriptionManager =
                 mContext.getSystemService(SubscriptionManager.class);
         mTelephonyUtil = new TelephonyUtil(makeTelephonyManager(), subscriptionManager);
@@ -266,19 +264,28 @@ public class WifiInjector {
                 new DeletedEphemeralSsidsStoreData(mClock), new RandomizedMacStoreData(),
                 mFrameworkFacade, wifiHandler, mDeviceConfigFacade);
         mWifiMetrics.setWifiConfigManager(mWifiConfigManager);
+
+        mWifiApConfigStore = new WifiApConfigStore(
+                mContext, this, wifiHandler, mBackupManagerProxy, mFrameworkFacade,
+                mWifiConfigStore, mWifiConfigManager);
+
         mWifiConnectivityHelper = new WifiConnectivityHelper(mWifiNative);
         mConnectivityLocalLog = new LocalLog(
                 mContext.getSystemService(ActivityManager.class).isLowRamDevice() ? 256 : 512);
         mScoringParams = new ScoringParams(mContext, mFrameworkFacade, wifiHandler);
         mWifiMetrics.setScoringParams(mScoringParams);
+        mThroughputPredictor = new ThroughputPredictor(mContext);
         mWifiNetworkSelector = new WifiNetworkSelector(mContext, mWifiScoreCard, mScoringParams,
-                mWifiConfigManager, mClock, mConnectivityLocalLog, mWifiMetrics, mWifiNative);
+                mWifiConfigManager, mClock, mConnectivityLocalLog, mWifiMetrics, mWifiNative,
+                mThroughputPredictor);
         CompatibilityScorer compatibilityScorer = new CompatibilityScorer(mScoringParams);
         mWifiNetworkSelector.registerCandidateScorer(compatibilityScorer);
         ScoreCardBasedScorer scoreCardBasedScorer = new ScoreCardBasedScorer(mScoringParams);
         mWifiNetworkSelector.registerCandidateScorer(scoreCardBasedScorer);
         BubbleFunScorer bubbleFunScorer = new BubbleFunScorer(mScoringParams);
         mWifiNetworkSelector.registerCandidateScorer(bubbleFunScorer);
+        ThroughputScorer throughputScorer = new ThroughputScorer(mScoringParams);
+        mWifiNetworkSelector.registerCandidateScorer(throughputScorer);
         mWifiMetrics.setWifiNetworkSelector(mWifiNetworkSelector);
         mSavedNetworkEvaluator = new SavedNetworkEvaluator(mContext, mScoringParams,
                 mWifiConfigManager, mClock, mConnectivityLocalLog, mWifiConnectivityHelper,
@@ -649,6 +656,14 @@ public class WifiInjector {
     public NetworkSuggestionStoreData makeNetworkSuggestionStoreData(
             NetworkSuggestionStoreData.DataSource dataSource) {
         return new NetworkSuggestionStoreData(dataSource);
+    }
+
+    /**
+     * Construct an instance of {@link SoftApStoreData}.
+     */
+    public SoftApStoreData makeSoftApStoreData(
+            SoftApStoreData.DataSource dataSource) {
+        return new SoftApStoreData(dataSource);
     }
 
     public WifiPermissionsUtil getWifiPermissionsUtil() {
