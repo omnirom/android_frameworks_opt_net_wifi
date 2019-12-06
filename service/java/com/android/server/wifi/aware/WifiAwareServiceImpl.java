@@ -63,6 +63,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
     private static final String TAG = "WifiAwareService";
     private static final boolean VDBG = false; // STOPSHIP if true
     /* package */ boolean mDbg = false;
+    private boolean mVerboseLoggingEnabled = false; 
 
     private Context mContext;
     private AppOpsManager mAppOps;
@@ -130,22 +131,30 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
 
         if (verbose > 0) {
             dbg = true;
+            mVerboseLoggingEnabled = true;
         } else {
             dbg = false;
+            mVerboseLoggingEnabled = false;
         }
         if (VDBG) {
             dbg = true; // just override
+            mVerboseLoggingEnabled = true;
         }
 
         mDbg = dbg;
         awareStateManager.mDbg = dbg;
+        awareStateManager.enableVerboseLogging(verbose);
         if (awareStateManager.mDataPathMgr != null) { // needed for unit tests
             awareStateManager.mDataPathMgr.mDbg = dbg;
+            awareStateManager.mDataPathMgr.enableVerboseLogging(verbose);
             WifiInjector.getInstance().getWifiMetrics().getWifiAwareMetrics().mDbg = dbg;
         }
         wifiAwareNativeCallback.mDbg = dbg;
+        wifiAwareNativeCallback.enableVerboseLogging(verbose);
         wifiAwareNativeManager.mDbg = dbg;
+        wifiAwareNativeManager.enableVerboseLogging(verbose);
         wifiAwareNativeApi.mDbg = dbg;
+        wifiAwareNativeApi.enableVerboseLogging(verbose);
     }
 
     /**
@@ -281,7 +290,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
 
         int uid = getMockableCallingUid();
         enforceClientValidity(uid, clientId);
-        if (VDBG) {
+        if (VDBG || mVerboseLoggingEnabled) {
             Log.v(TAG, "terminateSession: sessionId=" + sessionId + ", uid=" + uid + ", clientId="
                     + clientId);
         }
@@ -310,7 +319,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
                 mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_RTT));
 
         enforceClientValidity(uid, clientId);
-        if (VDBG) {
+        if (VDBG || mVerboseLoggingEnabled) {
             Log.v(TAG, "publish: uid=" + uid + ", clientId=" + clientId + ", publishConfig="
                     + publishConfig + ", callback=" + callback);
         }
@@ -331,7 +340,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
 
         int uid = getMockableCallingUid();
         enforceClientValidity(uid, clientId);
-        if (VDBG) {
+        if (VDBG || mVerboseLoggingEnabled) {
             Log.v(TAG, "updatePublish: uid=" + uid + ", clientId=" + clientId + ", sessionId="
                     + sessionId + ", config=" + publishConfig);
         }
@@ -360,7 +369,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
                 mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_RTT));
 
         enforceClientValidity(uid, clientId);
-        if (VDBG) {
+        if (VDBG || mVerboseLoggingEnabled) {
             Log.v(TAG, "subscribe: uid=" + uid + ", clientId=" + clientId + ", config="
                     + subscribeConfig + ", callback=" + callback);
         }
@@ -381,7 +390,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
 
         int uid = getMockableCallingUid();
         enforceClientValidity(uid, clientId);
-        if (VDBG) {
+        if (VDBG || mVerboseLoggingEnabled) {
             Log.v(TAG, "updateSubscribe: uid=" + uid + ", clientId=" + clientId + ", sessionId="
                     + sessionId + ", config=" + subscribeConfig);
         }
@@ -411,7 +420,7 @@ public class WifiAwareServiceImpl extends IWifiAwareManager.Stub {
 
         int uid = getMockableCallingUid();
         enforceClientValidity(uid, clientId);
-        if (VDBG) {
+        if (VDBG || mVerboseLoggingEnabled) {
             Log.v(TAG,
                     "sendMessage: sessionId=" + sessionId + ", uid=" + uid + ", clientId="
                             + clientId + ", peerId=" + peerId + ", messageId=" + messageId

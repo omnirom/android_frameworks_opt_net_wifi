@@ -51,6 +51,7 @@ public class WifiAwareNativeCallback extends IWifiNanIfaceEventCallback.Stub imp
         WifiAwareShellCommand.DelegatedShellCommand {
     private static final String TAG = "WifiAwareNativeCallback";
     private static final boolean VDBG = false;
+    private boolean mVerboseLoggingEnabled = false;
     /* package */ boolean mDbg = false;
 
     /* package */ boolean mIsHal12OrLater = false;
@@ -84,6 +85,16 @@ public class WifiAwareNativeCallback extends IWifiNanIfaceEventCallback.Stub imp
         mCallbackCounter.put(callbackId, mCallbackCounter.get(callbackId) + 1);
     }
 
+    public void enableVerboseLogging(int verbose)
+    {
+        if( verbose > 0 ) {
+            mVerboseLoggingEnabled = true;
+        }
+        else {
+            mVerboseLoggingEnabled = false;
+        }
+    }
+
     /**
      * Interpreter of adb shell command 'adb shell cmd wifiaware native_cb ...'.
      *
@@ -95,11 +106,11 @@ public class WifiAwareNativeCallback extends IWifiNanIfaceEventCallback.Stub imp
         final PrintWriter pwo = parentShell.getOutPrintWriter();
 
         String subCmd = parentShell.getNextArgRequired();
-        if (VDBG) Log.v(TAG, "onCommand: subCmd='" + subCmd + "'");
+        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onCommand: subCmd='" + subCmd + "'");
         switch (subCmd) {
             case "get_cb_count": {
                 String option = parentShell.getNextOption();
-                if (VDBG) Log.v(TAG, "option='" + option + "'");
+                if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "option='" + option + "'");
                 boolean reset = false;
                 if (option != null) {
                     if ("--reset".equals(option)) {
