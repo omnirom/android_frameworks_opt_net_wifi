@@ -42,7 +42,6 @@ import android.util.Log;
 
 import com.android.internal.annotations.Immutable;
 import com.android.internal.util.HexDump;
-import com.android.server.connectivity.tethering.TetheringConfiguration;
 import com.android.server.net.BaseNetworkObserver;
 import com.android.server.wifi.util.FrameParser;
 import com.android.server.wifi.util.NativeUtil;
@@ -1022,7 +1021,8 @@ public class WifiNative {
             Log.e(TAG, "Failed to allocate FST interface");
             return false;
         }
-        fstIface.name = TetheringConfiguration.getFstInterfaceName();
+        // TODO(b/145993198): TetheringConfiguration.getFstInterfaceName() replaced with "bond0"
+        fstIface.name = "bond0";
         fstIface.externalListener = iface.externalListener;
         iface.externalListener = new InterfaceCallback() {
             public void onDestroyed(String ifaceName) {
