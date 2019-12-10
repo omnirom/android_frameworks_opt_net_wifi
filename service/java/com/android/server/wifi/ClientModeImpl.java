@@ -5686,8 +5686,6 @@ public class ClientModeImpl extends StateMachine {
                          .withPreDhcpAction()
                          .withApfCapabilities(mWifiNative.getApfCapabilities(mInterfaceName))
                          .build();
-                  prov.mRapidCommit = true;
-                  prov.mDiscoverSent = true;
                mIpClient.startProvisioning(prov);
                mIsIpClientStarted = true;
         }
