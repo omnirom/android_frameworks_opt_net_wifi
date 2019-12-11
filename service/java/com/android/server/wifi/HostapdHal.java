@@ -34,7 +34,7 @@ import com.android.server.wifi.WifiNative.HostapdDeathEventHandler;
 import com.android.server.wifi.util.ApConfigUtil;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.WifiNative.SoftApListener;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -63,12 +63,9 @@ public class HostapdHal {
 
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
+    private final Context mContext;
     private final Handler mEventHandler;
-    private final boolean mEnableAcs;
     private final boolean mAcsShouldExcludeDfs;
-    private final boolean mEnableIeee80211AC;
-    private final List<android.hardware.wifi.hostapd.V1_1.IHostapd.AcsChannelRange>
-            mAcsChannelRanges;
     private final List<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange>
             mVendorAcsChannelRanges;
     private String mCountryCode = null;
@@ -141,13 +138,9 @@ public class HostapdHal {
     }
 
     public HostapdHal(Context context, Handler handler) {
+        mContext = context;
         mEventHandler = handler;
-        mEnableAcs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported);
         mAcsShouldExcludeDfs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_should_exclude_dfs);
-        mEnableIeee80211AC =
-                context.getResources().getBoolean(R.bool.config_wifi_softap_ieee80211ac_supported);
-        mAcsChannelRanges = toAcsChannelRanges(context.getResources().getString(
-                R.string.config_wifi_softap_acs_supported_channel_list));
 
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mHostapdDeathRecipient = new HostapdDeathRecipient();
@@ -367,7 +360,9 @@ public class HostapdHal {
             IHostapd.IfaceParams ifaceParams = new IHostapd.IfaceParams();
             ifaceParams.ifaceName = ifaceName;
             ifaceParams.hwModeParams.enable80211N = true;
-            ifaceParams.hwModeParams.enable80211AC = mEnableIeee80211AC;
+            ifaceParams.hwModeParams.enable80211AC =
+                    mContext.getResources().getBoolean(
+                            R.bool.config_wifi_softap_ieee80211ac_supported);
             try {
                 ifaceParams.channelParams.band = getBand(config);
             } catch (IllegalArgumentException e) {
@@ -382,7 +377,8 @@ public class HostapdHal {
                 } else {
                     ifaceParams.channelParams.band = IHostapd.Band.BAND_5_GHZ;
                 }
-            } else if (mEnableAcs) {
+            } else if (mContext.getResources().getBoolean(
+                    R.bool.config_wifi_softap_acs_supported)) {
                 ifaceParams.channelParams.enableAcs = true;
                 if(mAcsShouldExcludeDfs) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
@@ -416,8 +412,11 @@ public class HostapdHal {
                     android.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
                             new android.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
                     ifaceParams1_1.V1_0 = ifaceParams;
-                    if (mEnableAcs) {
-                        ifaceParams1_1.channelParams.acsChannelRanges.addAll(mAcsChannelRanges);
+                    if (mContext.getResources().getBoolean(
+                            R.bool.config_wifi_softap_acs_supported)) {
+                        ifaceParams1_1.channelParams.acsChannelRanges.addAll(
+                                toAcsChannelRanges(mContext.getResources().getString(
+                                        R.string.config_wifi_softap_acs_supported_channel_list)));
                     }
                     android.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
                             getHostapdMockableV1_1();
@@ -887,7 +886,9 @@ public class HostapdHal {
             IHostapd.IfaceParams ifaceParams = vendorIfaceParams.ifaceParams;
             ifaceParams.ifaceName = ifaceName;
             ifaceParams.hwModeParams.enable80211N = true;
-            ifaceParams.hwModeParams.enable80211AC = mEnableIeee80211AC;
+            ifaceParams.hwModeParams.enable80211AC =
+                    mContext.getResources().getBoolean(
+                            R.bool.config_wifi_softap_ieee80211ac_supported);
             vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
             vendorIfaceParams.bridgeIfaceName = "";
             try {
@@ -896,7 +897,7 @@ public class HostapdHal {
                 Log.e(TAG, "Unrecognized apBand " + config.apBand);
                 return false;
             }
-            if (mEnableAcs) {
+            if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
                 ifaceParams.channelParams.enableAcs = true;
                 if(mAcsShouldExcludeDfs) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
@@ -942,7 +943,7 @@ public class HostapdHal {
                     vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
                     vendorIfaceParams1_1.vendorEncryptionType = getVendorEncryptionType(config);
                     vendorIfaceParams1_1.oweTransIfaceName = (config.oweTransIfaceName != null) ? config.oweTransIfaceName : "";
-                    if (mEnableAcs) {
+                    if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
                         vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(mVendorAcsChannelRanges);
                     }
                     HostapdStatus status =

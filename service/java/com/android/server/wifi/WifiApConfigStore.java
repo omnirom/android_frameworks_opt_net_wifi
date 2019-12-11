@@ -19,12 +19,7 @@ package com.android.server.wifi;
 import static android.net.wifi.WifiManager.WIFI_GENERATION_DEFAULT;
 
 import android.annotation.NonNull;
-import android.app.Notification;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
@@ -38,8 +33,7 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.messages.nano.SystemMessageProto.SystemMessage;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
@@ -91,18 +85,12 @@ public class WifiApConfigStore {
 
     private WifiConfiguration mPersistentWifiApConfig = null;
 
-    private ArrayList<Integer> mAllowed2GChannel = null;
-
     private final Context mContext;
-    private final WifiInjector mWifiInjector;
     private final Handler mHandler;
     private final BackupManagerProxy mBackupManagerProxy;
-    private final FrameworkFacade mFrameworkFacade;
     private final MacAddressUtil mMacAddressUtil;
     private final Mac mMac;
-    private final WifiConfigStore mWifiConfigStore;
     private final WifiConfigManager mWifiConfigManager;
-    private boolean mRequiresApBandConversion = false;
     private boolean mHasNewDataToSerialize = false;
 
     /**
@@ -142,42 +130,23 @@ public class WifiApConfigStore {
     private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
 
     WifiApConfigStore(Context context, WifiInjector wifiInjector, Handler handler,
-            BackupManagerProxy backupManagerProxy, FrameworkFacade frameworkFacade,
-            WifiConfigStore wifiConfigStore, WifiConfigManager wifiConfigManager) {
-        this(context, wifiInjector, handler, backupManagerProxy, frameworkFacade, wifiConfigStore,
+            BackupManagerProxy backupManagerProxy, WifiConfigStore wifiConfigStore,
+            WifiConfigManager wifiConfigManager) {
+        this(context, wifiInjector, handler, backupManagerProxy, wifiConfigStore,
                 wifiConfigManager, LEGACY_AP_CONFIG_FILE);
     }
 
     WifiApConfigStore(Context context,
-                      WifiInjector wifiInjector,
-                      Handler handler,
-                      BackupManagerProxy backupManagerProxy,
-                      FrameworkFacade frameworkFacade,
-                      WifiConfigStore wifiConfigStore,
-                      WifiConfigManager wifiConfigManager,
-                      String apConfigFile) {
+            WifiInjector wifiInjector,
+            Handler handler,
+            BackupManagerProxy backupManagerProxy,
+            WifiConfigStore wifiConfigStore,
+            WifiConfigManager wifiConfigManager,
+            String apConfigFile) {
         mContext = context;
-        mWifiInjector = wifiInjector;
         mHandler = handler;
         mBackupManagerProxy = backupManagerProxy;
-        mFrameworkFacade = frameworkFacade;
-        mWifiConfigStore = wifiConfigStore;
         mWifiConfigManager = wifiConfigManager;
-
-        String ap2GChannelListStr = mContext.getResources().getString(
-                R.string.config_wifi_framework_sap_2G_channel_list);
-        Log.d(TAG, "2G band allowed channels are:" + ap2GChannelListStr);
-
-        if (ap2GChannelListStr != null) {
-            mAllowed2GChannel = new ArrayList<Integer>();
-            String channelList[] = ap2GChannelListStr.split(",");
-            for (String tmp : channelList) {
-                mAllowed2GChannel.add(Integer.parseInt(tmp));
-            }
-        }
-
-        mRequiresApBandConversion = mContext.getResources().getBoolean(
-                R.bool.config_wifi_convert_apband_5ghz_to_any);
 
         // One time migration from legacy config store.
         try {
@@ -197,14 +166,12 @@ public class WifiApConfigStore {
         }
 
         // Register store data listener
-        mWifiConfigStore.registerStoreData(
-                mWifiInjector.makeSoftApStoreData(new SoftApStoreDataSource()));
+        wifiConfigStore.registerStoreData(
+                wifiInjector.makeSoftApStoreData(new SoftApStoreDataSource()));
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_HOTSPOT_CONFIG_USER_TAPPED_CONTENT);
-        mContext.registerReceiver(
-                mBroadcastReceiver, filter, null /* broadcastPermission */, mHandler);
-        mMacAddressUtil = mWifiInjector.getMacAddressUtil();
+        mMacAddressUtil = wifiInjector.getMacAddressUtil();
         mMac = mMacAddressUtil.obtainMacRandHashFunctionForSap(Process.WIFI_UID);
         if (mMac == null) {
             Log.wtf(TAG, "Failed to obtain secret for SAP MAC randomization."
@@ -214,23 +181,6 @@ public class WifiApConfigStore {
         mBridgeInterfaceName = SystemProperties
                 .get("persist.vendor.wifi.softap.bridge.interface", "wifi_br0");
     }
-
-    private final BroadcastReceiver mBroadcastReceiver =
-            new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    // For now we only have one registered listener, but we easily could expand this
-                    // to support multiple signals.  Starting off with a switch to support trivial
-                    // expansion.
-                    switch(intent.getAction()) {
-                        case ACTION_HOTSPOT_CONFIG_USER_TAPPED_CONTENT:
-                            handleUserHotspotConfigTappedContent();
-                            break;
-                        default:
-                            Log.e(TAG, "Unknown action " + intent.getAction());
-                    }
-                }
-            };
 
    /* Additional APIs(get/set) to support SAP + SAP Feature */
 
@@ -280,48 +230,18 @@ public class WifiApConfigStore {
     }
 
     public ArrayList<Integer> getAllowed2GChannel() {
-        return mAllowed2GChannel;
-    }
+        String ap2GChannelListStr = mContext.getResources().getString(
+                R.string.config_wifi_framework_sap_2G_channel_list);
+        Log.d(TAG, "2G band allowed channels are:" + ap2GChannelListStr);
 
-    /**
-     * Helper method to create and send notification to user of apBand conversion.
-     *
-     * @param packageName name of the calling app
-     */
-    public void notifyUserOfApBandConversion(String packageName) {
-        Log.w(TAG, "ready to post notification - triggered by " + packageName);
-        Notification notification = createConversionNotification();
-        NotificationManager notificationManager = (NotificationManager)
-                    mContext.getSystemService(Context.NOTIFICATION_SERVICE);
-        notificationManager.notify(SystemMessage.NOTE_SOFTAP_CONFIG_CHANGED, notification);
-    }
-
-    private Notification createConversionNotification() {
-        CharSequence title =
-                mContext.getResources().getText(R.string.wifi_softap_config_change);
-        CharSequence contentSummary =
-                mContext.getResources().getText(R.string.wifi_softap_config_change_summary);
-        CharSequence content =
-                mContext.getResources().getText(R.string.wifi_softap_config_change_detailed);
-        int color =
-                mContext.getResources().getColor(
-                        android.R.color.system_notification_accent_color, mContext.getTheme());
-
-        return new Notification.Builder(mContext, WifiStackService.NOTIFICATION_NETWORK_STATUS)
-                .setSmallIcon(R.drawable.ic_wifi_settings)
-                .setPriority(Notification.PRIORITY_HIGH)
-                .setCategory(Notification.CATEGORY_SYSTEM)
-                .setContentTitle(title)
-                .setContentText(contentSummary)
-                .setContentIntent(getPrivateBroadcast(ACTION_HOTSPOT_CONFIG_USER_TAPPED_CONTENT))
-                .setTicker(title)
-                .setShowWhen(false)
-                .setLocalOnly(true)
-                .setColor(color)
-                .setStyle(new Notification.BigTextStyle().bigText(content)
-                                                         .setBigContentTitle(title)
-                                                         .setSummaryText(contentSummary))
-                .build();
+        ArrayList<Integer> allowed2GChannels = new ArrayList<>();
+        if (ap2GChannelListStr != null) {
+            String[] channelList = ap2GChannelListStr.split(",");
+            for (String tmp : channelList) {
+                allowed2GChannels.add(Integer.parseInt(tmp));
+            }
+        }
+        return allowed2GChannels;
     }
 
     private WifiConfiguration sanitizePersistentApConfig(WifiConfiguration config) {
@@ -333,7 +253,7 @@ public class WifiApConfigStore {
             convertedConfig.BSSID = null;
         }
 
-        if (mRequiresApBandConversion) {
+        if (mContext.getResources().getBoolean(R.bool.config_wifi_convert_apband_5ghz_to_any)) {
             // some devices are unable to support 5GHz only operation, check for 5GHz and
             // move to ANY if apBand conversion is required.
             if (config.apBand == WifiConfiguration.AP_BAND_5GHZ) {
@@ -596,32 +516,6 @@ public class WifiApConfigStore {
         }
 
         return true;
-    }
-
-    /**
-     * Helper method to start up settings on the softap config page.
-     */
-    private void startSoftApSettings() {
-        mContext.startActivity(
-                new Intent("com.android.settings.WIFI_TETHER_SETTINGS")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-    }
-
-    /**
-     * Helper method to trigger settings to open the softap config page
-     */
-    private void handleUserHotspotConfigTappedContent() {
-        startSoftApSettings();
-        NotificationManager notificationManager = (NotificationManager)
-                mContext.getSystemService(Context.NOTIFICATION_SERVICE);
-        notificationManager.cancel(SystemMessage.NOTE_SOFTAP_CONFIG_CHANGED);
-    }
-
-    private PendingIntent getPrivateBroadcast(String action) {
-        Intent intent = new Intent(action)
-                .setPackage(mWifiInjector.getWifiStackPackageName());
-        return mFrameworkFacade.getBroadcast(
-                mContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     private static String generatePassword() {

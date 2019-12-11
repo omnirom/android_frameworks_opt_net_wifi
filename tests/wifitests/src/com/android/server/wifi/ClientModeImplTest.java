@@ -99,10 +99,11 @@ import com.android.server.wifi.proto.nano.WifiMetricsProto;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiIsUnusableEvent;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStats;
+import com.android.server.wifi.util.RssiUtilTest;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import org.junit.After;
 import org.junit.Before;
@@ -483,6 +484,8 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         mResources = getMockResources();
         mResources.setBoolean(R.bool.config_wifi_connected_mac_randomization_supported, true);
+        mResources.setIntArray(R.array.config_wifiRssiLevelThresholds,
+                RssiUtilTest.RSSI_THRESHOLDS);
         when(mContext.getResources()).thenReturn(mResources);
 
         when(mFrameworkFacade.getIntegerSetting(mContext,
@@ -501,6 +504,8 @@ public class ClientModeImplTest extends WifiBaseTest {
                 add(mock(SubscriptionInfo.class));
             }};
         when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(subList);
+        when(mSubscriptionManager.getActiveSubscriptionIdList())
+                .thenReturn(new int[]{DATA_SUBID});
 
         TelephonyUtil tu = new TelephonyUtil(mTelephonyManager, mSubscriptionManager);
         mTelephonyUtil = spy(tu);
@@ -658,10 +663,6 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
         assertEquals("enabled", mCmi.syncGetWifiStateByName());
-
-        // reset the expectations on mContext since we did get an expected broadcast, but we should
-        // not on the next transition
-        reset(mContext);
 
         // now disable wifi and verify the reported wifi state
         mCmi.setWifiStateForApiCalls(WifiManager.WIFI_STATE_DISABLED);
@@ -956,6 +957,10 @@ public class ClientModeImplTest extends WifiBaseTest {
         when(mScanDetailCache.getScanResult(sBSSID)).thenReturn(
                 getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq).getScanResult());
 
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.ASSOCIATED));
+        mLooper.dispatchAll();
+
         mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
         mLooper.dispatchAll();
 
@@ -1029,7 +1034,7 @@ public class ClientModeImplTest extends WifiBaseTest {
 
     /**
      * When the SIM card was removed, if the current wifi connection is using it, the connection
-     * should be disconnected.
+     * should be disconnected, otherwise, the connection shouldn't be impacted.
      */
     @Test
     public void testResetSimWhenConnectedSimRemoved() throws Exception {
@@ -1548,10 +1553,14 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt(), any());
 
-        mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.ASSOCIATED));
         mLooper.dispatchAll();
 
-        verify(mBssidBlocklistMonitor).handleBssidConnectionSuccess(sBSSID);
+        mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+        verify(mBssidBlocklistMonitor).handleBssidConnectionSuccess(sBSSID, sSSID);
+
         mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
                 new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.COMPLETED));
         mLooper.dispatchAll();
@@ -1569,8 +1578,8 @@ public class ClientModeImplTest extends WifiBaseTest {
                 sSSID, BssidBlocklistMonitor.REASON_DHCP_FAILURE);
         verify(mBssidBlocklistMonitor, times(2)).handleBssidConnectionFailure(sBSSID, sSSID,
                 BssidBlocklistMonitor.REASON_DHCP_FAILURE);
-        verify(mBssidBlocklistMonitor, never()).handleDhcpProvisioningSuccess(sBSSID);
-        verify(mBssidBlocklistMonitor, never()).handleNetworkValidationSuccess(sBSSID);
+        verify(mBssidBlocklistMonitor, never()).handleDhcpProvisioningSuccess(sBSSID, sSSID);
+        verify(mBssidBlocklistMonitor, never()).handleNetworkValidationSuccess(sBSSID, sSSID);
     }
 
     /**
@@ -1906,39 +1915,6 @@ public class ClientModeImplTest extends WifiBaseTest {
                 .count());
     }
 
-    /** Verifies that enabling verbose logging sets the hal log property in eng builds. */
-    @Test
-    public void enablingVerboseLoggingSetsHalLogPropertyInEngBuilds() {
-        reset(mPropertyService);  // Ignore calls made in setUp()
-        when(mBuildProperties.isEngBuild()).thenReturn(true);
-        when(mBuildProperties.isUserdebugBuild()).thenReturn(false);
-        when(mBuildProperties.isUserBuild()).thenReturn(false);
-        mCmi.enableVerboseLogging(1);
-        verify(mPropertyService).set("log.tag.WifiHAL", "V");
-    }
-
-    /** Verifies that enabling verbose logging sets the hal log property in userdebug builds. */
-    @Test
-    public void enablingVerboseLoggingSetsHalLogPropertyInUserdebugBuilds() {
-        reset(mPropertyService);  // Ignore calls made in setUp()
-        when(mBuildProperties.isUserdebugBuild()).thenReturn(true);
-        when(mBuildProperties.isEngBuild()).thenReturn(false);
-        when(mBuildProperties.isUserBuild()).thenReturn(false);
-        mCmi.enableVerboseLogging(1);
-        verify(mPropertyService).set("log.tag.WifiHAL", "V");
-    }
-
-    /** Verifies that enabling verbose logging does NOT set the hal log property in user builds. */
-    @Test
-    public void enablingVerboseLoggingDoeNotSetHalLogPropertyInUserBuilds() {
-        reset(mPropertyService);  // Ignore calls made in setUp()
-        when(mBuildProperties.isUserBuild()).thenReturn(true);
-        when(mBuildProperties.isEngBuild()).thenReturn(false);
-        when(mBuildProperties.isUserdebugBuild()).thenReturn(false);
-        mCmi.enableVerboseLogging(1);
-        verify(mPropertyService, never()).set(anyString(), anyString());
-    }
-
     private long testGetSupportedFeaturesCaseForRtt(long supportedFeatures, boolean rttDisabled) {
         AsyncChannel channel = mock(AsyncChannel.class);
         Message reply = Message.obtain();
@@ -2201,7 +2177,7 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         wifiInfo = mCmi.getWifiInfo();
         assertNull(wifiInfo.getBSSID());
-        assertEquals(WifiSsid.NONE, wifiInfo.getSSID());
+        assertEquals(WifiManager.UNKNOWN_SSID, wifiInfo.getSSID());
         assertEquals(WifiConfiguration.INVALID_NETWORK_ID, wifiInfo.getNetworkId());
         assertEquals(SupplicantState.DISCONNECTED, wifiInfo.getSupplicantState());
     }
@@ -2962,8 +2938,21 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verifies that WifiLastResortWatchdog and BssidBlocklistMonitor is notified of
-     * association rejection of type REASON_CODE_AP_UNABLE_TO_HANDLE_NEW_STA.
+     * Verify that if a NETWORK_DISCONNECTION_EVENT is received in ConnectedState, then an
+     * abnormal disconnect is reported to BssidBlocklistMonitor.
+     */
+    @Test
+    public void testAbnormalDisconnectNotifiesBssidBlocklistMonitor() throws Exception {
+        connect();
+        mCmi.sendMessage(WifiMonitor.NETWORK_DISCONNECTION_EVENT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+        verify(mBssidBlocklistMonitor).handleBssidConnectionFailure(sBSSID, sSSID,
+                BssidBlocklistMonitor.REASON_ABNORMAL_DISCONNECT);
+    }
+
+    /**
+     * Verifies that the BssidBlocklistMonitor is notified, but the WifiLastResortWatchdog is
+     * not notified of association rejections of type REASON_CODE_AP_UNABLE_TO_HANDLE_NEW_STA.
      * @throws Exception
      */
     @Test
@@ -2974,7 +2963,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         mCmi.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT, 0,
                 ClientModeImpl.REASON_CODE_AP_UNABLE_TO_HANDLE_NEW_STA, sBSSID);
         mLooper.dispatchAll();
-        verify(mWifiLastResortWatchdog).noteConnectionFailureAndTriggerIfNeeded(
+        verify(mWifiLastResortWatchdog, never()).noteConnectionFailureAndTriggerIfNeeded(
                 anyString(), anyString(), anyInt());
         verify(mBssidBlocklistMonitor).handleBssidConnectionFailure(sBSSID, sSSID,
                 BssidBlocklistMonitor.REASON_AP_UNABLE_TO_HANDLE_NEW_STA);
@@ -3016,6 +3005,27 @@ public class ClientModeImplTest extends WifiBaseTest {
                 anyString(), anyString(), anyInt());
         verify(mBssidBlocklistMonitor).handleBssidConnectionFailure(sBSSID, sSSID,
                 BssidBlocklistMonitor.REASON_WRONG_PASSWORD);
+    }
+
+    /**
+     * Verifies that WifiLastResortWatchdog is not notified of authentication failures of type
+     * ERROR_AUTH_FAILURE_EAP_FAILURE.
+     * @throws Exception
+     */
+    @Test
+    public void testEapFailureIsIgnoredByWatchdog() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.COMPLETED));
+        mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
+                WifiManager.ERROR_AUTH_FAILURE_EAP_FAILURE);
+        mLooper.dispatchAll();
+        verify(mWifiLastResortWatchdog, never()).noteConnectionFailureAndTriggerIfNeeded(
+                anyString(), anyString(), anyInt());
+        verify(mBssidBlocklistMonitor).handleBssidConnectionFailure(sBSSID, sSSID,
+                BssidBlocklistMonitor.REASON_EAP_FAILURE);
     }
 
     /**
@@ -3400,9 +3410,9 @@ public class ClientModeImplTest extends WifiBaseTest {
     public void verifyNetworkSelectionEnableOnInternetValidation() throws Exception {
         // Simulate the first connection.
         connect();
-        verify(mBssidBlocklistMonitor).handleBssidConnectionSuccess(sBSSID);
-        verify(mBssidBlocklistMonitor).handleDhcpProvisioningSuccess(sBSSID);
-        verify(mBssidBlocklistMonitor, never()).handleNetworkValidationSuccess(sBSSID);
+        verify(mBssidBlocklistMonitor).handleBssidConnectionSuccess(sBSSID, sSSID);
+        verify(mBssidBlocklistMonitor).handleDhcpProvisioningSuccess(sBSSID, sSSID);
+        verify(mBssidBlocklistMonitor, never()).handleNetworkValidationSuccess(sBSSID, sSSID);
 
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
@@ -3423,7 +3433,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiConfigManager).updateNetworkSelectionStatus(
                 FRAMEWORK_NETWORK_ID, NETWORK_SELECTION_ENABLE);
         verify(mWifiScoreCard).noteValidationSuccess(any());
-        verify(mBssidBlocklistMonitor).handleNetworkValidationSuccess(sBSSID);
+        verify(mBssidBlocklistMonitor).handleNetworkValidationSuccess(sBSSID, sSSID);
     }
 
     /**
@@ -3765,7 +3775,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertTrue(mCmi.getWifiInfo().isEphemeral());
         assertTrue(mCmi.getWifiInfo().isTrusted());
         assertEquals(OP_PACKAGE_NAME,
-                mCmi.getWifiInfo().getNetworkSuggestionOrSpecifierPackageName());
+                mCmi.getWifiInfo().getAppPackageName());
     }
 
     /**
@@ -3782,7 +3792,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertTrue(mCmi.getWifiInfo().isEphemeral());
         assertTrue(mCmi.getWifiInfo().isTrusted());
         assertEquals(OP_PACKAGE_NAME,
-                mCmi.getWifiInfo().getNetworkSuggestionOrSpecifierPackageName());
+                mCmi.getWifiInfo().getAppPackageName());
     }
 
     /**

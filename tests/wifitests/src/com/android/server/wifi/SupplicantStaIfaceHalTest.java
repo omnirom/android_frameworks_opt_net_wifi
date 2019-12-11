@@ -136,7 +136,7 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
             mISupplicantStaIfaceMockV13;
     private @Mock Context mContext;
     private @Mock WifiMonitor mWifiMonitor;
-    private @Mock PropertyService mPropertyService;
+    private @Mock FrameworkFacade mFrameworkFacade;
     private @Mock SupplicantStaNetworkHal mSupplicantStaNetworkMock;
     private @Mock WifiNative.SupplicantDeathEventHandler mSupplicantHalDeathHandler;
     private @Mock Clock mClock;
@@ -170,7 +170,7 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
 
     private class SupplicantStaIfaceHalSpy extends SupplicantStaIfaceHal {
         SupplicantStaIfaceHalSpy() {
-            super(mContext, mWifiMonitor, mPropertyService,
+            super(mContext, mWifiMonitor, mFrameworkFacade,
                     mHandler, mClock);
         }
 
@@ -1466,8 +1466,7 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
     public void testStartDaemonV1_0() throws Exception {
         executeAndValidateInitializationSequence();
         assertTrue(mDut.startDaemon());
-        verify(mPropertyService).set(
-                SupplicantStaIfaceHal.INIT_START_PROPERTY, SupplicantStaIfaceHal.INIT_SERVICE_NAME);
+        verify(mFrameworkFacade).startSupplicant();
     }
 
     /**
@@ -1479,7 +1478,7 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
 
         executeAndValidateInitializationSequenceV1_1(false, false);
         assertTrue(mDut.startDaemon());
-        verify(mPropertyService, never()).set(any(), any());
+        verify(mFrameworkFacade, never()).startSupplicant();
     }
 
     /**
@@ -1489,8 +1488,7 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
     public void testTerminateV1_0() throws Exception {
         executeAndValidateInitializationSequence();
         mDut.terminate();
-        verify(mPropertyService).set(
-                SupplicantStaIfaceHal.INIT_STOP_PROPERTY, SupplicantStaIfaceHal.INIT_SERVICE_NAME);
+        verify(mFrameworkFacade).stopSupplicant();
     }
 
     /**
@@ -1502,7 +1500,7 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
 
         executeAndValidateInitializationSequenceV1_1(false, false);
         mDut.terminate();
-        verify(mPropertyService, never()).set(any(), any());
+        verify(mFrameworkFacade, never()).stopSupplicant();
         verify(mISupplicantMockV1_1).terminate();
     }
 
@@ -1724,6 +1722,35 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
                 /* private listener */ any(),
                 eq(SupplicantStaIfaceHal.PMK_CACHE_EXPIRATION_ALARM_TAG),
                 anyLong());
+    }
+
+    /**
+     * Tests the handling of assoc reject for PMK cache
+     */
+    @Test
+    public void testRemovePmkEntryOnReceivingAssocReject() throws Exception {
+        int testFrameworkNetworkId = 9;
+        long testStartSeconds = PMK_CACHE_EXPIRATION_IN_SEC / 2;
+        WifiConfiguration config = new WifiConfiguration();
+        config.networkId = testFrameworkNetworkId;
+        config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+        PmkCacheStoreData pmkCacheData =
+                new PmkCacheStoreData(PMK_CACHE_EXPIRATION_IN_SEC, new ArrayList<Byte>());
+        mDut.mPmkCacheEntries.put(testFrameworkNetworkId, pmkCacheData);
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(testStartSeconds * 1000L);
+
+        setupMocksForHalV1_3();
+        setupMocksForPmkCache();
+        setupMocksForConnectSequence(false);
+
+        executeAndValidateInitializationSequenceV1_3();
+        assertTrue(mDut.connectToNetwork(WLAN0_IFACE_NAME, config));
+
+        int statusCode = 7;
+        mISupplicantStaIfaceCallbackV13.onAssociationRejected(
+                NativeUtil.macAddressToByteArray(BSSID), statusCode, false);
+
+        assertNull(mDut.mPmkCacheEntries.get(testFrameworkNetworkId));
     }
 
     /**

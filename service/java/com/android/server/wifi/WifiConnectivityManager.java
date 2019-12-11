@@ -39,7 +39,7 @@ import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.ScanResultUtil;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -72,15 +72,6 @@ public class WifiConnectivityManager {
     // it should comply to the minimum scan interval rule.
     private static final boolean SCAN_IMMEDIATELY = true;
     private static final boolean SCAN_ON_SCHEDULE = false;
-    // Periodic scan interval in milli-seconds. This is the scan
-    // performed when screen is on.
-    @VisibleForTesting
-    public static final int PERIODIC_SCAN_INTERVAL_MS = 20 * 1000; // 20 seconds
-    // When screen is on and WiFi traffic is heavy, exponential backoff
-    // connectivity scans are scheduled. This constant defines the maximum
-    // scan interval in this scenario.
-    @VisibleForTesting
-    public static final int MAX_PERIODIC_SCAN_INTERVAL_MS = 160 * 1000; // 160 seconds
     // Initial PNO scan interval in milliseconds when the device is moving. The scan interval backs
     // off from this initial interval on subsequent scans. This scan is performed when screen is
     // off and disconnected.
@@ -129,6 +120,7 @@ public class WifiConnectivityManager {
     // Log tag for this class
     private static final String TAG = "WifiConnectivityManager";
 
+    private final Context mContext;
     private final ClientModeImpl mStateMachine;
     private final WifiInjector mWifiInjector;
     private final WifiConfigManager mConfigManager;
@@ -163,26 +155,21 @@ public class WifiConnectivityManager {
     private int mSingleScanRestartCount = 0;
     private int mTotalConnectivityAttemptsRateLimited = 0;
     private String mLastConnectionAttemptBssid = null;
-    private int mPeriodicSingleScanInterval = PERIODIC_SCAN_INTERVAL_MS;
     private long mLastPeriodicSingleScanTimeStamp = RESET_TIME_STAMP;
     private boolean mPnoScanStarted = false;
     private boolean mPeriodicScanTimerSet = false;
     // Device configs
-    private boolean mEnableAutoJoinWhenAssociated;
     private boolean mWaitForFullBandScanResults = false;
-    private boolean mUseSingleRadioChainScanResults = true;
-    private int mFullScanMaxTxRate;
-    private int mFullScanMaxRxRate;
 
-    // PNO settings
-    private int mCurrentConnectionBonus;
-    private int mSameNetworkBonus;
-    private int mSecureBonus;
-    private int mBand5GHzBonus;
-    private int mRssiScoreOffset;
-    private int mRssiScoreSlope;
+    // Scanning Schedules
+    // Default schedule used in case of invalid configuration
+    private static final int[] DEFAULT_SCANNING_SCHEDULE = {20, 40, 80, 160};
+    private int[] mConnectedSingleScanSchedule;
+    private int[] mDisconnectedSingleScanSchedule;
+    private int[] mCurrentSingleScanSchedule;
+    private int mCurrentSingleScanScheduleIndex;
+
     private int mPnoScanIntervalMs;
-
     private WifiChannelUtilization mWifiChannelUtilization;
 
     // A helper to log debugging information in the local log buffer, which can
@@ -384,7 +371,8 @@ public class WifiConnectivityManager {
 
             // When the scan result has radio chain info, ensure we throw away scan results
             // not received with both radio chains (if |mUseSingleRadioChainScanResults| is false).
-            if (!mUseSingleRadioChainScanResults
+            if (!mContext.getResources().getBoolean(
+                    R.bool.config_wifi_framework_use_single_radio_chain_scan_results_network_selection)
                     && fullScanResult.radioChainInfos != null
                     && fullScanResult.radioChainInfos.length == 1) {
                 // Keep track of the number of dropped scan results for logging.
@@ -582,6 +570,7 @@ public class WifiConnectivityManager {
             WifiLastResortWatchdog wifiLastResortWatchdog, OpenNetworkNotifier openNetworkNotifier,
             CarrierNetworkConfig carrierNetworkConfig, WifiMetrics wifiMetrics, Handler handler,
             Clock clock, LocalLog localLog) {
+        mContext = context;
         mStateMachine = stateMachine;
         mWifiInjector = injector;
         mConfigManager = configManager;
@@ -599,38 +588,7 @@ public class WifiConnectivityManager {
         mScoringParams = scoringParams;
         mConnectionAttemptTimeStamps = new LinkedList<>();
 
-        mBand5GHzBonus = context.getResources().getInteger(
-                R.integer.config_wifi_framework_5GHz_preference_boost_factor);
-        mCurrentConnectionBonus = context.getResources().getInteger(
-                R.integer.config_wifi_framework_current_network_boost);
-        mSameNetworkBonus = context.getResources().getInteger(
-                R.integer.config_wifi_framework_SAME_BSSID_AWARD);
-        mSecureBonus = context.getResources().getInteger(
-                R.integer.config_wifi_framework_SECURITY_AWARD);
-        mRssiScoreOffset = context.getResources().getInteger(
-                R.integer.config_wifi_framework_RSSI_SCORE_OFFSET);
-        mRssiScoreSlope = context.getResources().getInteger(
-                R.integer.config_wifi_framework_RSSI_SCORE_SLOPE);
-        mEnableAutoJoinWhenAssociated = context.getResources().getBoolean(
-                R.bool.config_wifi_framework_enable_associated_network_selection);
-        mUseSingleRadioChainScanResults = context.getResources().getBoolean(
-                R.bool.config_wifi_framework_use_single_radio_chain_scan_results_network_selection);
-
-
-        mFullScanMaxTxRate = context.getResources().getInteger(
-                R.integer.config_wifi_framework_max_tx_rate_for_full_scan);
-        mFullScanMaxRxRate = context.getResources().getInteger(
-                R.integer.config_wifi_framework_max_rx_rate_for_full_scan);
-
         mPnoScanIntervalMs = MOVING_PNO_SCAN_INTERVAL_MS;
-
-        localLog("PNO settings:"
-                + " min5GHzRssi " + mScoringParams.getEntryRssi(ScoringParams.BAND5)
-                + " min24GHzRssi " + mScoringParams.getEntryRssi(ScoringParams.BAND2)
-                + " currentConnectionBonus " + mCurrentConnectionBonus
-                + " sameNetworkBonus " + mSameNetworkBonus
-                + " secureNetworkBonus " + mSecureBonus
-                + " initialScoreMax " + initialScoreMax());
 
         // Listen to WifiConfigManager network update events
         mConfigManager.addOnNetworkUpdateListener(new OnNetworkUpdateListener());
@@ -639,11 +597,49 @@ public class WifiConnectivityManager {
         mNetworkSelector.setWifiChannelUtilization(mWifiChannelUtilization);
     }
 
+    /** Initialize single scanning schedules, and validate them */
+    private int[] initializeScanningSchedule(Context context, int state) {
+        int[] schedule;
+
+        if (state == WIFI_STATE_CONNECTED) {
+            schedule = context.getResources().getIntArray(
+                    R.array.config_wifiConnectedScanIntervalScheduleSec);
+        } else if (state == WIFI_STATE_DISCONNECTED) {
+            schedule = context.getResources().getIntArray(
+                    R.array.config_wifiDisconnectedScanIntervalScheduleSec);
+        } else {
+            schedule = null;
+        }
+
+        boolean invalidConfig = false;
+        if (schedule == null || schedule.length == 0) {
+            invalidConfig = true;
+        } else {
+            for (int val : schedule) {
+                if (val <= 0) {
+                    invalidConfig = true;
+                    break;
+                }
+            }
+        }
+        if (!invalidConfig) {
+            return schedule;
+        }
+
+        Log.e(TAG, "Configuration for wifi scanning schedule is mis-configured,"
+                + "using default schedule");
+        return DEFAULT_SCANNING_SCHEDULE;
+    }
+
     /** Returns maximum PNO score, before any awards/bonuses. */
     private int initialScoreMax() {
-        return mRssiScoreSlope * (Math.max(mScoringParams.getGoodRssi(ScoringParams.BAND2),
+        final int rssiScoreOffset = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_RSSI_SCORE_OFFSET);
+        final int rssiScoreSlope = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_RSSI_SCORE_SLOPE);
+        return rssiScoreSlope * (Math.max(mScoringParams.getGoodRssi(ScoringParams.BAND2),
                                            mScoringParams.getGoodRssi(ScoringParams.BAND5))
-                                  + mRssiScoreOffset);
+                                  + rssiScoreOffset);
     }
 
     /**
@@ -803,7 +799,7 @@ public class WifiConnectivityManager {
             }
             return true;
         } else {
-            localLog("No scan channels for " + config.configKey() + ". Perform full band scan");
+            localLog("No scan channels for " + config.getKey() + ". Perform full band scan");
             return false;
         }
     }
@@ -827,18 +823,23 @@ public class WifiConnectivityManager {
 
         if (mLastPeriodicSingleScanTimeStamp != RESET_TIME_STAMP) {
             long msSinceLastScan = currentTimeStamp - mLastPeriodicSingleScanTimeStamp;
-            if (msSinceLastScan < PERIODIC_SCAN_INTERVAL_MS) {
+            if (msSinceLastScan < getScheduledSingleScanInterval(0)) {
                 localLog("Last periodic single scan started " + msSinceLastScan
                         + "ms ago, defer this new scan request.");
-                schedulePeriodicScanTimer(PERIODIC_SCAN_INTERVAL_MS - (int) msSinceLastScan);
+                schedulePeriodicScanTimer(
+                        getScheduledSingleScanInterval(0) - (int) msSinceLastScan);
                 return;
             }
         }
 
         boolean isScanNeeded = true;
         boolean isFullBandScan = true;
-        boolean isTrafficOverThreshold = mWifiInfo.txSuccessRate > mFullScanMaxTxRate
-                || mWifiInfo.rxSuccessRate > mFullScanMaxRxRate;
+        boolean isTrafficOverThreshold = mWifiInfo.getTxSuccessRate()
+                > mContext.getResources().getInteger(
+                        R.integer.config_wifi_framework_max_tx_rate_for_full_scan)
+                || mWifiInfo.getRxSuccessRate()
+                > mContext.getResources().getInteger(
+                        R.integer.config_wifi_framework_max_rx_rate_for_full_scan);
 
         // If the WiFi traffic is heavy, only partial scan is proposed.
         if (mWifiState == WIFI_STATE_CONNECTED && isTrafficOverThreshold) {
@@ -857,16 +858,35 @@ public class WifiConnectivityManager {
         if (isScanNeeded) {
             mLastPeriodicSingleScanTimeStamp = currentTimeStamp;
             startSingleScan(isFullBandScan, WIFI_WORK_SOURCE);
-            schedulePeriodicScanTimer(mPeriodicSingleScanInterval);
+            schedulePeriodicScanTimer(
+                    getScheduledSingleScanInterval(mCurrentSingleScanScheduleIndex));
 
             // Set up the next scan interval in an exponential backoff fashion.
-            mPeriodicSingleScanInterval *= 2;
-            if (mPeriodicSingleScanInterval >  MAX_PERIODIC_SCAN_INTERVAL_MS) {
-                mPeriodicSingleScanInterval = MAX_PERIODIC_SCAN_INTERVAL_MS;
-            }
+            incrementSingleScanningIndex();
         } else {
             // Since we already skipped this scan, keep the same scan interval for next scan.
-            schedulePeriodicScanTimer(mPeriodicSingleScanInterval);
+            schedulePeriodicScanTimer(
+                    getScheduledSingleScanInterval(mCurrentSingleScanScheduleIndex));
+        }
+    }
+
+    // Retrieve a value from single scanning schedule in ms
+    private int getScheduledSingleScanInterval(int index) {
+        if (mCurrentSingleScanSchedule != null && mCurrentSingleScanSchedule.length > index) {
+            return mCurrentSingleScanSchedule[index] * 1000;
+        } else {
+            Log.e(TAG, "Invalid attempt to get schedule interval value, "
+                    + ((mCurrentSingleScanSchedule == null) ? "Schedule array is null"
+                            : "invalid index"));
+            // Use a default value
+            return DEFAULT_SCANNING_SCHEDULE[0];
+        }
+    }
+
+    // Step up index for single scanning
+    private void incrementSingleScanningIndex() {
+        if (mCurrentSingleScanScheduleIndex < (mCurrentSingleScanSchedule.length - 1)) {
+            mCurrentSingleScanScheduleIndex++;
         }
     }
 
@@ -911,19 +931,17 @@ public class WifiConnectivityManager {
                 isFullBandScan = true;
             }
         }
-        settings.type = WifiScanner.TYPE_HIGH_ACCURACY; // always do high accuracy scans.
+        settings.type = WifiScanner.SCAN_TYPE_HIGH_ACCURACY; // always do high accuracy scans.
         settings.band = getScanBand(isFullBandScan);
         settings.reportEvents = WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT
                             | WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN;
         settings.numBssidsPerScan = 0;
+        settings.hiddenNetworks.clear();
         // retrieve the list of hidden network SSIDs from saved network to scan for
-        List<ScanSettings.HiddenNetwork> hiddenNetworkList =
-                new ArrayList<>(mConfigManager.retrieveHiddenNetworkList());
+        settings.hiddenNetworks.addAll(mConfigManager.retrieveHiddenNetworkList());
         // retrieve the list of hidden network SSIDs from Network suggestion to scan for
-        hiddenNetworkList.addAll(
+        settings.hiddenNetworks.addAll(
                 mWifiInjector.getWifiNetworkSuggestionsManager().retrieveHiddenNetworkList());
-        settings.hiddenNetworks =
-                hiddenNetworkList.toArray(new ScanSettings.HiddenNetwork[0]);
 
         SingleScanListener singleScanListener =
                 new SingleScanListener(isFullBandScan);
@@ -936,7 +954,8 @@ public class WifiConnectivityManager {
         mPnoScanListener.resetLowRssiNetworkRetryDelay();
 
         // No connectivity scan if auto roaming is disabled.
-        if (mWifiState == WIFI_STATE_CONNECTED && !mEnableAutoJoinWhenAssociated) {
+        if (mWifiState == WIFI_STATE_CONNECTED && !mContext.getResources().getBoolean(
+                R.bool.config_wifi_framework_enable_associated_network_selection)) {
             return;
         }
 
@@ -945,7 +964,7 @@ public class WifiConnectivityManager {
         if (scanImmediately) {
             resetLastPeriodicSingleScanTimeStamp();
         }
-        mPeriodicSingleScanInterval = PERIODIC_SCAN_INTERVAL_MS;
+        mCurrentSingleScanScheduleIndex = 0;
         startPeriodicSingleScan();
     }
 
@@ -1019,10 +1038,14 @@ public class WifiConnectivityManager {
         pnoSettings.min5GHzRssi = mScoringParams.getEntryRssi(ScoringParams.BAND5);
         pnoSettings.min24GHzRssi = mScoringParams.getEntryRssi(ScoringParams.BAND2);
         pnoSettings.initialScoreMax = initialScoreMax();
-        pnoSettings.currentConnectionBonus = mCurrentConnectionBonus;
-        pnoSettings.sameNetworkBonus = mSameNetworkBonus;
-        pnoSettings.secureBonus = mSecureBonus;
-        pnoSettings.band5GHzBonus = mBand5GHzBonus;
+        pnoSettings.currentConnectionBonus = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_current_network_boost);
+        pnoSettings.sameNetworkBonus = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_SAME_BSSID_AWARD);
+        pnoSettings.secureBonus = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_SECURITY_AWARD);
+        pnoSettings.band5GHzBonus = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_5GHz_preference_boost_factor);
 
         // Initialize scan settings
         ScanSettings scanSettings = new ScanSettings();
@@ -1183,6 +1206,15 @@ public class WifiConnectivityManager {
     public void handleConnectionStateChanged(int state) {
         localLog("handleConnectionStateChanged: state=" + stateToString(state));
 
+        if (mConnectedSingleScanSchedule == null) {
+            mConnectedSingleScanSchedule = initializeScanningSchedule(
+                  mContext, WIFI_STATE_CONNECTED);
+        }
+        if (mDisconnectedSingleScanSchedule == null) {
+            mDisconnectedSingleScanSchedule = initializeScanningSchedule(
+                  mContext, WIFI_STATE_DISCONNECTED);
+        }
+
         mWifiState = state;
 
         // Reset BSSID of last connection attempt and kick off
@@ -1190,8 +1222,16 @@ public class WifiConnectivityManager {
         if (mWifiState == WIFI_STATE_DISCONNECTED) {
             mLastConnectionAttemptBssid = null;
             scheduleWatchdogTimer();
+            // Switch to the disconnected scanning schedule
+            mCurrentSingleScanSchedule = mDisconnectedSingleScanSchedule;
             startConnectivityScan(SCAN_IMMEDIATELY);
+        } else if (mWifiState == WIFI_STATE_CONNECTED) {
+            // Switch to connected single scanning schedule
+            mCurrentSingleScanSchedule = mConnectedSingleScanSchedule;
+            startConnectivityScan(SCAN_ON_SCHEDULE);
         } else {
+            // Intermediate state, no applicable single scanning schedule
+            mCurrentSingleScanSchedule = null;
             startConnectivityScan(SCAN_ON_SCHEDULE);
         }
     }

@@ -33,7 +33,7 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.ArrayUtils;
 import com.android.server.wifi.util.GeneralUtil.Mutable;
 import com.android.server.wifi.util.NativeUtil;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -90,6 +90,7 @@ public class SupplicantStaNetworkHal {
             Pattern.compile("^:([0-9a-fA-F]+)$");
 
     private final Object mLock = new Object();
+    private final Context mContext;
     private final String mIfaceName;
     private final WifiMonitor mWifiMonitor;
     private ISupplicantStaNetwork mISupplicantStaNetwork;
@@ -97,9 +98,6 @@ public class SupplicantStaNetworkHal {
     private ISupplicantStaNetworkCallback mISupplicantStaNetworkCallback;
 
     private boolean mVerboseLoggingEnabled = false;
-    // Indicates whether the system is capable of 802.11r fast BSS transition.
-    private boolean mSystemSupportsFastBssTransition = false;
-
     // Network variables read from wpa_supplicant.
     private int mNetworkId;
     private ArrayList<Byte> mSsid;
@@ -138,10 +136,9 @@ public class SupplicantStaNetworkHal {
     SupplicantStaNetworkHal(ISupplicantStaNetwork iSupplicantStaNetwork, String ifaceName,
             Context context, WifiMonitor monitor) {
         mISupplicantStaNetwork = iSupplicantStaNetwork;
+        mContext = context;
         mIfaceName = ifaceName;
         mWifiMonitor = monitor;
-        mSystemSupportsFastBssTransition =
-                context.getResources().getBoolean(R.bool.config_wifi_fast_bss_transition_enabled);
     }
 
     /**
@@ -435,7 +432,7 @@ public class SupplicantStaNetworkHal {
             if (config.isPasspoint()) {
                 metadata.put(ID_STRING_KEY_FQDN, config.FQDN);
             }
-            metadata.put(ID_STRING_KEY_CONFIG_KEY, config.configKey());
+            metadata.put(ID_STRING_KEY_CONFIG_KEY, config.getKey());
             metadata.put(ID_STRING_KEY_CREATOR_UID, Integer.toString(config.creatorUid));
             if (!setIdStr(createNetworkExtra(metadata))) {
                 Log.e(TAG, "failed to set id string");
@@ -3468,7 +3465,8 @@ public class SupplicantStaNetworkHal {
      */
     private BitSet addFastTransitionFlags(BitSet keyManagementFlags) {
         synchronized (mLock) {
-            if (!mSystemSupportsFastBssTransition) {
+            if (!mContext.getResources().getBoolean(
+                    R.bool.config_wifi_fast_bss_transition_enabled)) {
                 return keyManagementFlags;
             }
             BitSet modifiedFlags = (BitSet) keyManagementFlags.clone();

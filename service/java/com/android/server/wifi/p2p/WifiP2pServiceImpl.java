@@ -31,11 +31,11 @@ import android.database.ContentObserver;
 import android.location.LocationManager;
 import android.net.ConnectivityManager;
 import android.net.DhcpResults;
+import android.net.InetAddresses;
 import android.net.InterfaceConfiguration;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.NetworkInfo;
-import android.net.NetworkUtils;
 import android.net.ip.IIpClient;
 import android.net.ip.IpClientCallbacks;
 import android.net.ip.IpClientUtil;
@@ -96,7 +96,7 @@ import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.util.WifiHandler;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -456,9 +456,6 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
         mP2pSupported = mContext.getPackageManager().hasSystemFeature(
                 PackageManager.FEATURE_WIFI_DIRECT);
-
-        mThisDevice.primaryDeviceType = mContext.getResources().getString(
-                R.string.config_wifi_p2p_device_type);
 
         HandlerThread wifiP2pThread = mWifiInjector.getWifiP2pServiceHandlerThread();
         mClientHandler = new ClientHandler(TAG, wifiP2pThread.getLooper());
@@ -2730,7 +2727,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 // DHCP server has already been started if I am a group owner
                 if (mGroup.isGroupOwner()) {
                     setWifiP2pInfoOnGroupFormation(
-                            NetworkUtils.numericToInetAddress(SERVER_ADDRESS));
+                            InetAddresses.parseNumericAddress(SERVER_ADDRESS));
                 }
 
                 // In case of a negotiation group, connection changed is sent
@@ -3155,7 +3152,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
         private void sendBroadcastMultiplePermissions(Intent intent) {
             Context context = mContext.createContextAsUser(UserHandle.ALL, 0);
-            context.sendBroadcastMultiplePermissions(intent, RECEIVER_PERMISSIONS_FOR_BROADCAST);
+            context.sendBroadcastWithMultiplePermissions(
+                    intent, RECEIVER_PERMISSIONS_FOR_BROADCAST);
         }
 
         private void sendThisDeviceChangedBroadcast() {
@@ -3203,7 +3201,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             InterfaceConfiguration ifcg = null;
             try {
                 ifcg = mNwService.getInterfaceConfig(intf);
-                ifcg.setLinkAddress(new LinkAddress(NetworkUtils.numericToInetAddress(
+                ifcg.setLinkAddress(new LinkAddress(InetAddresses.parseNumericAddress(
                             SERVER_ADDRESS), 24));
                 ifcg.setInterfaceUp();
                 mNwService.setInterfaceConfig(intf, ifcg);
@@ -3842,6 +3840,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
         private void initializeP2pSettings() {
             mThisDevice.deviceName = getPersistedDeviceName();
+            mThisDevice.primaryDeviceType = mContext.getResources().getString(
+                    R.string.config_wifi_p2p_device_type);
+
             mWifiNative.setP2pDeviceName(mThisDevice.deviceName);
             // DIRECT-XY-DEVICENAME (XY is randomly generated)
             mWifiNative.setP2pSsidPostfix("-" + mThisDevice.deviceName);

@@ -18,9 +18,9 @@ package com.android.server.wifi;
 
 import static org.junit.Assert.*;
 
+import android.net.InetAddresses;
 import android.net.IpConfiguration;
 import android.net.LinkAddress;
-import android.net.NetworkUtils;
 import android.net.ProxyInfo;
 import android.net.StaticIpConfiguration;
 import android.net.wifi.WifiConfiguration;
@@ -195,20 +195,20 @@ public class WifiConfigurationTestUtil {
             if (!TextUtils.isEmpty(linkAddress)) {
                 LinkAddress linkAddr =
                         new LinkAddress(
-                                NetworkUtils.numericToInetAddress(linkAddress), linkPrefixLength);
+                                InetAddresses.parseNumericAddress(linkAddress), linkPrefixLength);
                 staticIpConfiguration.ipAddress = linkAddr;
             }
 
             if (!TextUtils.isEmpty(gatewayAddress)) {
                 InetAddress gatewayAddr =
-                        NetworkUtils.numericToInetAddress(gatewayAddress);
+                        InetAddresses.parseNumericAddress(gatewayAddress);
                 staticIpConfiguration.gateway = gatewayAddr;
             }
             if (dnsServerAddresses != null) {
                 for (String dnsServerAddress : dnsServerAddresses) {
                     if (!TextUtils.isEmpty(dnsServerAddress)) {
                         staticIpConfiguration.dnsServers.add(
-                                NetworkUtils.numericToInetAddress(dnsServerAddress));
+                                InetAddresses.parseNumericAddress(dnsServerAddress));
                     }
 
                 }
@@ -248,11 +248,8 @@ public class WifiConfigurationTestUtil {
     }
 
     public static WifiConfiguration createOweNetwork(String ssid) {
-        WifiConfiguration configuration =  generateWifiConfig(TEST_NETWORK_ID, TEST_UID, ssid,
-                true, true, null, null, SECURITY_OWE);
-
-        configuration.requirePMF = true;
-        return configuration;
+        return generateWifiConfig(TEST_NETWORK_ID, TEST_UID, ssid, true, true, null,
+                null, SECURITY_OWE);
     }
 
     public static WifiConfiguration createOpenNetwork() {
@@ -277,7 +274,14 @@ public class WifiConfigurationTestUtil {
     }
 
     public static WifiConfiguration createSaeNetwork() {
-        return createSaeNetwork(createNewSSID());
+        WifiConfiguration configuration =
+                generateWifiConfig(TEST_NETWORK_ID, TEST_UID, createNewSSID(), true, true, null,
+                        null, SECURITY_SAE);
+
+        // SAE password uses the same member.
+        configuration.preSharedKey = TEST_PSK;
+        configuration.requirePMF = true;
+        return configuration;
     }
 
     public static WifiConfiguration createPskNetwork() {
@@ -300,10 +304,6 @@ public class WifiConfigurationTestUtil {
         WifiConfiguration configuration =
                 generateWifiConfig(TEST_NETWORK_ID, TEST_UID, ssid, true, true, null,
                         null, SECURITY_SAE);
-
-        // SAE password uses the same member.
-        configuration.preSharedKey = TEST_PSK;
-        configuration.requirePMF = true;
         return configuration;
     }
 
@@ -514,15 +514,6 @@ public class WifiConfigurationTestUtil {
     }
 
     /**
-     * Gets scan result capabilities for a WPA2/WPA3-Transition mode network configuration
-     */
-    private static String
-            getScanResultCapsForOweTransitionNetwork(WifiConfiguration configuration) {
-        String caps = "[OWE_TRANSITION-CCMP]";
-        return caps;
-    }
-
-    /**
      * Creates a scan detail corresponding to the provided network and given BSSID, etc.
      */
     public static ScanDetail createScanDetailForNetwork(
@@ -545,17 +536,6 @@ public class WifiConfigurationTestUtil {
         return new ScanDetail(ssid, bssid, caps, level, frequency, tsf, seen);
     }
 
-    /**
-     * Creates a scan detail corresponding to the provided network and given BSSID, but sets
-     * the capabilities to OWE-Transition mode network.
-     */
-    public static ScanDetail createScanDetailForOweTransitionModeNetwork(
-            WifiConfiguration configuration, String bssid, int level, int frequency,
-            long tsf, long seen) {
-        String caps = getScanResultCapsForOweTransitionNetwork(configuration);
-        WifiSsid ssid = WifiSsid.createFromAsciiEncoded(configuration.getPrintableSsid());
-        return new ScanDetail(ssid, bssid, caps, level, frequency, tsf, seen);
-    }
 
     /**
      * Asserts that the 2 WifiConfigurations are equal in the elements saved for both backup/restore
@@ -606,7 +586,6 @@ public class WifiConfigurationTestUtil {
         assertEquals(expected.defaultGwMacAddress, actual.defaultGwMacAddress);
         assertEquals(expected.validatedInternetAccess, actual.validatedInternetAccess);
         assertEquals(expected.noInternetAccessExpected, actual.noInternetAccessExpected);
-        assertEquals(expected.userApproved, actual.userApproved);
         assertEquals(expected.meteredHint, actual.meteredHint);
         assertEquals(expected.meteredOverride, actual.meteredOverride);
         assertEquals(expected.useExternalScores, actual.useExternalScores);
@@ -768,10 +747,10 @@ public class WifiConfigurationTestUtil {
             List<WifiConfiguration> expected, List<WifiConfiguration> actual) {
         assertEquals(expected.size(), actual.size());
         for (WifiConfiguration expectedConfiguration : expected) {
-            String expectedConfigKey = expectedConfiguration.configKey();
+            String expectedConfigKey = expectedConfiguration.getKey();
             boolean didCompare = false;
             for (WifiConfiguration actualConfiguration : actual) {
-                String actualConfigKey = actualConfiguration.configKey();
+                String actualConfigKey = actualConfiguration.getKey();
                 if (actualConfigKey.equals(expectedConfigKey)) {
                     assertConfigurationEqualForBackup(
                             expectedConfiguration, actualConfiguration);
@@ -791,10 +770,10 @@ public class WifiConfigurationTestUtil {
             List<WifiConfiguration> expected, List<WifiConfiguration> actual) {
         assertEquals(expected.size(), actual.size());
         for (WifiConfiguration expectedConfiguration : expected) {
-            String expectedConfigKey = expectedConfiguration.configKey();
+            String expectedConfigKey = expectedConfiguration.getKey();
             boolean didCompare = false;
             for (WifiConfiguration actualConfiguration : actual) {
-                String actualConfigKey = actualConfiguration.configKey();
+                String actualConfigKey = actualConfiguration.getKey();
                 if (actualConfigKey.equals(expectedConfigKey)) {
                     assertConfigurationEqualForConfigManagerAddOrUpdate(
                             expectedConfiguration, actualConfiguration);
@@ -813,10 +792,10 @@ public class WifiConfigurationTestUtil {
             List<WifiConfiguration> expected, List<WifiConfiguration> actual) {
         assertEquals(expected.size(), actual.size());
         for (WifiConfiguration expectedConfiguration : expected) {
-            String expectedConfigKey = expectedConfiguration.configKey();
+            String expectedConfigKey = expectedConfiguration.getKey();
             boolean didCompare = false;
             for (WifiConfiguration actualConfiguration : actual) {
-                String actualConfigKey = actualConfiguration.configKey();
+                String actualConfigKey = actualConfiguration.getKey();
                 if (actualConfigKey.equals(expectedConfigKey)) {
                     assertConfigurationEqualForConfigStore(
                             expectedConfiguration, actualConfiguration);

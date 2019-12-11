@@ -46,7 +46,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -89,7 +88,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<null name=\"DefaultGwMacAddress\" />\n"
                     + "<boolean name=\"ValidatedInternetAccess\" value=\"false\" />\n"
                     + "<boolean name=\"NoInternetAccessExpected\" value=\"false\" />\n"
-                    + "<int name=\"UserApproved\" value=\"0\" />\n"
                     + "<boolean name=\"MeteredHint\" value=\"false\" />\n"
                     + "<int name=\"MeteredOverride\" value=\"2\" />\n"
                     + "<boolean name=\"UseExternalScores\" value=\"false\" />\n"
@@ -146,7 +144,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<null name=\"DefaultGwMacAddress\" />\n"
                     + "<boolean name=\"ValidatedInternetAccess\" value=\"false\" />\n"
                     + "<boolean name=\"NoInternetAccessExpected\" value=\"false\" />\n"
-                    + "<int name=\"UserApproved\" value=\"0\" />\n"
                     + "<boolean name=\"MeteredHint\" value=\"false\" />\n"
                     + "<int name=\"MeteredOverride\" value=\"0\" />\n"
                     + "<boolean name=\"UseExternalScores\" value=\"false\" />\n"
@@ -279,12 +276,12 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
     private byte[] getTestNetworksXmlBytes(WifiConfiguration openNetwork,
             WifiConfiguration eapNetwork) {
         String openNetworkXml = String.format(SINGLE_OPEN_NETWORK_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid,
                 openNetwork.creatorName, openNetwork.getRandomizedMacAddress());
         String eapNetworkXml = String.format(SINGLE_EAP_NETWORK_DATA_XML_STRING_FORMAT,
-                eapNetwork.configKey().replaceAll("\"", "&quot;"),
+                eapNetwork.getKey().replaceAll("\"", "&quot;"),
                 eapNetwork.SSID.replaceAll("\"", "&quot;"),
                 eapNetwork.shared, eapNetwork.creatorUid,
                 eapNetwork.creatorName, eapNetwork.getRandomizedMacAddress());
@@ -340,7 +337,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         List<WifiConfiguration> networkList = getTestNetworksConfig(true /* shared */);
         mNetworkListSharedStoreData.setConfigurations(networkList);
         byte[] expectedData = getTestNetworksXmlBytes(networkList.get(0), networkList.get(1));
-        assertTrue(Arrays.equals(expectedData, serializeData()));
+        assertArrayEquals(expectedData, serializeData());
     }
 
     /**
@@ -385,7 +382,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                         + "<null name=\"DefaultGwMacAddress\" />\n"
                         + "<boolean name=\"ValidatedInternetAccess\" value=\"false\" />\n"
                         + "<boolean name=\"NoInternetAccessExpected\" value=\"false\" />\n"
-                        + "<int name=\"UserApproved\" value=\"0\" />\n"
                         + "<boolean name=\"MeteredHint\" value=\"false\" />\n"
                         + "<boolean name=\"UseExternalScores\" value=\"false\" />\n"
                         + "<int name=\"NumAssociation\" value=\"0\" />\n"
@@ -415,7 +411,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                         + "</Network>\n";
         WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
         byte[] xmlData = String.format(configFormat,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid, openNetwork.getRandomizedMacAddress())
             .getBytes(StandardCharsets.UTF_8);
@@ -424,7 +420,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         WifiConfiguration deserializedConfig  = deserializedConfigs.get(0);
 
         assertEquals(openNetwork.SSID, deserializedConfig.SSID);
-        assertEquals(openNetwork.configKey(), deserializedConfig.configKey());
+        assertEquals(openNetwork.getKey(), deserializedConfig.getKey());
     }
 
     /**
@@ -482,14 +478,14 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         when(mPackageManager.getNameForUid(eq(openNetwork.creatorUid))).thenReturn(null);
 
         byte[] xmlData = String.format(SINGLE_OPEN_NETWORK_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid,
                 openNetwork.creatorName, openNetwork.getRandomizedMacAddress())
             .getBytes(StandardCharsets.UTF_8);
         List<WifiConfiguration> deserializedNetworks = deserializeData(xmlData);
         assertEquals(1, deserializedNetworks.size());
-        assertEquals(openNetwork.configKey(), deserializedNetworks.get(0).configKey());
+        assertEquals(openNetwork.getKey(), deserializedNetworks.get(0).getKey());
         assertEquals(SYSTEM_UID, deserializedNetworks.get(0).creatorUid);
         assertEquals(TEST_CREATOR_NAME, deserializedNetworks.get(0).creatorName);
     }
@@ -510,14 +506,14 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
             .thenReturn(correctCreatorName);
 
         byte[] xmlData = String.format(SINGLE_OPEN_NETWORK_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid,
                 openNetwork.creatorName, openNetwork.getRandomizedMacAddress())
             .getBytes(StandardCharsets.UTF_8);
         List<WifiConfiguration> deserializedNetworks = deserializeData(xmlData);
         assertEquals(1, deserializedNetworks.size());
-        assertEquals(openNetwork.configKey(), deserializedNetworks.get(0).configKey());
+        assertEquals(openNetwork.getKey(), deserializedNetworks.get(0).getKey());
         assertEquals(openNetwork.creatorUid, deserializedNetworks.get(0).creatorUid);
         assertEquals(correctCreatorName, deserializedNetworks.get(0).creatorName);
     }
@@ -537,14 +533,14 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
             .thenReturn(correctCreatorName);
 
         byte[] xmlData = String.format(SINGLE_OPEN_NETWORK_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid,
                 openNetwork.creatorName, openNetwork.getRandomizedMacAddress())
             .getBytes(StandardCharsets.UTF_8);
         List<WifiConfiguration> deserializedNetworks = deserializeData(xmlData);
         assertEquals(1, deserializedNetworks.size());
-        assertEquals(openNetwork.configKey(), deserializedNetworks.get(0).configKey());
+        assertEquals(openNetwork.getKey(), deserializedNetworks.get(0).getKey());
         assertEquals(openNetwork.creatorUid, deserializedNetworks.get(0).creatorUid);
         assertEquals(correctCreatorName, deserializedNetworks.get(0).creatorName);
     }
@@ -558,14 +554,14 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         openNetwork.creatorUid = 1324422;
 
         byte[] xmlData = String.format(SINGLE_OPEN_NETWORK_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid,
                 openNetwork.creatorName, openNetwork.getRandomizedMacAddress())
             .getBytes(StandardCharsets.UTF_8);
         List<WifiConfiguration> deserializedNetworks = deserializeData(xmlData);
         assertEquals(1, deserializedNetworks.size());
-        assertEquals(openNetwork.configKey(), deserializedNetworks.get(0).configKey());
+        assertEquals(openNetwork.getKey(), deserializedNetworks.get(0).getKey());
         assertEquals(openNetwork.creatorUid, deserializedNetworks.get(0).creatorUid);
         assertEquals(TEST_CREATOR_NAME, deserializedNetworks.get(0).creatorName);
     }

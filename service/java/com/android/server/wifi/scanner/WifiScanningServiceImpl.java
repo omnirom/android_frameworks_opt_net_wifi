@@ -16,8 +16,10 @@
 
 package com.android.server.wifi.scanner;
 
+import static android.content.pm.PackageManager.PERMISSION_DENIED;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 
+import android.Manifest;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.AlarmManager;
@@ -30,7 +32,6 @@ import android.net.wifi.WifiScanner.PnoSettings;
 import android.net.wifi.WifiScanner.ScanData;
 import android.net.wifi.WifiScanner.ScanSettings;
 import android.net.wifi.WifiScanner.WifiBand;
-import android.net.wifi.WifiStackClient;
 import android.os.BadParcelableException;
 import android.os.BatteryStatsManager;
 import android.os.Binder;
@@ -128,16 +129,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         return b;
     }
 
-    private void enforceWifiStackPermission(int uid) {
+    private void enforceNetworkStack(int uid) {
         mContext.enforcePermission(
-                WifiStackClient.PERMISSION_MAINLINE_WIFI_STACK,
+                Manifest.permission.NETWORK_STACK,
                 UNKNOWN_PID, uid,
-                "MainlineWifiStack");
-    }
-
-    private boolean checkWifiStackPermission(int uid) {
-        return mContext.checkPermission(WifiStackClient.PERMISSION_MAINLINE_WIFI_STACK,
-                UNKNOWN_PID, uid) == PERMISSION_GRANTED;
+                "NetworkStack");
     }
 
     // Helper method to check if the incoming message is for a privileged request.
@@ -214,8 +210,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             boolean isPrivilegedRequest, boolean shouldIgnoreLocationSettings,
             boolean shouldHideFromApps) {
         try {
-            // Wifi stack issued requests.
-            enforceWifiStackPermission(uid);
+            /** Wifi stack issued requests.*/
+            enforceNetworkStack(uid);
         } catch (SecurityException e) {
             // System-app issued requests
             if (isPrivilegedRequest) {
@@ -502,12 +498,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     private WorkSource computeWorkSource(ClientInfo ci, WorkSource requestedWorkSource) {
-        if (requestedWorkSource != null) {
-            requestedWorkSource.clearNames();
-
-            if (!requestedWorkSource.isEmpty()) {
-                return requestedWorkSource;
-            }
+        if (requestedWorkSource != null && !requestedWorkSource.isEmpty()) {
+            return requestedWorkSource.withoutNames();
         }
 
         if (ci.getUid() > 0) {
@@ -1018,8 +1010,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         }
 
         boolean validateScanType(int type) {
-            return (type == WifiScanner.TYPE_LOW_LATENCY || type == WifiScanner.TYPE_LOW_POWER
-                    || type == WifiScanner.TYPE_HIGH_ACCURACY);
+            return type == WifiScanner.SCAN_TYPE_LOW_LATENCY
+                    || type == WifiScanner.SCAN_TYPE_LOW_POWER
+                    || type == WifiScanner.SCAN_TYPE_HIGH_ACCURACY;
         }
 
         boolean validateScanRequest(ClientInfo ci, int handler, ScanSettings settings) {
@@ -1037,13 +1030,15 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 Log.e(TAG, "Invalid scan type " + settings.type);
                 return false;
             }
-            if (!checkWifiStackPermission(ci.getUid())) {
+            if (mContext.checkPermission(
+                    Manifest.permission.NETWORK_STACK, UNKNOWN_PID, ci.getUid())
+                    == PERMISSION_DENIED) {
                 if (!ArrayUtils.isEmpty(settings.hiddenNetworks)) {
                     Log.e(TAG, "Failing single scan because app " + ci.getUid()
                             + " does not have permission to set hidden networks");
                     return false;
                 }
-                if (settings.type != WifiScanner.TYPE_LOW_LATENCY) {
+                if (settings.type != WifiScanner.SCAN_TYPE_LOW_LATENCY) {
                     Log.e(TAG, "Failing single scan because app " + ci.getUid()
                             + " does not have permission to set type");
                     return false;
@@ -1054,11 +1049,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
 
         int getNativeScanType(int type) {
             switch(type) {
-                case WifiScanner.TYPE_LOW_LATENCY:
+                case WifiScanner.SCAN_TYPE_LOW_LATENCY:
                     return WifiNative.SCAN_TYPE_LOW_LATENCY;
-                case WifiScanner.TYPE_LOW_POWER:
+                case WifiScanner.SCAN_TYPE_LOW_POWER:
                     return WifiNative.SCAN_TYPE_LOW_POWER;
-                case WifiScanner.TYPE_HIGH_ACCURACY:
+                case WifiScanner.SCAN_TYPE_HIGH_ACCURACY:
                     return WifiNative.SCAN_TYPE_HIGH_ACCURACY;
                 default:
                     // This should never happen becuase we've validated the incoming type in
@@ -1182,12 +1177,10 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 settings.scanType =
                     mergeScanTypes(settings.scanType, getNativeScanType(entry.settings.type));
                 channels.addChannels(entry.settings);
-                if (entry.settings.hiddenNetworks != null) {
-                    for (int i = 0; i < entry.settings.hiddenNetworks.length; i++) {
-                        WifiNative.HiddenNetwork hiddenNetwork = new WifiNative.HiddenNetwork();
-                        hiddenNetwork.ssid = entry.settings.hiddenNetworks[i].ssid;
-                        hiddenNetworkList.add(hiddenNetwork);
-                    }
+                for (ScanSettings.HiddenNetwork srcNetwork : entry.settings.hiddenNetworks) {
+                    WifiNative.HiddenNetwork hiddenNetwork = new WifiNative.HiddenNetwork();
+                    hiddenNetwork.ssid = srcNetwork.ssid;
+                    hiddenNetworkList.add(hiddenNetwork);
                 }
                 if ((entry.settings.reportEvents & WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT)
                         != 0) {
@@ -2615,11 +2608,11 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
 
     static String getScanTypeString(int type) {
         switch(type) {
-            case WifiScanner.TYPE_LOW_LATENCY:
+            case WifiScanner.SCAN_TYPE_LOW_LATENCY:
                 return "LOW LATENCY";
-            case WifiScanner.TYPE_LOW_POWER:
+            case WifiScanner.SCAN_TYPE_LOW_POWER:
                 return "LOW POWER";
-            case WifiScanner.TYPE_HIGH_ACCURACY:
+            case WifiScanner.SCAN_TYPE_HIGH_ACCURACY:
                 return "HIGH ACCURACY";
             default:
                 // This should never happen becuase we've validated the incoming type in

@@ -228,7 +228,6 @@ public class XmlUtilTest extends WifiBaseTest {
         configuration.requirePMF = true;
         configuration.validatedInternetAccess = true;
         configuration.noInternetAccessExpected = true;
-        configuration.userApproved = WifiConfiguration.USER_UNSPECIFIED;
         configuration.meteredHint = true;
         configuration.useExternalScores = true;
         configuration.numAssociation = 5;
@@ -561,7 +560,7 @@ public class XmlUtilTest extends WifiBaseTest {
         retrieved =
                 deserializeWifiConfiguration(
                         serializeWifiConfigurationForBackup(configuration));
-        assertEquals(retrieved.first, retrieved.second.configKey());
+        assertEquals(retrieved.first, retrieved.second.getKey());
         WifiConfigurationTestUtil.assertConfigurationEqualForBackup(
                 configuration, retrieved.second);
     }
@@ -579,7 +578,7 @@ public class XmlUtilTest extends WifiBaseTest {
         retrieved =
                 deserializeWifiConfiguration(
                         serializeWifiConfigurationForConfigStore(configuration));
-        assertEquals(retrieved.first, retrieved.second.configKey());
+        assertEquals(retrieved.first, retrieved.second.getKey());
         WifiConfigurationTestUtil.assertConfigurationEqualForConfigStore(
                 configuration, retrieved.second);
     }

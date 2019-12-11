@@ -16,6 +16,8 @@
 
 package com.android.server.wifi;
 
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLE_REASON_INFOS;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
@@ -32,6 +34,8 @@ import android.net.StaticIpConfiguration;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
+import android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DisableReasonInfo;
+import android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NetworkSelectionDisableReason;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
@@ -52,7 +56,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -108,54 +112,7 @@ public class WifiConfigManager {
      */
     @VisibleForTesting
     public static final String SYSUI_PACKAGE_NAME = "com.android.systemui";
-    /**
-     * Network Selection disable reason thresholds. These numbers are used to debounce network
-     * failures before we disable them.
-     * These are indexed using the disable reason constants defined in
-     * {@link android.net.wifi.WifiConfiguration.NetworkSelectionStatus}.
-     */
-    @VisibleForTesting
-    public static final int[] NETWORK_SELECTION_DISABLE_THRESHOLD = {
-            -1, //  threshold for NETWORK_SELECTION_ENABLE
-            1,  //  threshold for DISABLED_BAD_LINK
-            5,  //  threshold for DISABLED_ASSOCIATION_REJECTION
-            5,  //  threshold for DISABLED_AUTHENTICATION_FAILURE
-            5,  //  threshold for DISABLED_DHCP_FAILURE
-            5,  //  threshold for DISABLED_DNS_FAILURE
-            1,  //  threshold for DISABLED_NO_INTERNET_TEMPORARY
-            1,  //  threshold for DISABLED_WPS_START
-            6,  //  threshold for DISABLED_TLS_VERSION_MISMATCH
-            1,  //  threshold for DISABLED_AUTHENTICATION_NO_CREDENTIALS
-            1,  //  threshold for DISABLED_NO_INTERNET_PERMANENT
-            1,  //  threshold for DISABLED_BY_WIFI_MANAGER
-            1,  //  threshold for DISABLED_BY_USER_SWITCH
-            1,  //  threshold for DISABLED_BY_WRONG_PASSWORD
-            1   //  threshold for DISABLED_AUTHENTICATION_NO_SUBSCRIBED
-    };
-    /**
-     * Network Selection disable timeout for each kind of error. After the timeout milliseconds,
-     * enable the network again.
-     * These are indexed using the disable reason constants defined in
-     * {@link android.net.wifi.WifiConfiguration.NetworkSelectionStatus}.
-     */
-    @VisibleForTesting
-    public static final int[] NETWORK_SELECTION_DISABLE_TIMEOUT_MS = {
-            Integer.MAX_VALUE,  // threshold for NETWORK_SELECTION_ENABLE
-            15 * 60 * 1000,     // threshold for DISABLED_BAD_LINK
-            5 * 60 * 1000,      // threshold for DISABLED_ASSOCIATION_REJECTION
-            5 * 60 * 1000,      // threshold for DISABLED_AUTHENTICATION_FAILURE
-            5 * 60 * 1000,      // threshold for DISABLED_DHCP_FAILURE
-            5 * 60 * 1000,      // threshold for DISABLED_DNS_FAILURE
-            10 * 60 * 1000,     // threshold for DISABLED_NO_INTERNET_TEMPORARY
-            0 * 60 * 1000,      // threshold for DISABLED_WPS_START
-            Integer.MAX_VALUE,  // threshold for DISABLED_TLS_VERSION
-            Integer.MAX_VALUE,  // threshold for DISABLED_AUTHENTICATION_NO_CREDENTIALS
-            Integer.MAX_VALUE,  // threshold for DISABLED_NO_INTERNET_PERMANENT
-            Integer.MAX_VALUE,  // threshold for DISABLED_BY_WIFI_MANAGER
-            Integer.MAX_VALUE,  // threshold for DISABLED_BY_USER_SWITCH
-            Integer.MAX_VALUE,  // threshold for DISABLED_BY_WRONG_PASSWORD
-            Integer.MAX_VALUE   // threshold for DISABLED_AUTHENTICATION_NO_SUBSCRIBED
-    };
+
     /**
      * Interface for other modules to listen to the network updated
      * events.
@@ -219,6 +176,12 @@ public class WifiConfigManager {
     private static final int SCAN_RESULT_MAXIMUM_AGE_MS = 40000;
 
     /**
+     * Maximum number of blocked BSSIDs per SSID used for calcualting the duration of temporarily
+     * disabling a network.
+     */
+    private static final int MAX_BLOCKED_BSSID_PER_NETWORK = 10;
+
+    /**
      * Maximum age of frequencies last seen to be included in pno scans. (30 days)
      */
     @VisibleForTesting
@@ -227,12 +190,17 @@ public class WifiConfigManager {
     private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 1; // 0 = disabled
     private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 1; // 0 = disabled:
 
+    /**
+     * Enforce a minimum time to wait after the last disconnect to generate a new randomized MAC,
+     * since IPv6 networks don't provide the DHCP lease duration.
+     * 4 hours.
+     */
+    @VisibleForTesting
+    protected static final long AGGRESSIVE_MAC_WAIT_AFTER_DISCONNECT_MS = 4 * 60 * 60 * 1000;
     @VisibleForTesting
     protected static final long AGGRESSIVE_MAC_REFRESH_MS_MIN = 30 * 60 * 1000; // 30 minutes
     @VisibleForTesting
     protected static final long AGGRESSIVE_MAC_REFRESH_MS_MAX = 24 * 60 * 60 * 1000; // 24 hours
-    @VisibleForTesting
-    protected static final long AGGRESSIVE_MAC_REFRESH_MS_DEFAULT = 3 * 60 * 60 * 1000; // 3 hours
 
     private static final MacAddress DEFAULT_MAC_ADDRESS =
             MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
@@ -280,8 +248,7 @@ public class WifiConfigManager {
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
     private final WifiInjector mWifiInjector;
     private final MacAddressUtil mMacAddressUtil;
-    private boolean mConnectedMacRandomzationSupported;
-    private final Mac mMac;
+    private Mac mMac;
     private final TelephonyUtil mTelephonyUtil;
 
     /**
@@ -320,15 +287,6 @@ public class WifiConfigManager {
      * Store the network update listeners.
      */
     private final List<OnNetworkUpdateListener> mListeners;
-    /**
-     * Flag to indicate if only networks with the same psk should be linked.
-     * TODO(b/30706406): Remove this flag if unused.
-     */
-    private final boolean mOnlyLinkSameCredentialConfigurations;
-    /**
-     * Number of channels to scan for during partial scans initiated while connected.
-     */
-    private final int mMaxNumActiveChannelsForPartialScans;
 
     private final FrameworkFacade mFrameworkFacade;
     private final DeviceConfigFacade mDeviceConfigFacade;
@@ -431,10 +389,6 @@ public class WifiConfigManager {
         mWifiConfigStore.registerStoreData(mDeletedEphemeralSsidsStoreData);
         mWifiConfigStore.registerStoreData(mRandomizedMacStoreData);
 
-        mOnlyLinkSameCredentialConfigurations = mContext.getResources().getBoolean(
-                R.bool.config_wifi_only_link_same_credential_configurations);
-        mMaxNumActiveChannelsForPartialScans = mContext.getResources().getInteger(
-                R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels);
         mFrameworkFacade = frameworkFacade;
         mFrameworkFacade.registerContentObserver(mContext, Settings.Global.getUriFor(
                 Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED), false,
@@ -454,8 +408,6 @@ public class WifiConfigManager {
                     }
                 });
         updatePnoRecencySortingSetting();
-        mConnectedMacRandomzationSupported = mContext.getResources()
-                .getBoolean(R.bool.config_wifi_connected_mac_randomization_supported);
         mDeviceConfigFacade = deviceConfigFacade;
         mAggressiveMacRandomizationWhitelist = new ArraySet<>();
         mAggressiveMacRandomizationBlacklist = new ArraySet<>();
@@ -473,10 +425,40 @@ public class WifiConfigManager {
             Log.e(TAG, "Unable to resolve SystemUI's UID.");
         }
         mMacAddressUtil = mWifiInjector.getMacAddressUtil();
-        mMac = mMacAddressUtil.obtainMacRandHashFunction(Process.WIFI_UID);
-        if (mMac == null) {
-            Log.wtf(TAG, "Failed to obtain secret for MAC randomization."
-                    + " All randomized MAC addresses are lost!");
+    }
+
+    /**
+     * Network Selection disable reason thresholds. These numbers are used to debounce network
+     * failures before we disable them.
+     *
+     * @param reason int reason code
+     * @return the disable threshold, or -1 if not found.
+     */
+    @VisibleForTesting
+    public static int getNetworkSelectionDisableThreshold(
+            @NetworkSelectionDisableReason int reason) {
+        DisableReasonInfo info = DISABLE_REASON_INFOS.get(reason);
+        if (info == null) {
+            Log.e(TAG, "Unrecognized network disable reason code for disable threshold: " + reason);
+            return -1;
+        } else {
+            return info.mDisableThreshold;
+        }
+    }
+
+    /**
+     * Network Selection disable timeout for each kind of error. After the timeout in milliseconds,
+     * enable the network again.
+     */
+    @VisibleForTesting
+    public static int getNetworkSelectionDisableTimeoutMillis(
+            @NetworkSelectionDisableReason int reason) {
+        DisableReasonInfo info = DISABLE_REASON_INFOS.get(reason);
+        if (info == null) {
+            Log.e(TAG, "Unrecognized network disable reason code for disable timeout: " + reason);
+            return -1;
+        } else {
+            return info.mDisableTimeoutMillis;
         }
     }
 
@@ -605,8 +587,6 @@ public class WifiConfigManager {
         }
         WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
         internalConfig.setRandomizedMacAddress(persistentMac);
-        internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
-                + AGGRESSIVE_MAC_REFRESH_MS_DEFAULT;
         return persistentMac;
     }
 
@@ -624,8 +604,6 @@ public class WifiConfigManager {
         }
         WifiConfiguration internalConfig = getInternalConfiguredNetwork(config.networkId);
         internalConfig.setRandomizedMacAddress(MacAddress.createRandomUnicastAddress());
-        internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
-                + AGGRESSIVE_MAC_REFRESH_MS_DEFAULT;
         return internalConfig.getRandomizedMacAddress();
     }
 
@@ -723,7 +701,8 @@ public class WifiConfigManager {
                 && targetUid != configuration.creatorUid) {
             maskRandomizedMacAddressInWifiConfiguration(network);
         }
-        if (!mConnectedMacRandomzationSupported) {
+        if (!mContext.getResources().getBoolean(
+                R.bool.config_wifi_connected_mac_randomization_supported)) {
             network.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         }
         return network;
@@ -876,10 +855,10 @@ public class WifiConfigManager {
         if (internalConfig != null) {
             return internalConfig;
         }
-        internalConfig = mConfiguredNetworks.getByConfigKeyForCurrentUser(config.configKey());
+        internalConfig = mConfiguredNetworks.getByConfigKeyForCurrentUser(config.getKey());
         if (internalConfig == null) {
             Log.e(TAG, "Cannot find network with networkId " + config.networkId
-                    + " or configKey " + config.configKey());
+                    + " or configKey " + config.getKey());
         }
         return internalConfig;
     }
@@ -1249,7 +1228,6 @@ public class WifiConfigManager {
         newInternalConfig.creationTime = newInternalConfig.updateTime =
                 createDebugTimeStampString(mClock.getWallClockMillis());
         initRandomizedMacForInternalConfig(newInternalConfig);
-        newInternalConfig.clonedNetworkConfigKey = externalConfig.clonedNetworkConfigKey;
         return newInternalConfig;
     }
 
@@ -1309,7 +1287,7 @@ public class WifiConfigManager {
             // Since the original config provided may have had an empty
             // {@link WifiConfiguration#allowedKeyMgmt} field, check again if we already have a
             // network with the the same configkey.
-            existingInternalConfig = getInternalConfiguredNetwork(newInternalConfig.configKey());
+            existingInternalConfig = getInternalConfiguredNetwork(newInternalConfig.getKey());
         }
         // Existing network found. So, a network update.
         if (existingInternalConfig != null) {
@@ -1321,7 +1299,7 @@ public class WifiConfigManager {
             // Check for the app's permission before we let it update this network.
             if (!canModifyNetwork(existingInternalConfig, uid, packageName)) {
                 Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
-                        + config.configKey());
+                        + config.getKey());
                 return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
             }
             newInternalConfig =
@@ -1333,7 +1311,7 @@ public class WifiConfigManager {
         if (WifiConfigurationUtil.hasProxyChanged(existingInternalConfig, newInternalConfig)
                 && !canModifyProxySettings(uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to modify proxy Settings "
-                    + config.configKey() + ". Must have NETWORK_SETTINGS,"
+                    + config.getKey() + ". Must have NETWORK_SETTINGS,"
                     + " or be device or profile owner.");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
@@ -1400,7 +1378,7 @@ public class WifiConfigManager {
 
         localLog("addOrUpdateNetworkInternal: added/updated config."
                 + " netId=" + newInternalConfig.networkId
-                + " configKey=" + newInternalConfig.configKey()
+                + " configKey=" + newInternalConfig.getKey()
                 + " uid=" + Integer.toString(newInternalConfig.creatorUid)
                 + " name=" + newInternalConfig.creatorName);
         return result;
@@ -1432,7 +1410,7 @@ public class WifiConfigManager {
         }
         if (!config.isEphemeral()) {
             // Removes the existing ephemeral network if it exists to add this configuration.
-            WifiConfiguration existingConfig = getConfiguredNetwork(config.configKey());
+            WifiConfiguration existingConfig = getConfiguredNetwork(config.getKey());
             if (existingConfig != null && existingConfig.isEphemeral()) {
                 // In this case, new connection for this config won't happen because same
                 // network is already registered as an ephemeral network.
@@ -1499,15 +1477,16 @@ public class WifiConfigManager {
             mWifiKeyStore.removeKeys(config.enterpriseConfig);
         }
 
-        removeConnectChoiceFromAllNetworks(config.configKey());
+        removeConnectChoiceFromAllNetworks(config.getKey());
         mConfiguredNetworks.remove(config.networkId);
         mScanDetailCaches.remove(config.networkId);
         // Stage the backup of the SettingsProvider package which backs this up.
         mBackupManagerProxy.notifyDataChanged();
+        mWifiInjector.getBssidBlocklistMonitor().handleNetworkRemoved(config.SSID);
 
         localLog("removeNetworkInternal: removed config."
                 + " netId=" + config.networkId
-                + " configKey=" + config.configKey()
+                + " configKey=" + config.getKey()
                 + " uid=" + Integer.toString(uid)
                 + " name=" + mContext.getPackageManager().getNameForUid(uid));
         return true;
@@ -1531,34 +1510,13 @@ public class WifiConfigManager {
         }
         if (!canModifyNetwork(config, uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to delete configuration "
-                    + config.configKey());
+                    + config.getKey());
             return false;
         }
         if (!removeNetworkInternal(config, uid)) {
             Log.e(TAG, "Failed to remove network " + config.getPrintableSsid());
             return false;
         }
-
-        // Remove any cloned networks
-        if (config.clonedNetworkConfigKey != null) {
-            WifiConfiguration clonedConfig = getConfiguredNetwork(config.clonedNetworkConfigKey);
-
-            if (clonedConfig != null) {
-                Log.d(TAG, "Removing cloned network " + clonedConfig.getPrintableSsid());
-                if (!removeNetworkInternal(clonedConfig, uid)) {
-                    Log.e(TAG, "Failed to remove network " + clonedConfig.getPrintableSsid());
-                    return false;
-                }
-
-                if (clonedConfig.networkId == mLastSelectedNetworkId) {
-                    clearLastSelectedNetwork();
-                }
-            } else {
-                Log.w(TAG, "Could not find a cloned network with key "
-                        + config.clonedNetworkConfigKey);
-            }
-        }
-
         if (networkId == mLastSelectedNetworkId) {
             clearLastSelectedNetwork();
         }
@@ -1654,11 +1612,11 @@ public class WifiConfigManager {
                 mConfiguredNetworks.valuesForAllUsers().toArray(new WifiConfiguration[0]);
         for (WifiConfiguration config : copiedConfigs) {
             if (config.isPasspoint()) {
-                Log.d(TAG, "Removing passpoint network config " + config.configKey());
+                Log.d(TAG, "Removing passpoint network config " + config.getKey());
                 removeNetwork(config.networkId, config.creatorUid, config.creatorName);
                 didRemove = true;
             } else if (config.ephemeral) {
-                Log.d(TAG, "Removing ephemeral network config " + config.configKey());
+                Log.d(TAG, "Removing ephemeral network config " + config.getKey());
                 removeNetwork(config.networkId, config.creatorUid, config.creatorName);
                 didRemove = true;
             }
@@ -1675,7 +1633,7 @@ public class WifiConfigManager {
     public boolean removeSuggestionConfiguredNetwork(@NonNull String configKey) {
         WifiConfiguration config = getInternalConfiguredNetwork(configKey);
         if (config != null && config.ephemeral && config.fromWifiNetworkSuggestion) {
-            Log.d(TAG, "Removing suggestion network config " + config.configKey());
+            Log.d(TAG, "Removing suggestion network config " + config.getKey());
             return removeNetwork(config.networkId, config.creatorUid, config.creatorName);
         }
         return false;
@@ -1690,10 +1648,23 @@ public class WifiConfigManager {
     public boolean removePasspointConfiguredNetwork(@NonNull String configKey) {
         WifiConfiguration config = getInternalConfiguredNetwork(configKey);
         if (config != null && config.isPasspoint()) {
-            Log.d(TAG, "Removing passpoint network config " + config.configKey());
+            Log.d(TAG, "Removing passpoint network config " + config.getKey());
             return removeNetwork(config.networkId, config.creatorUid, config.creatorName);
         }
         return false;
+    }
+
+    /**
+     * Check whether a network belong to a known list of networks that may not support randomized
+     * MAC.
+     * @param networkId
+     * @return true if the network is in the hotlist and MAC randomization is enabled.
+     */
+    public boolean isInFlakyRandomizationSsidHotlist(int networkId) {
+        WifiConfiguration config = getConfiguredNetwork(networkId);
+        return config != null
+                && config.macRandomizationSetting == WifiConfiguration.RANDOMIZATION_PERSISTENT
+                && mDeviceConfigFacade.getRandomizationFlakySsidHotlist().contains(config.SSID);
     }
 
     /**
@@ -1779,13 +1750,13 @@ public class WifiConfigManager {
         if (reason == NetworkSelectionStatus.NETWORK_SELECTION_ENABLE) {
             setNetworkSelectionEnabled(config);
             setNetworkStatus(config, WifiConfiguration.Status.ENABLED);
-        } else if (reason < NetworkSelectionStatus.DISABLED_TLS_VERSION_MISMATCH) {
+        } else if (reason < NetworkSelectionStatus.PERMANENTLY_DISABLED_STARTING_INDEX) {
             setNetworkSelectionTemporarilyDisabled(config, reason);
         } else {
             setNetworkSelectionPermanentlyDisabled(config, reason);
             setNetworkStatus(config, WifiConfiguration.Status.DISABLED);
         }
-        localLog("setNetworkSelectionStatus: configKey=" + config.configKey()
+        localLog("setNetworkSelectionStatus: configKey=" + config.getKey()
                 + " networkStatus=" + networkStatus.getNetworkStatusString() + " disableReason="
                 + networkStatus.getNetworkDisableReasonString() + " at="
                 + createDebugTimeStampString(mClock.getWallClockMillis()));
@@ -1824,7 +1795,7 @@ public class WifiConfigManager {
             // For network disable reasons, we should only update the status if we cross the
             // threshold.
             int disableReasonCounter = networkStatus.getDisableReasonCounter(reason);
-            int disableReasonThreshold = NETWORK_SELECTION_DISABLE_THRESHOLD[reason];
+            int disableReasonThreshold = getNetworkSelectionDisableThreshold(reason);
             if (disableReasonCounter < disableReasonThreshold) {
                 if (mVerboseLoggingEnabled) {
                     Log.v(TAG, "Disable counter for network " + config.getPrintableSsid()
@@ -1863,28 +1834,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Update whether a network is currently not recommended by {@link RecommendedNetworkEvaluator}.
-     *
-     * @param networkId network ID of the network to be updated
-     * @param notRecommended whether this network is not recommended
-     * @return true if the network is updated, false otherwise
-     */
-    public boolean updateNetworkNotRecommended(int networkId, boolean notRecommended) {
-        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
-        if (config == null) {
-            return false;
-        }
-
-        config.getNetworkSelectionStatus().setNotRecommended(notRecommended);
-        if (mVerboseLoggingEnabled) {
-            localLog("updateNetworkRecommendation: configKey=" + config.configKey()
-                    + " notRecommended=" + notRecommended);
-        }
-        saveToStore(false);
-        return true;
-    }
-
-    /**
      * Attempt to re-enable a network for network selection, if this network was either:
      * a) Previously temporarily disabled, but its disable timeout has expired, or
      * b) Previously disabled because of a user switch, but is now visible to the current
@@ -1901,15 +1850,20 @@ public class WifiConfigManager {
             long timeDifferenceMs =
                     mClock.getElapsedSinceBootMillis() - networkStatus.getDisableTime();
             int disableReason = networkStatus.getNetworkSelectionDisableReason();
-            long disableTimeoutMs = NETWORK_SELECTION_DISABLE_TIMEOUT_MS[disableReason];
+            int blockedBssids = Math.min(MAX_BLOCKED_BSSID_PER_NETWORK,
+                    mWifiInjector.getBssidBlocklistMonitor()
+                            .getNumBlockedBssidsForSsid(config.SSID));
+            // if no BSSIDs are blocked then we should keep trying to connect to something
+            long disableTimeoutMs = 0;
+            if (blockedBssids > 0) {
+                double multiplier = Math.pow(2.0, blockedBssids - 1.0);
+                disableTimeoutMs = (long) (getNetworkSelectionDisableTimeoutMillis(disableReason)
+                        * multiplier);
+            }
             if (timeDifferenceMs >= disableTimeoutMs) {
                 return updateNetworkSelectionStatus(
                         config, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
             }
-        } else if (networkStatus.isDisabledByReason(
-                NetworkSelectionStatus.DISABLED_DUE_TO_USER_SWITCH)) {
-            return updateNetworkSelectionStatus(
-                    config, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
         }
         return false;
     }
@@ -1962,7 +1916,7 @@ public class WifiConfigManager {
         }
         if (!canModifyNetwork(config, uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
-                    + config.configKey());
+                    + config.getKey());
             return false;
         }
         if (!updateNetworkSelectionStatus(
@@ -1999,7 +1953,7 @@ public class WifiConfigManager {
         }
         if (!canModifyNetwork(config, uid, packageName)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
-                    + config.configKey());
+                    + config.getKey());
             return false;
         }
         if (!updateNetworkSelectionStatus(
@@ -2106,6 +2060,8 @@ public class WifiConfigManager {
             return false;
         }
         config.lastDisconnected = mClock.getWallClockMillis();
+        config.randomizedMacExpirationTimeMs = Math.max(config.randomizedMacExpirationTimeMs,
+                config.lastDisconnected + AGGRESSIVE_MAC_WAIT_AFTER_DISCONNECT_MS);
         // If the network hasn't been disabled, mark it back as
         // enabled after disconnection.
         if (config.status == WifiConfiguration.Status.CURRENT) {
@@ -2358,7 +2314,7 @@ public class WifiConfigManager {
         if (config == null) {
             return "";
         }
-        return config.configKey();
+        return config.getKey();
     }
 
     /**
@@ -2451,27 +2407,9 @@ public class WifiConfigManager {
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Failed to lookup network from config map", e);
         }
-        if (config == null) {
-            /**
-             * Special case for WPA3-Personal and OWE in transition mode.
-             * These networks will be treated as WPA3/OWE with a special flag that indicates
-             * transition mode enabled. If we have a matching WPA2/Open saved network, create a new
-             * upgraded WPA3/OWE network and use it to connect.
-             */
-            ScanResultMatchInfo matchInfo = ScanResultMatchInfo.fromScanResult(scanResult);
-            if (matchInfo.pskSaeInTransitionMode || matchInfo.oweInTransitionMode) {
-                if (handleTransitionNetwork(scanResult, matchInfo.pskSaeInTransitionMode)) {
-                    try {
-                        config = mConfiguredNetworks.getByScanResultForCurrentUser(scanResult);
-                    } catch (IllegalArgumentException e) {
-                        Log.e(TAG, "Failed to lookup network from config map", e);
-                    }
-                }
-            }
-        }
         if (config != null) {
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "getSavedNetworkFromScanDetail Found " + config.configKey()
+                Log.v(TAG, "getSavedNetworkFromScanDetail Found " + config.getKey()
                         + " for " + scanResult.SSID + "[" + scanResult.capabilities + "]");
             }
             if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X)) {
@@ -2486,41 +2424,6 @@ public class WifiConfigManager {
             }
         }
         return config;
-    }
-
-    private boolean handleTransitionNetwork(ScanResult scanResult, boolean isPskSae) {
-        WifiConfiguration config;
-
-        if (isPskSae) {
-            config = mConfiguredNetworks.getPskNetworkByScanResultForCurrentUser(scanResult);
-        } else {
-            config = mConfiguredNetworks.getOpenNetworkByScanResultForCurrentUser(scanResult);
-        }
-
-        if (config != null) {
-            // Create a new WPA3-Personal or OWE connection
-            WifiConfiguration newConfig = new WifiConfiguration(config);
-            newConfig.networkId = WifiConfiguration.INVALID_NETWORK_ID;
-            newConfig.clonedNetworkConfigKey = config.configKey();
-            if (isPskSae) {
-                newConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_SAE);
-            } else {
-                newConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OWE);
-            }
-            NetworkUpdateResult res = addOrUpdateNetwork(newConfig, config.creatorUid,
-                    config.creatorName);
-
-            if (!res.isSuccess()) {
-                Log.e(TAG, "Failed to add new configuration for " + newConfig.SSID);
-                return false;
-            }
-            config.clonedNetworkConfigKey = newConfig.configKey();
-            addOrUpdateNetwork(config, config.creatorUid);
-            enableNetwork(res.netId, false, config.creatorUid, null);
-            return true;
-        }
-
-        return false;
     }
 
     /**
@@ -2582,7 +2485,7 @@ public class WifiConfigManager {
                     Log.v(TAG, "Updating scan detail cache freq=" + result.frequency
                             + " BSSID=" + result.BSSID
                             + " RSSI=" + result.level
-                            + " for " + config.configKey());
+                            + " for " + config.getKey());
                 }
             }
         }
@@ -2622,7 +2525,8 @@ public class WifiConfigManager {
             ScanDetailCache scanDetailCache1, ScanDetailCache scanDetailCache2) {
         // TODO (b/30706406): Link networks only with same passwords if the
         // |mOnlyLinkSameCredentialConfigurations| flag is set.
-        if (mOnlyLinkSameCredentialConfigurations) {
+        if (mContext.getResources().getBoolean(
+                R.bool.config_wifi_only_link_same_credential_configurations)) {
             if (!TextUtils.equals(network1.preSharedKey, network2.preSharedKey)) {
                 if (mVerboseLoggingEnabled) {
                     Log.v(TAG, "shouldNetworksBeLinked unlink due to password mismatch");
@@ -2673,8 +2577,8 @@ public class WifiConfigManager {
      */
     private void linkNetworks(WifiConfiguration network1, WifiConfiguration network2) {
         if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "linkNetworks will link " + network2.configKey()
-                    + " and " + network1.configKey());
+            Log.v(TAG, "linkNetworks will link " + network2.getKey()
+                    + " and " + network1.getKey());
         }
         if (network2.linkedConfigurations == null) {
             network2.linkedConfigurations = new HashMap<>();
@@ -2684,8 +2588,8 @@ public class WifiConfigManager {
         }
         // TODO (b/30638473): This needs to become a set instead of map, but it will need
         // public interface changes and need some migration of existing store data.
-        network2.linkedConfigurations.put(network1.configKey(), 1);
-        network1.linkedConfigurations.put(network2.configKey(), 1);
+        network2.linkedConfigurations.put(network1.getKey(), 1);
+        network1.linkedConfigurations.put(network2.getKey(), 1);
     }
 
     /**
@@ -2696,20 +2600,20 @@ public class WifiConfigManager {
      */
     private void unlinkNetworks(WifiConfiguration network1, WifiConfiguration network2) {
         if (network2.linkedConfigurations != null
-                && (network2.linkedConfigurations.get(network1.configKey()) != null)) {
+                && (network2.linkedConfigurations.get(network1.getKey()) != null)) {
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "unlinkNetworks un-link " + network1.configKey()
-                        + " from " + network2.configKey());
+                Log.v(TAG, "unlinkNetworks un-link " + network1.getKey()
+                        + " from " + network2.getKey());
             }
-            network2.linkedConfigurations.remove(network1.configKey());
+            network2.linkedConfigurations.remove(network1.getKey());
         }
         if (network1.linkedConfigurations != null
-                && (network1.linkedConfigurations.get(network2.configKey()) != null)) {
+                && (network1.linkedConfigurations.get(network2.getKey()) != null)) {
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "unlinkNetworks un-link " + network2.configKey()
-                        + " from " + network1.configKey());
+                Log.v(TAG, "unlinkNetworks un-link " + network2.getKey()
+                        + " from " + network1.getKey());
             }
-            network1.linkedConfigurations.remove(network2.configKey());
+            network1.linkedConfigurations.remove(network2.getKey());
         }
     }
 
@@ -2732,7 +2636,7 @@ public class WifiConfigManager {
             return;
         }
         for (WifiConfiguration linkConfig : getInternalConfiguredNetworks()) {
-            if (linkConfig.configKey().equals(config.configKey())) {
+            if (linkConfig.getKey().equals(config.getKey())) {
                 continue;
             }
             if (linkConfig.ephemeral) {
@@ -2818,14 +2722,16 @@ public class WifiConfigManager {
             Log.i(TAG, "No scan detail and linked configs associated with networkId " + networkId);
             return null;
         }
+        final int maxNumActiveChannelsForPartialScans = mContext.getResources().getInteger(
+                R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels);
         if (mVerboseLoggingEnabled) {
             StringBuilder dbg = new StringBuilder();
             dbg.append("fetchChannelSetForNetworkForPartialScan ageInMillis ")
                     .append(ageInMillis)
                     .append(" for ")
-                    .append(config.configKey())
+                    .append(config.getKey())
                     .append(" max ")
-                    .append(mMaxNumActiveChannelsForPartialScans);
+                    .append(maxNumActiveChannelsForPartialScans);
             if (scanDetailCache != null) {
                 dbg.append(" bssids " + scanDetailCache.size());
             }
@@ -2839,7 +2745,7 @@ public class WifiConfigManager {
         // First add the currently connected network channel.
         if (homeChannelFreq > 0) {
             channelSet.add(homeChannelFreq);
-            if (channelSet.size() >= mMaxNumActiveChannelsForPartialScans) {
+            if (channelSet.size() >= maxNumActiveChannelsForPartialScans) {
                 return channelSet;
             }
         }
@@ -2849,7 +2755,7 @@ public class WifiConfigManager {
         // Then get channels for the network.
         if (!addToChannelSetForNetworkFromScanDetailCache(
                 channelSet, scanDetailCache, nowInMillis, ageInMillis,
-                mMaxNumActiveChannelsForPartialScans)) {
+                maxNumActiveChannelsForPartialScans)) {
             return channelSet;
         }
 
@@ -2864,7 +2770,7 @@ public class WifiConfigManager {
                         getScanDetailCacheForNetwork(linkedConfig.networkId);
                 if (!addToChannelSetForNetworkFromScanDetailCache(
                         channelSet, linkedScanDetailCache, nowInMillis, ageInMillis,
-                        mMaxNumActiveChannelsForPartialScans)) {
+                        maxNumActiveChannelsForPartialScans)) {
                     break;
                 }
             }
@@ -2895,7 +2801,7 @@ public class WifiConfigManager {
             Log.v(TAG, new StringBuilder("fetchChannelSetForNetworkForPnoScan ageInMillis ")
                     .append(ageInMillis)
                     .append(" for ")
-                    .append(config.configKey())
+                    .append(config.getKey())
                     .append(" bssids " + scanDetailCache.size())
                     .toString());
         }
@@ -3067,7 +2973,7 @@ public class WifiConfigManager {
             Log.d(TAG, "Found Passpoint config in disableEphemeralNetwork: "
                     + foundConfig.networkId + ", FQDN: " + foundConfig.FQDN);
         }
-        removeConnectChoiceFromAllNetworks(foundConfig.configKey());
+        removeConnectChoiceFromAllNetworks(foundConfig.getKey());
         return foundConfig;
     }
 
@@ -3266,7 +3172,7 @@ public class WifiConfigManager {
                 removedNetworkIds.add(config.networkId);
                 localLog("clearInternalUserData: removed config."
                         + " netId=" + config.networkId
-                        + " configKey=" + config.configKey());
+                        + " configKey=" + config.getKey());
                 mConfiguredNetworks.remove(config.networkId);
             }
         }
@@ -3288,7 +3194,7 @@ public class WifiConfigManager {
         for (WifiConfiguration configuration : configurations) {
             configuration.networkId = mNextNetworkId++;
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "Adding network from shared store " + configuration.configKey());
+                Log.v(TAG, "Adding network from shared store " + configuration.getKey());
             }
             try {
                 mConfiguredNetworks.put(configuration);
@@ -3314,7 +3220,7 @@ public class WifiConfigManager {
         for (WifiConfiguration configuration : configurations) {
             configuration.networkId = mNextNetworkId++;
             if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "Adding network from user store " + configuration.configKey());
+                Log.v(TAG, "Adding network from user store " + configuration.getKey());
             }
             try {
                 mConfiguredNetworks.put(configuration);
@@ -3336,8 +3242,6 @@ public class WifiConfigManager {
                 : getPersistentMacAddress(internalConfig);
         if (randomizedMac != null) {
             internalConfig.setRandomizedMacAddress(randomizedMac);
-            internalConfig.randomizedMacExpirationTimeMs = mClock.getWallClockMillis()
-                    + AGGRESSIVE_MAC_REFRESH_MS_DEFAULT;
         }
     }
 
@@ -3401,6 +3305,12 @@ public class WifiConfigManager {
      * @return true on success or not needed (fresh install), false otherwise.
      */
     public boolean loadFromStore() {
+        // Get the hashfunction that is used to generate randomized MACs from the KeyStore
+        mMac = mMacAddressUtil.obtainMacRandHashFunction(Process.WIFI_UID);
+        if (mMac == null) {
+            Log.wtf(TAG, "Failed to obtain secret for MAC randomization."
+                    + " All randomized MAC addresses are lost!");
+        }
         // If the user unlock comes in before we load from store, which means the user store have
         // not been setup yet for the current user. Setup the user store before the read so that
         // configurations for the current user will also being loaded.
