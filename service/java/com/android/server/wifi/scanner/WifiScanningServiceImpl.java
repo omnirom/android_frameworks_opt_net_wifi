@@ -36,6 +36,7 @@ import android.os.BadParcelableException;
 import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
@@ -46,10 +47,8 @@ import android.util.ArraySet;
 import android.util.LocalLog;
 import android.util.Log;
 import android.util.Pair;
-import android.util.StatsLog;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
@@ -61,11 +60,14 @@ import com.android.server.wifi.WifiInjector;
 import com.android.server.wifi.WifiLog;
 import com.android.server.wifi.WifiMetrics;
 import com.android.server.wifi.WifiNative;
+import com.android.server.wifi.proto.WifiStatsLog;
 import com.android.server.wifi.proto.nano.WifiMetricsProto;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
+import com.android.server.wifi.util.ArrayUtils;
 import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiHandler;
 import com.android.server.wifi.util.WifiPermissionsUtil;
+import com.android.server.wifi.util.WorkSourceUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -118,10 +120,13 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         enforcePermission(Binder.getCallingUid(), packageName, featureId, false, false, false);
 
         mChannelHelper.updateChannels();
-        ChannelSpec[] channelSpecs = mChannelHelper.getAvailableScanChannels(band);
-        ArrayList<Integer> list = new ArrayList<>(channelSpecs.length);
-        for (ChannelSpec channelSpec : channelSpecs) {
-            list.add(channelSpec.frequency);
+        ChannelSpec[][] channelSpecs = mChannelHelper.getAvailableScanChannels(band);
+
+        ArrayList<Integer> list = new ArrayList<>();
+        for (int i = 0; i < channelSpecs.length; i++) {
+            for (ChannelSpec channelSpec : channelSpecs[i]) {
+                list.add(channelSpec.frequency);
+            }
         }
         Bundle b = new Bundle();
         b.putIntegerArrayList(WifiScanner.GET_AVAILABLE_CHANNELS_EXTRA, list);
@@ -401,16 +406,18 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     public void startService() {
-        mBackgroundScanStateMachine = new WifiBackgroundScanStateMachine(mLooper);
-        mSingleScanStateMachine = new WifiSingleScanStateMachine(mLooper);
-        mPnoScanStateMachine = new WifiPnoScanStateMachine(mLooper);
+        new Handler(mLooper).post(() -> {
+            mBackgroundScanStateMachine = new WifiBackgroundScanStateMachine(mLooper);
+            mSingleScanStateMachine = new WifiSingleScanStateMachine(mLooper);
+            mPnoScanStateMachine = new WifiPnoScanStateMachine(mLooper);
 
-        mBackgroundScanStateMachine.start();
-        mSingleScanStateMachine.start();
-        mPnoScanStateMachine.start();
+            mBackgroundScanStateMachine.start();
+            mSingleScanStateMachine.start();
+            mPnoScanStateMachine.start();
 
-        // Create client handler only after StateMachines are ready.
-        mClientHandler = new ClientHandler(TAG, mLooper);
+            // Create client handler only after StateMachines are ready.
+            mClientHandler = new ClientHandler(TAG, mLooper);
+        });
     }
 
     /**
@@ -957,16 +964,22 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             public void enter() {
                 mScanWorkSource = mActiveScans.createMergedWorkSource();
                 mBatteryStats.noteWifiScanStartedFromSource(mScanWorkSource);
-                StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
-                        StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__ON);
+                Pair<int[], String[]> uidsAndTags =
+                        WorkSourceUtil.getUidsAndTagsForWs(mScanWorkSource);
+                WifiStatsLog.write(WifiStatsLog.WIFI_SCAN_STATE_CHANGED,
+                        uidsAndTags.first, uidsAndTags.second,
+                        WifiStatsLog.WIFI_SCAN_STATE_CHANGED__STATE__ON);
             }
 
             @Override
             public void exit() {
                 mActiveScanSettings = null;
                 mBatteryStats.noteWifiScanStoppedFromSource(mScanWorkSource);
-                StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
-                        StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__OFF);
+                Pair<int[], String[]> uidsAndTags =
+                        WorkSourceUtil.getUidsAndTagsForWs(mScanWorkSource);
+                WifiStatsLog.write(WifiStatsLog.WIFI_SCAN_STATE_CHANGED,
+                        uidsAndTags.first, uidsAndTags.second,
+                        WifiStatsLog.WIFI_SCAN_STATE_CHANGED__STATE__OFF);
 
                 // if any scans are still active (never got results available then indicate failure)
                 mWifiMetrics.incrementScanReturnEntry(
@@ -1009,10 +1022,10 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             }
         }
 
-        boolean validateScanType(int type) {
-            return type == WifiScanner.SCAN_TYPE_LOW_LATENCY
+        boolean validateScanType(@WifiScanner.ScanType int type) {
+            return (type == WifiScanner.SCAN_TYPE_LOW_LATENCY
                     || type == WifiScanner.SCAN_TYPE_LOW_POWER
-                    || type == WifiScanner.SCAN_TYPE_HIGH_ACCURACY;
+                    || type == WifiScanner.SCAN_TYPE_HIGH_ACCURACY);
         }
 
         boolean validateScanRequest(ClientInfo ci, int handler, ScanSettings settings) {
@@ -1047,30 +1060,15 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             return true;
         }
 
-        int getNativeScanType(int type) {
-            switch(type) {
-                case WifiScanner.SCAN_TYPE_LOW_LATENCY:
-                    return WifiNative.SCAN_TYPE_LOW_LATENCY;
-                case WifiScanner.SCAN_TYPE_LOW_POWER:
-                    return WifiNative.SCAN_TYPE_LOW_POWER;
-                case WifiScanner.SCAN_TYPE_HIGH_ACCURACY:
-                    return WifiNative.SCAN_TYPE_HIGH_ACCURACY;
-                default:
-                    // This should never happen becuase we've validated the incoming type in
-                    // |validateScanType|.
-                    throw new IllegalArgumentException("Invalid scan type " + type);
-            }
-        }
-
         // We can coalesce a LOW_POWER/LOW_LATENCY scan request into an ongoing HIGH_ACCURACY
         // scan request. But, we can't coalesce a HIGH_ACCURACY scan request into an ongoing
         // LOW_POWER/LOW_LATENCY scan request.
         boolean activeScanTypeSatisfies(int requestScanType) {
             switch(mActiveScanSettings.scanType) {
-                case WifiNative.SCAN_TYPE_LOW_LATENCY:
-                case WifiNative.SCAN_TYPE_LOW_POWER:
-                    return requestScanType != WifiNative.SCAN_TYPE_HIGH_ACCURACY;
-                case WifiNative.SCAN_TYPE_HIGH_ACCURACY:
+                case WifiScanner.SCAN_TYPE_LOW_LATENCY:
+                case WifiScanner.SCAN_TYPE_LOW_POWER:
+                    return requestScanType != WifiScanner.SCAN_TYPE_HIGH_ACCURACY;
+                case WifiScanner.SCAN_TYPE_HIGH_ACCURACY:
                     return true;
                 default:
                     // This should never happen becuase we've validated the incoming type in
@@ -1084,10 +1082,10 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         // scan type should be HIGH_ACCURACY.
         int mergeScanTypes(int existingScanType, int newScanType) {
             switch(existingScanType) {
-                case WifiNative.SCAN_TYPE_LOW_LATENCY:
-                case WifiNative.SCAN_TYPE_LOW_POWER:
+                case WifiScanner.SCAN_TYPE_LOW_LATENCY:
+                case WifiScanner.SCAN_TYPE_LOW_POWER:
                     return newScanType;
-                case WifiNative.SCAN_TYPE_HIGH_ACCURACY:
+                case WifiScanner.SCAN_TYPE_HIGH_ACCURACY:
                     return existingScanType;
                 default:
                     // This should never happen becuase we've validated the incoming type in
@@ -1101,7 +1099,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 return false;
             }
 
-            if (!activeScanTypeSatisfies(getNativeScanType(settings.type))) {
+            if (!activeScanTypeSatisfies(settings.type)) {
                 return false;
             }
 
@@ -1174,8 +1172,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             ChannelCollection channels = mChannelHelper.createChannelCollection();
             List<WifiNative.HiddenNetwork> hiddenNetworkList = new ArrayList<>();
             for (RequestInfo<ScanSettings> entry : mPendingScans) {
-                settings.scanType =
-                    mergeScanTypes(settings.scanType, getNativeScanType(entry.settings.type));
+                settings.scanType = mergeScanTypes(settings.scanType, entry.settings.type);
                 channels.addChannels(entry.settings);
                 for (ScanSettings.HiddenNetwork srcNetwork : entry.settings.hiddenNetworks) {
                     WifiNative.HiddenNetwork hiddenNetwork = new WifiNative.HiddenNetwork();
@@ -2113,11 +2110,13 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             nativePnoSetting.periodInMs = scanSettings.periodInMs;
             nativePnoSetting.min5GHzRssi = pnoSettings.min5GHzRssi;
             nativePnoSetting.min24GHzRssi = pnoSettings.min24GHzRssi;
+            nativePnoSetting.min6GHzRssi = pnoSettings.min6GHzRssi;
             nativePnoSetting.initialScoreMax = pnoSettings.initialScoreMax;
             nativePnoSetting.currentConnectionBonus = pnoSettings.currentConnectionBonus;
             nativePnoSetting.sameNetworkBonus = pnoSettings.sameNetworkBonus;
             nativePnoSetting.secureBonus = pnoSettings.secureBonus;
             nativePnoSetting.band5GHzBonus = pnoSettings.band5GHzBonus;
+            nativePnoSetting.band6GHzBonus = pnoSettings.band6GHzBonus;
             nativePnoSetting.isConnected = pnoSettings.isConnected;
             nativePnoSetting.networkList =
                     new WifiNative.PnoNetwork[pnoSettings.networkList.length];
@@ -2646,11 +2645,13 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         sb.append("PnoSettings { ")
           .append(" min5GhzRssi:").append(pnoSettings.min5GHzRssi)
           .append(" min24GhzRssi:").append(pnoSettings.min24GHzRssi)
+          .append(" min6GhzRssi:").append(pnoSettings.min6GHzRssi)
           .append(" initialScoreMax:").append(pnoSettings.initialScoreMax)
           .append(" currentConnectionBonus:").append(pnoSettings.currentConnectionBonus)
           .append(" sameNetworkBonus:").append(pnoSettings.sameNetworkBonus)
           .append(" secureBonus:").append(pnoSettings.secureBonus)
           .append(" band5GhzBonus:").append(pnoSettings.band5GHzBonus)
+          .append(" band6GhzBonus:").append(pnoSettings.band6GHzBonus)
           .append(" isConnected:").append(pnoSettings.isConnected)
           .append(" networks:[ ");
         if (pnoSettings.networkList != null) {

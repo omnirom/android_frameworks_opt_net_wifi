@@ -21,6 +21,7 @@ import static android.app.AppOpsManager.OPSTR_CHANGE_WIFI_STATE;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.app.ActivityManager;
 import android.app.AppOpsManager;
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -41,6 +42,7 @@ import android.net.wifi.WifiNetworkSuggestion;
 import android.net.wifi.WifiScanner;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.telephony.TelephonyManager;
@@ -121,6 +123,10 @@ public class WifiNetworkSuggestionsManager {
      */
     public static class PerAppInfo {
         /**
+         * UID of the app.
+         */
+        public int uid;
+        /**
          * Package Name of the app.
          */
         public final String packageName;
@@ -140,9 +146,20 @@ public class WifiNetworkSuggestionsManager {
         /** Stores the max size of the {@link #extNetworkSuggestions} list ever for this app */
         public int maxSize = 0;
 
-        public PerAppInfo(@NonNull String packageName, @Nullable String featureId) {
+        public PerAppInfo(int uid, @NonNull String packageName, @Nullable String featureId) {
+            this.uid = uid;
             this.packageName = packageName;
             this.featureId = featureId;
+        }
+
+        /**
+         * Needed for migration of config store data.
+         */
+        public void setUid(int uid) {
+            if (this.uid == Process.INVALID_UID) {
+                this.uid = uid;
+            }
+            // else ignored.
         }
 
         // This is only needed for comparison in unit tests.
@@ -151,7 +168,8 @@ public class WifiNetworkSuggestionsManager {
             if (other == null) return false;
             if (!(other instanceof PerAppInfo)) return false;
             PerAppInfo otherPerAppInfo = (PerAppInfo) other;
-            return TextUtils.equals(packageName, otherPerAppInfo.packageName)
+            return uid == otherPerAppInfo.uid
+                    && TextUtils.equals(packageName, otherPerAppInfo.packageName)
                     && Objects.equals(extNetworkSuggestions, otherPerAppInfo.extNetworkSuggestions)
                     && hasUserApproved == otherPerAppInfo.hasUserApproved;
         }
@@ -159,7 +177,18 @@ public class WifiNetworkSuggestionsManager {
         // This is only needed for comparison in unit tests.
         @Override
         public int hashCode() {
-            return Objects.hash(packageName, extNetworkSuggestions, hasUserApproved);
+            return Objects.hash(uid, packageName, extNetworkSuggestions, hasUserApproved);
+        }
+
+        @Override
+        public String toString() {
+            return new StringBuilder("PerAppInfo[ ")
+                    .append("uid=").append(uid)
+                    .append(", packageName=").append(packageName)
+                    .append(", hasUserApproved=").append(hasUserApproved)
+                    .append(", suggestions=").append(extNetworkSuggestions)
+                    .append(" ]")
+                    .toString();
         }
     }
 
@@ -181,7 +210,7 @@ public class WifiNetworkSuggestionsManager {
 
         @Override
         public int hashCode() {
-            return Objects.hash(wns); // perAppInfo not used for equals.
+            return Objects.hash(wns, perAppInfo.uid, perAppInfo.packageName);
         }
 
         @Override
@@ -193,12 +222,14 @@ public class WifiNetworkSuggestionsManager {
                 return false;
             }
             ExtendedWifiNetworkSuggestion other = (ExtendedWifiNetworkSuggestion) obj;
-            return wns.equals(other.wns); // perAppInfo not used for equals.
+            return wns.equals(other.wns)
+                    && perAppInfo.uid == other.perAppInfo.uid
+                    && TextUtils.equals(perAppInfo.packageName, other.perAppInfo.packageName);
         }
 
         @Override
         public String toString() {
-            return "Extended" + wns.toString();
+            return wns.toString();
         }
 
         /**
@@ -334,7 +365,7 @@ public class WifiNetworkSuggestionsManager {
                 if (!extNetworkSuggestions.isEmpty()) {
                     // Start tracking app-op changes from the app if they have active suggestions.
                     startTrackingAppOpsChange(packageName,
-                            extNetworkSuggestions.iterator().next().wns.suggestorUid);
+                            extNetworkSuggestions.iterator().next().perAppInfo.uid);
                 }
                 for (ExtendedWifiNetworkSuggestion ewns : extNetworkSuggestions) {
                     if (ewns.wns.wifiConfiguration.FQDN != null) {
@@ -621,7 +652,7 @@ public class WifiNetworkSuggestionsManager {
         }
         PerAppInfo perAppInfo = mActiveNetworkSuggestionsPerApp.get(packageName);
         if (perAppInfo == null) {
-            perAppInfo = new PerAppInfo(packageName, featureId);
+            perAppInfo = new PerAppInfo(uid, packageName, featureId);
             mActiveNetworkSuggestionsPerApp.put(packageName, perAppInfo);
             if (mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(uid)) {
                 Log.i(TAG, "Setting the carrier provisioning app approved");
@@ -632,12 +663,15 @@ public class WifiNetworkSuggestionsManager {
         }
         Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions =
                 convertToExtendedWnsSet(networkSuggestions, perAppInfo);
+        boolean isLowRamDevice = mContext.getSystemService(ActivityManager.class).isLowRamDevice();
+        int networkSuggestionsMaxPerApp =
+                WifiManager.getMaxNumberOfNetworkSuggestionsPerApp(isLowRamDevice);
         if (perAppInfo.extNetworkSuggestions.size() + extNetworkSuggestions.size()
-                > WifiManager.NETWORK_SUGGESTIONS_MAX_PER_APP) {
+                > networkSuggestionsMaxPerApp) {
             Set<ExtendedWifiNetworkSuggestion> savedNetworkSuggestions =
                     new HashSet<>(perAppInfo.extNetworkSuggestions);
             savedNetworkSuggestions.addAll(extNetworkSuggestions);
-            if (savedNetworkSuggestions.size() > WifiManager.NETWORK_SUGGESTIONS_MAX_PER_APP) {
+            if (savedNetworkSuggestions.size() > networkSuggestionsMaxPerApp) {
                 Log.e(TAG, "Failed to add network suggestions for " + packageName
                         + ". Exceeds max per app, current list size: "
                         + perAppInfo.extNetworkSuggestions.size()
@@ -729,7 +763,7 @@ public class WifiNetworkSuggestionsManager {
             if (ewns.wns.wifiConfiguration.FQDN != null) {
                 // Clear the Passpoint config.
                 mWifiInjector.getPasspointManager().removeProvider(
-                        ewns.wns.suggestorUid,
+                        ewns.perAppInfo.uid,
                         false,
                         ewns.wns.wifiConfiguration.FQDN);
                 removeFromPassPointInfoMap(ewns);
@@ -981,7 +1015,7 @@ public class WifiNetworkSuggestionsManager {
     /**
      * Returns a set of all network suggestions matching the provided scan detail.
      */
-    public @Nullable Set<WifiNetworkSuggestion> getNetworkSuggestionsForScanDetail(
+    public @Nullable Set<ExtendedWifiNetworkSuggestion> getNetworkSuggestionsForScanDetail(
             @NonNull ScanDetail scanDetail) {
         ScanResult scanResult = scanDetail.getScanResult();
         if (scanResult == null) {
@@ -1000,27 +1034,28 @@ public class WifiNetworkSuggestionsManager {
         if (extNetworkSuggestions == null) {
             return null;
         }
-        Set<ExtendedWifiNetworkSuggestion> approvedExtNetworkSuggestions =
-                extNetworkSuggestions
-                        .stream()
-                        .filter(n -> {
-                            if (!n.perAppInfo.hasUserApproved) {
-                                return false;
+        Set<ExtendedWifiNetworkSuggestion> approvedExtNetworkSuggestions = extNetworkSuggestions
+                .stream()
+                .filter(n -> {
+                    if (!n.perAppInfo.hasUserApproved) {
+                        return false;
+                    }
+                    WifiConfiguration config = n.wns.wifiConfiguration;
+                    if (config != null && config.enterpriseConfig != null
+                            && config.enterpriseConfig.requireSimCredential()) {
+                        int subId = mTelephonyUtil.getBestMatchSubscriptionId(config);
+                        if (!mTelephonyUtil.isSimPresent(subId)
+                                || (mTelephonyUtil.requiresImsiEncryption(subId)
+                                        && !mTelephonyUtil.isImsiEncryptionInfoAvailable(subId))) {
+                            if (mVerboseLoggingEnabled) {
+                                Log.v(TAG, "No SIM is matched or IMSI encryption "
+                                        + "info is required, ignore the config.");
                             }
-                            WifiConfiguration config = n.wns.wifiConfiguration;
-                            if (config != null && config.enterpriseConfig != null
-                                    && config.enterpriseConfig.requireSimCredential()) {
-                                int subId = mTelephonyUtil.getBestMatchSubscriptionId(config);
-                                if (!mTelephonyUtil.isSimPresent(subId)) {
-                                    if (mVerboseLoggingEnabled) {
-                                        Log.v(TAG, "No SIM is matched, ignore the config.");
-                                    }
-                                    return false;
-                                }
-                            }
-                            return true;
-                        })
-                        .collect(Collectors.toSet());
+                            return false;
+                        }
+                    }
+                    return true;
+                }).collect(Collectors.toSet());
         // If there is no active notification, check if we need to get approval for any of the apps
         // & send a notification for one of them. If there are multiple packages awaiting approval,
         // we end up picking the first one. The others will be reconsidered in the next iteration.
@@ -1029,7 +1064,7 @@ public class WifiNetworkSuggestionsManager {
             for (ExtendedWifiNetworkSuggestion extNetworkSuggestion : extNetworkSuggestions) {
                 if (sendUserApprovalNotificationIfNotApproved(
                         extNetworkSuggestion.perAppInfo.packageName,
-                        extNetworkSuggestion.wns.suggestorUid)) {
+                        extNetworkSuggestion.perAppInfo.uid)) {
                     break;
                 }
             }
@@ -1042,7 +1077,7 @@ public class WifiNetworkSuggestionsManager {
                     + approvedExtNetworkSuggestions + " for " + scanResult.SSID
                     + "[" + scanResult.capabilities + "]");
         }
-        return convertToWnsSet(approvedExtNetworkSuggestions);
+        return approvedExtNetworkSuggestions;
     }
 
     /**
@@ -1075,7 +1110,7 @@ public class WifiNetworkSuggestionsManager {
             return null;
         }
         if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "getNetworkSuggestionsFoWifiConfiguration Found "
+            Log.v(TAG, "getNetworkSuggestionsForWifiConfiguration Found "
                     + approvedExtNetworkSuggestions + " for " + wifiConfiguration.SSID
                     + wifiConfiguration.FQDN + "[" + wifiConfiguration.allowedKeyManagement + "]");
         }
@@ -1108,32 +1143,35 @@ public class WifiNetworkSuggestionsManager {
      * Helper method to send the post connection broadcast to specified package.
      */
     private void sendPostConnectionBroadcast(
-            String packageName, WifiNetworkSuggestion networkSuggestion) {
+            ExtendedWifiNetworkSuggestion extSuggestion) {
         Intent intent = new Intent(WifiManager.ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION);
-        intent.putExtra(WifiManager.EXTRA_NETWORK_SUGGESTION, networkSuggestion);
+        intent.putExtra(WifiManager.EXTRA_NETWORK_SUGGESTION, extSuggestion.wns);
         // Intended to wakeup the receiving app so set the specific package name.
-        intent.setPackage(packageName);
+        intent.setPackage(extSuggestion.perAppInfo.packageName);
         mContext.sendBroadcastAsUser(
-                intent, UserHandle.getUserHandleForUid(networkSuggestion.suggestorUid));
+                intent, UserHandle.getUserHandleForUid(extSuggestion.perAppInfo.uid));
     }
 
     /**
      * Helper method to send the post connection broadcast to specified package.
      */
     private void sendPostConnectionBroadcastIfAllowed(
-            String packageName, String featureId, WifiNetworkSuggestion matchingSuggestion,
-            @NonNull String message) {
+            ExtendedWifiNetworkSuggestion matchingExtSuggestion, @NonNull String message) {
         try {
             mWifiPermissionsUtil.enforceCanAccessScanResults(
-                    packageName, featureId, matchingSuggestion.suggestorUid, message);
+                    matchingExtSuggestion.perAppInfo.packageName,
+                    matchingExtSuggestion.perAppInfo.featureId,
+                    matchingExtSuggestion.perAppInfo.uid, message);
         } catch (SecurityException se) {
-            Log.w(TAG, "Permission denied for sending post connection broadcast to " + packageName);
+            Log.w(TAG, "Permission denied for sending post connection broadcast to "
+                    + matchingExtSuggestion.perAppInfo.packageName);
             return;
         }
         if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "Sending post connection broadcast to " + packageName);
+            Log.v(TAG, "Sending post connection broadcast to "
+                    + matchingExtSuggestion.perAppInfo.packageName);
         }
-        sendPostConnectionBroadcast(packageName, matchingSuggestion);
+        sendPostConnectionBroadcast(matchingExtSuggestion);
     }
 
     /**
@@ -1166,7 +1204,7 @@ public class WifiNetworkSuggestionsManager {
             // Find subset of network suggestions from app suggested the connected network.
             matchingExtNetworkSuggestions =
                     matchingExtNetworkSuggestions.stream()
-                            .filter(x -> x.wns.suggestorUid == connectedNetwork.creatorUid)
+                            .filter(x -> x.perAppInfo.uid == connectedNetwork.creatorUid)
                             .collect(Collectors.toSet());
             if (matchingExtNetworkSuggestions.isEmpty()) {
                 Log.wtf(TAG, "Current connected network suggestion is missing!");
@@ -1193,9 +1231,7 @@ public class WifiNetworkSuggestionsManager {
         for (ExtendedWifiNetworkSuggestion matchingExtNetworkSuggestion
                 : matchingExtNetworkSuggestionsWithReqAppInteraction) {
             sendPostConnectionBroadcastIfAllowed(
-                    matchingExtNetworkSuggestion.perAppInfo.packageName,
-                    matchingExtNetworkSuggestion.perAppInfo.featureId,
-                    matchingExtNetworkSuggestion.wns,
+                    matchingExtNetworkSuggestion,
                     "Connected to " + matchingExtNetworkSuggestion.wns.wifiConfiguration.SSID
                             + ". featureId is first feature of the app using network suggestions");
         }
@@ -1229,7 +1265,7 @@ public class WifiNetworkSuggestionsManager {
         // Find subset of network suggestions which suggested the connection failure network.
         Set<ExtendedWifiNetworkSuggestion> matchingExtNetworkSuggestionsFromTargetApp =
                 matchingExtNetworkSuggestions.stream()
-                        .filter(x -> x.wns.suggestorUid == network.creatorUid)
+                        .filter(x -> x.perAppInfo.uid == network.creatorUid)
                         .collect(Collectors.toSet());
         if (matchingExtNetworkSuggestionsFromTargetApp.isEmpty()) {
             Log.wtf(TAG, "Current connection failure network suggestion is missing!");
@@ -1240,6 +1276,7 @@ public class WifiNetworkSuggestionsManager {
                 : matchingExtNetworkSuggestionsFromTargetApp) {
             sendConnectionFailureIfAllowed(matchingExtNetworkSuggestion.perAppInfo.packageName,
                     matchingExtNetworkSuggestion.perAppInfo.featureId,
+                    matchingExtNetworkSuggestion.perAppInfo.uid,
                     matchingExtNetworkSuggestion.wns, failureCode);
         }
     }
@@ -1282,11 +1319,12 @@ public class WifiNetworkSuggestionsManager {
      * Send network connection failure event to app when an connection attempt failure.
      * @param packageName package name to send event
      * @param featureId The feature in the package
+     * @param uid uid of the app.
      * @param matchingSuggestion suggestion on this connection failure
      * @param connectionEvent connection failure code
      */
     private void sendConnectionFailureIfAllowed(String packageName, @Nullable String featureId,
-            @NonNull WifiNetworkSuggestion matchingSuggestion, int connectionEvent) {
+            int uid, @NonNull WifiNetworkSuggestion matchingSuggestion, int connectionEvent) {
         ExternalCallbackTracker<ISuggestionConnectionStatusListener> listenersTracker =
                 mSuggestionStatusListenerPerApp.get(packageName);
         if (listenersTracker == null || listenersTracker.getNumCallbacks() == 0) {
@@ -1294,8 +1332,7 @@ public class WifiNetworkSuggestionsManager {
         }
         try {
             mWifiPermissionsUtil.enforceCanAccessScanResults(
-                    packageName, featureId, matchingSuggestion.suggestorUid,
-                    "Connection failure");
+                    packageName, featureId, uid, "Connection failure");
         } catch (SecurityException se) {
             Log.w(TAG, "Permission denied for sending connection failure event to " + packageName);
             return;

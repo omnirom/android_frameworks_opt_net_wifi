@@ -328,13 +328,16 @@ public class BssidBlocklistMonitorTest {
     }
 
     /**
-     * Verify that handleNetworkValidationSuccess resets appropriate blocklist streak counts.
+     * Verify that handleNetworkValidationSuccess resets appropriate blocklist streak counts
+     * and removes the BSSID from blocklist.
      */
     @Test
     public void testNetworkValidationResetsBlocklistStreak() {
+        verifyAddTestBssidToBlocklist();
         mBssidBlocklistMonitor.handleNetworkValidationSuccess(TEST_BSSID_1, TEST_SSID_1);
         verify(mWifiScoreCard).resetBssidBlocklistStreak(TEST_SSID_1, TEST_BSSID_1,
                 BssidBlocklistMonitor.REASON_NETWORK_VALIDATION_FAILURE);
+        assertEquals(0, mBssidBlocklistMonitor.updateAndGetBssidBlocklist().size());
     }
 
     /**
@@ -396,7 +399,8 @@ public class BssidBlocklistMonitorTest {
 
     /**
      * Verify that a BSSID is not added to blocklist as long as
-     * mWifiLastResortWatchdog.shouldIgnoreBssidUpdate is returning true.
+     * mWifiLastResortWatchdog.shouldIgnoreBssidUpdate is returning true, for failure reasons
+     * that are also being tracked by the watchdog.
      */
     @Test
     public void testWatchdogIsGivenChanceToTrigger() {
@@ -411,6 +415,17 @@ public class BssidBlocklistMonitorTest {
         when(mWifiLastResortWatchdog.shouldIgnoreBssidUpdate(anyString())).thenReturn(false);
         handleBssidConnectionFailureMultipleTimes(TEST_BSSID_1, TEST_L2_FAILURE, 1);
         assertTrue(mBssidBlocklistMonitor.updateAndGetBssidBlocklist().contains(TEST_BSSID_1));
+    }
+
+    /**
+     * Verify that non device related errors, and errors that are not monitored by the watchdog
+     * bypasses the watchdog check.
+     */
+    @Test
+    public void testUnrelatedErrorsBypassWatchdogCheck() {
+        when(mWifiLastResortWatchdog.shouldIgnoreBssidUpdate(anyString())).thenReturn(true);
+        verifyAddTestBssidToBlocklist();
+        verify(mWifiLastResortWatchdog, never()).shouldIgnoreBssidUpdate(anyString());
     }
 
     /**

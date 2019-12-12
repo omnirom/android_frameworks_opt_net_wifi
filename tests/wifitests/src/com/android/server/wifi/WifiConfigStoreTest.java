@@ -24,19 +24,18 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.net.MacAddress;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.util.HexEncoding;
 import android.os.Handler;
 import android.os.test.TestLooper;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.internal.util.ArrayUtils;
 import com.android.server.wifi.WifiConfigStore.StoreData;
 import com.android.server.wifi.WifiConfigStore.StoreFile;
+import com.android.server.wifi.util.ArrayUtils;
 import com.android.server.wifi.util.EncryptedData;
 import com.android.server.wifi.util.WifiConfigStoreEncryptionUtil;
 import com.android.server.wifi.util.XmlUtil;
-
-import libcore.util.HexEncoding;
 
 import org.junit.After;
 import org.junit.Before;

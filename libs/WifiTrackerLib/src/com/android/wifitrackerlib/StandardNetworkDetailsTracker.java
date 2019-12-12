@@ -34,6 +34,7 @@ import android.text.TextUtils;
 
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
+import androidx.annotation.WorkerThread;
 import androidx.lifecycle.Lifecycle;
 
 import java.time.Clock;
@@ -61,7 +62,7 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
             String key) {
         super(lifecycle, context, wifiManager, connectivityManager, networkScoreManager,
                 mainHandler, workerHandler, clock, maxScanAgeMillis, scanIntervalMillis, TAG);
-        mChosenEntry = new StandardWifiEntry(mMainHandler, key);
+        mChosenEntry = new StandardWifiEntry(mMainHandler, key, mWifiManager);
     }
 
     @AnyThread
@@ -73,16 +74,18 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
 
     @Override
     protected void handleOnStart() {
-        mScanResultUpdater.update(mWifiManager.getScanResults());
+        cacheNewScanResults();
         conditionallyUpdateScanResults(true /* lastScanSucceeded */);
         conditionallyUpdateConfig();
     }
 
+    @WorkerThread
     @Override
     protected void handleWifiStateChangedAction() {
         conditionallyUpdateScanResults(true /* lastScanSucceeded */);
     }
 
+    @WorkerThread
     @Override
     protected void handleScanResultsAvailableAction(@NonNull Intent intent) {
         checkNotNull(intent, "Intent cannot be null!");
@@ -90,6 +93,7 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
                 intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, true));
     }
 
+    @WorkerThread
     @Override
     protected void handleConfiguredNetworksChangedAction(@NonNull Intent intent) {
         checkNotNull(intent, "Intent cannot be null!");
@@ -110,6 +114,13 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
         }
     }
 
+    @WorkerThread
+    @Override
+    protected void handleNetworkStateChangedAction(@NonNull Intent intent) {
+        // Do nothing.
+        return;
+    }
+
     /**
      * Updates the tracked entry's scan results up to the max scan age (or more, if the last scan
      * was unsuccessful). If Wifi is disabled, the tracked entry's level will be cleared.
@@ -122,11 +133,7 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
 
         long scanAgeWindow = mMaxScanAgeMillis;
         if (lastScanSucceeded) {
-            // Scan succeeded, cache new scans
-            mScanResultUpdater.update(mWifiManager.getScanResults().stream().filter(
-                    scan -> TextUtils.equals(
-                            scanResultToStandardWifiEntryKey(scan), mChosenEntry.getKey()))
-                    .collect(toList()));
+            cacheNewScanResults();
         } else {
             // Scan failed, increase scan age window to prevent WifiEntry list from
             // clearing prematurely.
@@ -145,5 +152,15 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
                         wifiConfigToStandardWifiEntryKey(config), mChosenEntry.getKey()))
                 .findAny();
         mChosenEntry.updateConfig(optionalConfig.orElse(null));
+    }
+
+    /**
+     * Updates ScanResultUpdater with new ScanResults matching mChosenEntry.
+     */
+    private void cacheNewScanResults() {
+        mScanResultUpdater.update(mWifiManager.getScanResults().stream()
+                .filter(scan -> TextUtils.equals(
+                        scanResultToStandardWifiEntryKey(scan), mChosenEntry.getKey()))
+                .collect(toList()));
     }
 }

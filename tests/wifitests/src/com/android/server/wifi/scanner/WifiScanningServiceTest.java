@@ -160,12 +160,13 @@ public class WifiScanningServiceTest extends WifiBaseTest {
         mChannelHelper0 = new PresetKnownBandsChannelHelper(
                 new int[]{2400, 2450},
                 new int[]{5150, 5175},
-                new int[]{5600, 5650, 5660});
+                new int[]{5600, 5650, 5660},
+                new int[]{5945, 5985});
         mChannelHelper1 = new PresetKnownBandsChannelHelper(
                 new int[]{2400, 2450},
                 new int[]{5150, 5175},
-                new int[]{5600, 5660, 5680});  // 5650 is missing from channelHelper0
-
+                new int[]{5600, 5660, 5680}, // 5650 is missing from channelHelper0
+                new int[]{5945, 5985});
         mLooper = new TestLooper();
         mWifiMetrics = new WifiMetrics(mContext, mFrameworkFacade, mClock, mLooper.getLooper(),
                 new WifiAwareMetrics(mClock), new RttMetrics(mClock),
@@ -438,6 +439,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     private static final int MAX_AP_PER_SCAN = 16;
     private void startServiceAndLoadDriver() {
         mWifiScanningServiceImpl.startService();
+        mLooper.dispatchAll();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
         setupAndLoadDriver(TEST_MAX_SCAN_BUCKETS_IN_CAPABILITIES);
     }
@@ -497,6 +499,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     @Test
     public void startService() throws Exception {
         mWifiScanningServiceImpl.startService();
+        mLooper.dispatchAll();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
         verifyNoMoreInteractions(mWifiScannerImplFactory);
 
@@ -511,6 +514,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     @Test
     public void disconnectClientBeforeWifiEnabled() throws Exception {
         mWifiScanningServiceImpl.startService();
+        mLooper.dispatchAll();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
         BidirectionalAsyncChannel controlChannel = connectChannel(mock(Handler.class));
         mLooper.dispatchAll();
@@ -557,6 +561,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     @Test
     public void disconnectClientAfterStartingWifi() throws Exception {
         mWifiScanningServiceImpl.startService();
+        mLooper.dispatchAll();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
         BidirectionalAsyncChannel controlChannel = connectChannel(mock(Handler.class));
         mLooper.dispatchAll();
@@ -595,6 +600,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     @Test
     public void rejectBackgroundScanRequestWhenHalReturnsInvalidCapabilities() throws Exception {
         mWifiScanningServiceImpl.startService();
+        mLooper.dispatchAll();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
 
         setupAndLoadDriver(0);
@@ -1422,7 +1428,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
                 ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 5150, 5150, 5150, 5150);
 
         WifiNative.ScanSettings nativeSettings2and3 = createSingleScanNativeSettingsForChannels(
-                WifiNative.SCAN_TYPE_HIGH_ACCURACY, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN,
+                WifiScanner.SCAN_TYPE_HIGH_ACCURACY, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN,
                 channelsToSpec(2450, 5175, 5150));
         ScanResults results2and3 =
                 ScanResults.merge(WifiScanner.WIFI_BAND_UNSPECIFIED, results2, results3);
@@ -2266,11 +2272,13 @@ public class WifiScanningServiceTest extends WifiBaseTest {
         WifiNative.PnoSettings nativePnoSettings = new WifiNative.PnoSettings();
         nativePnoSettings.min5GHzRssi = requestPnoSettings.min5GHzRssi;
         nativePnoSettings.min24GHzRssi = requestPnoSettings.min24GHzRssi;
+        nativePnoSettings.min6GHzRssi = requestPnoSettings.min6GHzRssi;
         nativePnoSettings.initialScoreMax = requestPnoSettings.initialScoreMax;
         nativePnoSettings.currentConnectionBonus = requestPnoSettings.currentConnectionBonus;
         nativePnoSettings.sameNetworkBonus = requestPnoSettings.sameNetworkBonus;
         nativePnoSettings.secureBonus = requestPnoSettings.secureBonus;
         nativePnoSettings.band5GHzBonus = requestPnoSettings.band5GHzBonus;
+        nativePnoSettings.band6GHzBonus = requestPnoSettings.band6GHzBonus;
         nativePnoSettings.isConnected = requestPnoSettings.isConnected;
         nativePnoSettings.networkList =
                 new WifiNative.PnoNetwork[requestPnoSettings.networkList.length];
@@ -2630,6 +2638,7 @@ public class WifiScanningServiceTest extends WifiBaseTest {
     @Test
     public void rejectRestrictedMessagesFromNonPrivilegedApps() throws Exception {
         mWifiScanningServiceImpl.startService();
+        mLooper.dispatchAll();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
         Handler handler = mock(Handler.class);
         BidirectionalAsyncChannel controlChannel = connectChannel(handler);
