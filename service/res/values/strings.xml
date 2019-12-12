@@ -16,7 +16,7 @@
 
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <!-- Official label of the wifi stack -->
-    <string name="wifiAppLabel" product="default">System Wi-Fi</string>
+    <string name="wifiResourcesAppLabel" product="default">System Wi-Fi Resources</string>
     <!-- A notification is shown when there are open wireless networks nearby.  This is the notification's title. -->
     <plurals name="wifi_available">
         <item quantity="one">Wi-Fi network available</item>
@@ -62,21 +62,6 @@
     <string name="wifi_wakeup_enabled_title">Wi\u2011Fi turned on automatically</string>
     <!--Notification content for when Wi-Fi Wake enables Wi-Fi. %1$s is the SSID of the nearby saved network that triggered the wakeup. -->
     <string name="wifi_wakeup_enabled_content">You\u0027re near a saved network: <xliff:g id="network_ssid">%1$s</xliff:g></string>
-
-    <!-- A notification is shown when the user's softap config has been changed due to underlying
-         hardware restrictions. This is the notifications's title.
-         [CHAR_LIMIT=NONE] -->
-    <string name="wifi_softap_config_change">Changes to your hotspot settings</string>
-
-    <!-- A notification is shown when the user's softap config has been changed due to underlying
-         hardware restrictions. This is the notification's summary message.
-         [CHAR_LIMIT=NONE] -->
-    <string name="wifi_softap_config_change_summary">Your hotspot band has changed.</string>
-
-    <!-- A notification is shown when the user's softap config has been changed due to underlying
-         hardware restrictions. This is the notification's full message.
-         [CHAR_LIMIT=NONE] -->
-    <string name="wifi_softap_config_change_detailed">This device doesn\u2019t support your preference for 5GHz only. Instead, this device will use the 5GHz band when available.</string>
 
      <!-- A notification is shown when a user's selected SSID is later disabled due to connectivity problems.  This is the notification's title / ticker. -->
      <string name="wifi_watchdog_network_disabled">Couldn\'t connect to Wi-Fi</string>

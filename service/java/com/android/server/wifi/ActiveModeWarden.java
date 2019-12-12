@@ -43,7 +43,7 @@ import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
 import com.android.server.wifi.util.WifiPermissionsUtil;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -73,6 +73,7 @@ public class ActiveModeWarden {
     private final BatteryStatsManager mBatteryStatsManager;
     private final ScanRequestProxy mScanRequestProxy;
     private final WifiController mWifiController;
+    private final boolean mScanHiddenNetworksScanOnlyMode;
     private final WifiApConfigStore mWifiApConfigStore;
 
     private WifiManager.SoftApCallback mSoftApCallback;
@@ -117,6 +118,8 @@ public class ActiveModeWarden {
         mBatteryStatsManager = batteryStatsManager;
         mScanRequestProxy = wifiInjector.getScanRequestProxy();
         mWifiController = new WifiController();
+        mScanHiddenNetworksScanOnlyMode = context.getResources().getBoolean(
+                R.bool.config_wifiScanHiddenNetworksScanOnlyMode);
         mWifiApConfigStore = wifiInjector.getWifiApConfigStore();
 
         wifiNative.registerStatusListener(isReady -> {
@@ -472,7 +475,13 @@ public class ActiveModeWarden {
     // Update the scan state based on all active mode managers.
     private void updateClientScanMode() {
         boolean scanEnabled = hasAnyClientModeManager();
-        boolean scanningForHiddenNetworksEnabled = hasAnyClientModeManagerInConnectivityRole();
+        boolean scanningForHiddenNetworksEnabled;
+
+        if (mScanHiddenNetworksScanOnlyMode) {
+            scanningForHiddenNetworksEnabled = hasAnyClientModeManager();
+        } else {
+            scanningForHiddenNetworksEnabled = hasAnyClientModeManagerInConnectivityRole();
+        }
         mScanRequestProxy.enableScanning(scanEnabled, scanningForHiddenNetworksEnabled);
     }
 
@@ -514,8 +523,6 @@ public class ActiveModeWarden {
 
         // Maximum limit to use for timeout delay if the value from overlay setting is too large.
         private static final int MAX_RECOVERY_TIMEOUT_DELAY_MS = 4000;
-
-        private final int mRecoveryDelayMillis;
 
         private static final int BASE = Protocol.BASE_WIFI_CONTROLLER;
 
@@ -562,7 +569,6 @@ public class ActiveModeWarden {
             setLogRecSize(100);
             setLogOnlyTransitions(false);
 
-            mRecoveryDelayMillis = readWifiRecoveryDelay();
         }
 
         @Override
@@ -758,7 +764,7 @@ public class ActiveModeWarden {
                     case CMD_DEFERRED_RECOVERY_RESTART_WIFI:
                         // wait mRecoveryDelayMillis for letting driver clean reset.
                         sendMessageDelayed(CMD_RECOVERY_RESTART_WIFI_CONTINUE,
-                                mRecoveryDelayMillis);
+                                readWifiRecoveryDelay());
                         break;
                     case CMD_RECOVERY_RESTART_WIFI_CONTINUE:
                         if (shouldEnableSta()) {

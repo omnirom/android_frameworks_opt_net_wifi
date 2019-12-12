@@ -29,11 +29,11 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
-import android.net.wifi.IScanResultsListener;
+import android.net.wifi.IScanResultsCallback;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
-import android.os.Binder;
+import android.net.wifi.WifiScanner.ScanSettings.HiddenNetwork;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.UserHandle;
@@ -54,6 +54,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -64,16 +65,16 @@ public class ScanRequestProxyTest extends WifiBaseTest {
     private static final int TEST_UID = 5;
     private static final String TEST_PACKAGE_NAME_1 = "com.test.1";
     private static final String TEST_PACKAGE_NAME_2 = "com.test.2";
-    private static final List<WifiScanner.ScanSettings.HiddenNetwork> TEST_HIDDEN_NETWORKS_LIST =
-            new ArrayList<WifiScanner.ScanSettings.HiddenNetwork>() {{
-                add(new WifiScanner.ScanSettings.HiddenNetwork("test_ssid_1"));
-                add(new WifiScanner.ScanSettings.HiddenNetwork("test_ssid_2"));
+    private static final List<HiddenNetwork> TEST_HIDDEN_NETWORKS_LIST =
+            new ArrayList<HiddenNetwork>() {{
+                add(new HiddenNetwork("test_ssid_1"));
+                add(new HiddenNetwork("test_ssid_2"));
 
             }};
-    private static final List<WifiScanner.ScanSettings.HiddenNetwork> TEST_HIDDEN_NETWORKS_LIST_NS =
-            new ArrayList<WifiScanner.ScanSettings.HiddenNetwork>() {{
-                add(new WifiScanner.ScanSettings.HiddenNetwork("test_ssid_3"));
-                add(new WifiScanner.ScanSettings.HiddenNetwork("test_ssid_4"));
+    private static final List<HiddenNetwork> TEST_HIDDEN_NETWORKS_LIST_NS =
+            new ArrayList<HiddenNetwork>() {{
+                add(new HiddenNetwork("test_ssid_3"));
+                add(new HiddenNetwork("test_ssid_4"));
             }};
 
     @Mock private Context mContext;
@@ -87,8 +88,8 @@ public class ScanRequestProxyTest extends WifiBaseTest {
     @Mock private Clock mClock;
     @Mock private FrameworkFacade mFrameworkFacade;
     @Mock private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
-    @Mock private IScanResultsListener mScanResultsListener;
-    @Mock private IScanResultsListener mAnotherScanResultsListener;
+    @Mock private IScanResultsCallback mScanResultsCallback;
+    @Mock private IScanResultsCallback mAnotherScanResultsCallback;
     @Mock private TestLooper mLooper;
     @Mock private IBinder mBinder;
     @Mock private IBinder mAnotherBinder;
@@ -146,6 +147,8 @@ public class ScanRequestProxyTest extends WifiBaseTest {
             new ScanRequestProxy(mContext, mAppOps, mActivityManager, mWifiInjector,
                     mWifiConfigManager, mWifiPermissionsUtil, mWifiMetrics, mClock,
                     mFrameworkFacade, new Handler(mLooper.getLooper()));
+        when(mScanResultsCallback.asBinder()).thenReturn(mBinder);
+        when(mAnotherScanResultsCallback.asBinder()).thenReturn(mAnotherBinder);
     }
 
     @After
@@ -875,31 +878,30 @@ public class ScanRequestProxyTest extends WifiBaseTest {
         assertNotNull(scanSettings);
         assertEquals(WifiScanner.WIFI_BAND_BOTH_WITH_DFS, scanSettings.band);
         if (expectHighAccuracyType) {
-            assertEquals(WifiScanner.TYPE_HIGH_ACCURACY, scanSettings.type);
+            assertEquals(WifiScanner.SCAN_TYPE_HIGH_ACCURACY, scanSettings.type);
         } else {
-            assertEquals(WifiScanner.TYPE_LOW_LATENCY, scanSettings.type);
+            assertEquals(WifiScanner.SCAN_TYPE_LOW_LATENCY, scanSettings.type);
         }
         assertEquals(WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN
                 | WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT, scanSettings.reportEvents);
-        List<WifiScanner.ScanSettings.HiddenNetwork> hiddenNetworkList =
+        List<HiddenNetwork> hiddenNetworkList =
                 new ArrayList<>();
         hiddenNetworkList.addAll(TEST_HIDDEN_NETWORKS_LIST);
         hiddenNetworkList.addAll(TEST_HIDDEN_NETWORKS_LIST_NS);
         if (expectHiddenNetworks) {
-            assertNotNull(scanSettings.hiddenNetworks);
-            assertEquals(hiddenNetworkList.size(), scanSettings.hiddenNetworks.length);
-            for (int i = 0; i < scanSettings.hiddenNetworks.length; i++) {
-                validateHiddenNetworkInList(scanSettings.hiddenNetworks[i], hiddenNetworkList);
+            assertEquals(hiddenNetworkList.size(), scanSettings.hiddenNetworks.size());
+            for (HiddenNetwork hiddenNetwork : scanSettings.hiddenNetworks) {
+                validateHiddenNetworkInList(hiddenNetwork, hiddenNetworkList);
             }
         } else {
-            assertNull(scanSettings.hiddenNetworks);
+            assertEquals(Collections.emptyList(), scanSettings.hiddenNetworks);
         }
     }
 
     private void validateHiddenNetworkInList(
-            WifiScanner.ScanSettings.HiddenNetwork expectedHiddenNetwork,
-            List<WifiScanner.ScanSettings.HiddenNetwork> hiddenNetworkList) {
-        for (WifiScanner.ScanSettings.HiddenNetwork hiddenNetwork : hiddenNetworkList) {
+            HiddenNetwork expectedHiddenNetwork,
+            List<HiddenNetwork> hiddenNetworkList) {
+        for (HiddenNetwork hiddenNetwork : hiddenNetworkList) {
             if (hiddenNetwork.ssid.equals(expectedHiddenNetwork.ssid)) {
                 return;
             }
@@ -957,85 +959,68 @@ public class ScanRequestProxyTest extends WifiBaseTest {
     }
 
     /**
-     * Test register two different scan result listener, all of them will receive the event.
+     * Test register two different scan result Callback, all of them will receive the event.
      */
     @Test
-    public void testScanSuccessWithMultipleListener() throws Exception {
-        Binder binder1 = new Binder();
-        Binder binder2 = new Binder();
-        mScanRequestProxy.registerScanResultsListener(binder1, mScanResultsListener,
-                mScanResultsListener.hashCode());
-        mScanRequestProxy.registerScanResultsListener(binder2, mAnotherScanResultsListener,
-                mAnotherScanResultsListener.hashCode());
-        mLooper.dispatchAll();
+    public void testScanSuccessWithMultipleCallback() throws Exception {
+        mScanRequestProxy.registerScanResultsCallback(mScanResultsCallback);
+        mScanRequestProxy.registerScanResultsCallback(mAnotherScanResultsCallback);
         testStartScanSuccess();
         // Verify the scan results processing.
         mGlobalScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas1);
         mLooper.dispatchAll();
-        verify(mScanResultsListener).onScanResultsAvailable();
-        verify(mAnotherScanResultsListener).onScanResultsAvailable();
         validateScanResultsAvailableBroadcastSent(true);
 
-        reset(mScanResultsListener);
-        reset(mAnotherScanResultsListener);
-        mScanRequestProxy.unregisterScanResultsListener(mScanResultsListener.hashCode());
+        mScanRequestProxy.unregisterScanResultsCallback(mScanResultsCallback);
+        mGlobalScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas2);
         mLooper.dispatchAll();
-        mGlobalScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas1);
-        mLooper.dispatchAll();
-        verify(mScanResultsListener, never()).onScanResultsAvailable();
-        verify(mAnotherScanResultsListener).onScanResultsAvailable();
         validateScanResultsAvailableBroadcastSent(true);
+        verify(mScanResultsCallback).onScanResultsAvailable();
+        verify(mAnotherScanResultsCallback, times(2)).onScanResultsAvailable();
     }
 
     /**
-     * Verify that registering twice with same listenerIdentifier will replace the first listener.
+     * Verify that registering twice with same Callback will replace the first Callback.
      */
     @Test
-    public void testReplacesOldListenerWithNewListenerWhenRegisteringTwice() throws Exception {
-        mScanRequestProxy.registerScanResultsListener(mBinder, mScanResultsListener,
-                mScanResultsListener.hashCode());
-        mScanRequestProxy.registerScanResultsListener(mAnotherBinder, mAnotherScanResultsListener,
-                mScanResultsListener.hashCode());
+    public void testReplacesOldListenerWithNewCallbackWhenRegisteringTwice() throws Exception {
+        mScanRequestProxy.registerScanResultsCallback(mScanResultsCallback);
+        mScanRequestProxy.registerScanResultsCallback(mScanResultsCallback);
         mLooper.dispatchAll();
         // Verify old listener is replaced.
-        verify(mBinder).linkToDeath(any(), anyInt());
+        verify(mBinder, times(2)).linkToDeath(any(), anyInt());
         verify(mBinder).unlinkToDeath(any(), anyInt());
-        verify(mAnotherBinder).linkToDeath(any(), anyInt());
-        verify(mAnotherBinder, never()).unlinkToDeath(any(), anyInt());
         testStartScanSuccess();
         // Verify the scan results processing.
         mGlobalScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas1);
         mLooper.dispatchAll();
-        verify(mScanResultsListener, never()).onScanResultsAvailable();
-        verify(mAnotherScanResultsListener).onScanResultsAvailable();
+        verify(mScanResultsCallback).onScanResultsAvailable();
         validateScanResultsAvailableBroadcastSent(true);
     }
 
     /**
-     * Test registered scan result listener will be unregistered when calling binder is died.
+     * Test registered scan result Callback will be unregistered when calling binder is died.
      */
     @Test
-    public void testUnregisterScanResultListenerOnBinderDied() throws Exception {
-        final int callbackIdentifier = 1;
+    public void testUnregisterScanResultCallbackOnBinderDied() throws Exception {
         ArgumentCaptor<IBinder.DeathRecipient> drCaptor =
                 ArgumentCaptor.forClass(IBinder.DeathRecipient.class);
-        mScanRequestProxy.registerScanResultsListener(mBinder, mScanResultsListener,
-                callbackIdentifier);
+        mScanRequestProxy.registerScanResultsCallback(mScanResultsCallback);
         verify(mBinder).linkToDeath(drCaptor.capture(), anyInt());
         testStartScanSuccess();
         // Verify the scan results processing.
         mGlobalScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas1);
         mLooper.dispatchAll();
-        verify(mScanResultsListener).onScanResultsAvailable();
         validateScanResultsAvailableBroadcastSent(true);
-        reset(mScanResultsListener);
+        verify(mScanResultsCallback).onScanResultsAvailable();
         drCaptor.getValue().binderDied();
         mLooper.dispatchAll();
-        verify(mBinder).unlinkToDeath(drCaptor.capture(), eq(0));
+        reset(mScanResultsCallback);
         // Verify the scan results processing.
         mGlobalScanListenerArgumentCaptor.getValue().onResults(mTestScanDatas1);
         mLooper.dispatchAll();
-        verify(mScanResultsListener, never()).onScanResultsAvailable();
         validateScanResultsAvailableBroadcastSent(true);
+        verify(mScanResultsCallback, never()).onScanResultsAvailable();
+
     }
 }

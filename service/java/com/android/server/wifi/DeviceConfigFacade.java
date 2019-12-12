@@ -19,10 +19,13 @@ package com.android.server.wifi;
 import android.content.Context;
 import android.os.Handler;
 import android.provider.DeviceConfig;
+import android.util.ArraySet;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
+import java.util.Collections;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -49,7 +52,6 @@ public class DeviceConfigFacade {
     public static final int DEFAULT_DATA_STALL_TX_PER_THR = 90;
     // Default threshold of CCA level above which to trigger a data stall in percentage
     public static final int DEFAULT_DATA_STALL_CCA_LEVEL_THR = 100;
-    private boolean mDefaultMacRandomizationAggressiveModeSsidWhitelistEnabled;
 
     // Cached values of fields updated via updateDeviceConfigFlags()
     private boolean mIsAbnormalConnectionBugreportEnabled;
@@ -60,12 +62,11 @@ public class DeviceConfigFacade {
     private int mDataStallRxTputThrKbps;
     private int mDataStallTxPerThr;
     private int mDataStallCcaLevelThr;
+    private Set<String> mRandomizationFlakySsidHotlist;
 
     public DeviceConfigFacade(Context context, Handler handler, WifiMetrics wifiMetrics) {
         mContext = context;
         mWifiMetrics = wifiMetrics;
-        mDefaultMacRandomizationAggressiveModeSsidWhitelistEnabled = mContext.getResources()
-                .getBoolean(R.bool.config_wifi_aggressive_randomization_ssid_whitelist_enabled);
 
         updateDeviceConfigFlags();
         DeviceConfig.addOnPropertiesChangedListener(
@@ -82,9 +83,6 @@ public class DeviceConfigFacade {
         mAbnormalConnectionDurationMs = DeviceConfig.getInt(NAMESPACE,
                 "abnormal_connection_duration_ms",
                 DEFAULT_ABNORMAL_CONNECTION_DURATION_MS);
-        mIsAggressiveMacRandomizationSsidWhitelistEnabled = DeviceConfig.getBoolean(NAMESPACE,
-                "aggressive_randomization_ssid_whitelist_enabled",
-                mDefaultMacRandomizationAggressiveModeSsidWhitelistEnabled);
 
         mDataStallDurationMs = DeviceConfig.getInt(NAMESPACE,
                 "data_stall_duration_ms", DEFAULT_DATA_STALL_DURATION_MS);
@@ -101,6 +99,25 @@ public class DeviceConfigFacade {
         mWifiMetrics.setDataStallRxTputThrKbps(mDataStallRxTputThrKbps);
         mWifiMetrics.setDataStallTxPerThr(mDataStallTxPerThr);
         mWifiMetrics.setDataStallCcaLevelThr(mDataStallCcaLevelThr);
+
+        createUnmodifiableRandomizationFlakySsidHotlist();
+    }
+
+    private void createUnmodifiableRandomizationFlakySsidHotlist() {
+        String ssidHotlist = DeviceConfig.getString(NAMESPACE,
+                "randomization_flaky_ssid_hotlist", "");
+        mRandomizationFlakySsidHotlist = new ArraySet<String>();
+        String[] ssidHotlistArray = ssidHotlist.split(",");
+        for (int i = 0; i < ssidHotlistArray.length; i++) {
+            String cur = ssidHotlistArray[i];
+            if (cur.length() == 0) {
+                continue;
+            }
+            // Make sure the SSIDs are quoted. Server side should not quote ssids.
+            mRandomizationFlakySsidHotlist.add("\"" + cur + "\"");
+        }
+        mRandomizationFlakySsidHotlist =
+                Collections.unmodifiableSet(mRandomizationFlakySsidHotlist);
     }
 
     /**
@@ -121,7 +138,10 @@ public class DeviceConfigFacade {
      * Gets the feature flag for aggressive MAC randomization per-SSID opt-in.
      */
     public boolean isAggressiveMacRandomizationSsidWhitelistEnabled() {
-        return mIsAggressiveMacRandomizationSsidWhitelistEnabled;
+        return DeviceConfig.getBoolean(NAMESPACE,
+                "aggressive_randomization_ssid_whitelist_enabled",
+                mContext.getResources().getBoolean(
+                        R.bool.config_wifi_aggressive_randomization_ssid_whitelist_enabled));
     }
 
     /**
@@ -157,5 +177,12 @@ public class DeviceConfigFacade {
      */
     public int getDataStallCcaLevelThr() {
         return mDataStallCcaLevelThr;
+    }
+
+    /**
+     * Gets the Set of SSIDs in the flaky SSID hotlist.
+     */
+    public Set<String> getRandomizationFlakySsidHotlist() {
+        return mRandomizationFlakySsidHotlist;
     }
 }

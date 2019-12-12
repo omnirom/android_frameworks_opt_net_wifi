@@ -31,7 +31,6 @@ import com.android.server.wifi.WifiConfigManager;
 import com.android.server.wifi.WifiInjector;
 import com.android.server.wifi.WifiNetworkSelector;
 import com.android.server.wifi.util.ScanResultUtil;
-import com.android.server.wifi.util.TelephonyUtil;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -118,11 +117,6 @@ public class PasspointNetworkEvaluator implements WifiNetworkSelector.NetworkEva
             Pair<PasspointProvider, PasspointMatch> bestProvider =
                     mPasspointManager.matchProvider(scanResult);
             if (bestProvider != null) {
-                if (bestProvider.first.isSimCredential()
-                        && !TelephonyUtil.isSimPresent(mSubscriptionManager)) {
-                    // Skip providers backed by SIM credential when SIM is not present.
-                    continue;
-                }
                 candidateList.add(new PasspointNetworkCandidate(
                         bestProvider.first, bestProvider.second, scanDetail));
             }
@@ -175,23 +169,19 @@ public class PasspointNetworkEvaluator implements WifiNetworkSelector.NetworkEva
         }
 
         WifiConfiguration existingNetwork = mWifiConfigManager.getConfiguredNetwork(
-                config.configKey());
+                config.getKey());
         if (existingNetwork != null) {
             WifiConfiguration.NetworkSelectionStatus status =
                     existingNetwork.getNetworkSelectionStatus();
-            if (!status.isNetworkEnabled()) {
-                boolean isSuccess = mWifiConfigManager.tryEnableNetwork(existingNetwork.networkId);
-                if (isSuccess) {
-                    return existingNetwork;
-                }
+            if (!(status.isNetworkEnabled()
+                    || mWifiConfigManager.tryEnableNetwork(existingNetwork.networkId))) {
                 localLog("Current configuration for the Passpoint AP " + config.SSID
                         + " is disabled, skip this candidate");
                 return null;
             }
-            return existingNetwork;
         }
 
-        // Add the newly created WifiConfiguration to WifiConfigManager.
+        // Add or update with the newly created WifiConfiguration to WifiConfigManager.
         NetworkUpdateResult result;
         if (config.fromWifiNetworkSuggestion) {
             result = mWifiConfigManager.addOrUpdateNetwork(
@@ -201,8 +191,9 @@ public class PasspointNetworkEvaluator implements WifiNetworkSelector.NetworkEva
         }
         if (!result.isSuccess()) {
             localLog("Failed to add passpoint network");
-            return null;
+            return existingNetwork;
         }
+
         mWifiConfigManager.enableNetwork(result.getNetworkId(), false, Process.WIFI_UID, null);
         mWifiConfigManager.setNetworkCandidateScanResult(result.getNetworkId(),
                 networkInfo.mScanDetail.getScanResult(), 0);

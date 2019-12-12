@@ -23,7 +23,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.net.MacAddress;
 import android.net.wifi.SupplicantState;
-import android.net.wifi.WifiSsid;
+import android.net.wifi.WifiManager;
 import android.util.ArrayMap;
 import android.util.Base64;
 import android.util.Log;
@@ -379,11 +379,76 @@ public class WifiScoreCard {
         doWrites();
     }
 
+    /**
+     * Records the last successful L2 connection timestamp for a BSSID.
+     * @return the previous BSSID connection time.
+     */
+    public long setBssidConnectionTimestampMs(String ssid, String bssid, long timeMs) {
+        PerBssid perBssid = lookupBssid(ssid, bssid);
+        long prev = perBssid.lastConnectionTimestampMs;
+        perBssid.lastConnectionTimestampMs = timeMs;
+        return prev;
+    }
+
+    /**
+     * Returns the last successful L2 connection time for this BSSID.
+     */
+    public long getBssidConnectionTimestampMs(String ssid, String bssid) {
+        return lookupBssid(ssid, bssid).lastConnectionTimestampMs;
+    }
+
+    /**
+     * Increment the blocklist streak count for a failure reason on an AP.
+     * @return the updated count
+     */
+    public int incrementBssidBlocklistStreak(String ssid, String bssid,
+            @BssidBlocklistMonitor.FailureReason int reason) {
+        PerBssid perBssid = lookupBssid(ssid, bssid);
+        return ++perBssid.blocklistStreakCount[reason];
+    }
+
+    /**
+     * Get the blocklist streak count for a failure reason on an AP.
+     * @return the blocklist streak count
+     */
+    public int getBssidBlocklistStreak(String ssid, String bssid,
+            @BssidBlocklistMonitor.FailureReason int reason) {
+        return lookupBssid(ssid, bssid).blocklistStreakCount[reason];
+    }
+
+    /**
+     * Clear the blocklist streak count for a failure reason on an AP.
+     */
+    public void resetBssidBlocklistStreak(String ssid, String bssid,
+            @BssidBlocklistMonitor.FailureReason int reason) {
+        lookupBssid(ssid, bssid).blocklistStreakCount[reason] = 0;
+    }
+
+    /**
+     * Clear the blocklist streak count for all APs that belong to this SSID.
+     */
+    public void resetBssidBlocklistStreakForSsid(@NonNull String ssid) {
+        Iterator<Map.Entry<MacAddress, PerBssid>> it = mApForBssid.entrySet().iterator();
+        while (it.hasNext()) {
+            PerBssid perBssid = it.next().getValue();
+            if (!ssid.equals(perBssid.ssid)) {
+                continue;
+            }
+            for (int i = 0; i < perBssid.blocklistStreakCount.length; i++) {
+                perBssid.blocklistStreakCount[i] = 0;
+            }
+        }
+    }
+
     final class PerBssid {
         public int id;
         public final String l2Key;
         public final String ssid;
         public final MacAddress bssid;
+        public final int[] blocklistStreakCount =
+                new int[BssidBlocklistMonitor.NUMBER_REASON_CODES];
+        // The wall clock time in milliseconds for the last successful l2 connection.
+        public long lastConnectionTimestampMs;
         public boolean changed;
         public boolean referenced;
 
@@ -541,7 +606,7 @@ public class WifiScoreCard {
     // TODO should be private, but WifiCandidates needs it
     @NonNull PerBssid lookupBssid(String ssid, String bssid) {
         MacAddress mac;
-        if (ssid == null || WifiSsid.NONE.equals(ssid) || bssid == null) {
+        if (ssid == null || WifiManager.UNKNOWN_SSID.equals(ssid) || bssid == null) {
             return mDummyPerBssid;
         }
         try {

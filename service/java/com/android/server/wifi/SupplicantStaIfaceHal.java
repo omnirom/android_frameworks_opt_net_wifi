@@ -99,12 +99,6 @@ public class SupplicantStaIfaceHal {
     @VisibleForTesting
     public static final String HAL_INSTANCE_NAME = "default";
     @VisibleForTesting
-    public static final String INIT_START_PROPERTY = "ctl.start";
-    @VisibleForTesting
-    public static final String INIT_STOP_PROPERTY = "ctl.stop";
-    @VisibleForTesting
-    public static final String INIT_SERVICE_NAME = "wpa_supplicant";
-    @VisibleForTesting
     public static final long WAIT_FOR_DEATH_TIMEOUT_MS = 50L;
     @VisibleForTesting
     static final String PMK_CACHE_EXPIRATION_ALARM_TAG = "PMK_CACHE_EXPIRATION_TIMER";
@@ -139,7 +133,7 @@ public class SupplicantStaIfaceHal {
     private long mDeathRecipientCookie = 0;
     private final Context mContext;
     private final WifiMonitor mWifiMonitor;
-    private final PropertyService mPropertyService;
+    private final FrameworkFacade mFrameworkFacade;
     private final Handler mEventHandler;
     private DppEventCallback mDppCallback = null;
     private final Clock mClock;
@@ -205,11 +199,11 @@ public class SupplicantStaIfaceHal {
             };
 
     public SupplicantStaIfaceHal(Context context, WifiMonitor monitor,
-                                 PropertyService propertyService, Handler handler,
+                                 FrameworkFacade frameworkFacade, Handler handler,
                                  Clock clock) {
         mContext = context;
         mWifiMonitor = monitor;
-        mPropertyService = propertyService;
+        mFrameworkFacade = frameworkFacade;
         mEventHandler = handler;
         mClock = clock;
 
@@ -908,7 +902,7 @@ public class SupplicantStaIfaceHal {
                 return startDaemon_V1_1();
             } else {
                 Log.i(TAG, "Starting supplicant using init");
-                mPropertyService.set(INIT_START_PROPERTY, INIT_SERVICE_NAME);
+                mFrameworkFacade.startSupplicant();
                 return true;
             }
         }
@@ -950,7 +944,7 @@ public class SupplicantStaIfaceHal {
                 terminate_V1_1();
             } else {
                 Log.i(TAG, "Terminating supplicant using init");
-                mPropertyService.set(INIT_STOP_PROPERTY, INIT_SERVICE_NAME);
+                mFrameworkFacade.stopSupplicant();
             }
 
             // Now wait for death listener callback to confirm that it's dead.
@@ -1175,7 +1169,7 @@ public class SupplicantStaIfaceHal {
                 Log.e(TAG, "Exception while saving config params: " + config, e);
             }
             if (!saveSuccess) {
-                loge("Failed to save variables for: " + config.configKey());
+                loge("Failed to save variables for: " + config.getKey());
                 if (!removeAllNetworks(ifaceName)) {
                     loge("Failed to remove all networks on failure.");
                 }
@@ -1199,7 +1193,7 @@ public class SupplicantStaIfaceHal {
     public boolean connectToNetwork(@NonNull String ifaceName, @NonNull WifiConfiguration config) {
         synchronized (mLock) {
             boolean isAscii = WifiGbk.isAllAscii(WifiGbk.getSsidBytes(config.SSID, "UTF-8")); // wifigbk++
-            logd("connectToNetwork " + config.configKey() + " isAscii=" + isAscii);
+            logd("connectToNetwork " + config.getKey() + " isAscii=" + isAscii);
             WifiConfiguration currentConfig = getCurrentNetworkLocalConfig(ifaceName);
             if (WifiConfigurationUtil.isSameNetwork(config, currentConfig) && isAscii) {
                 String networkSelectionBSSID = config.getNetworkSelectionStatus()
@@ -1238,7 +1232,7 @@ public class SupplicantStaIfaceHal {
                 Pair<SupplicantStaNetworkHal, WifiConfiguration> pair =
                         addNetworkAndSaveConfig(ifaceName, config);
                 if (pair == null) {
-                    loge("Failed to add/save network configuration: " + config.configKey());
+                    loge("Failed to add/save network configuration: " + config.getKey());
                     return false;
                 }
                 mCurrentNetworkRemoteHandles.put(ifaceName, pair.first);
@@ -1249,7 +1243,7 @@ public class SupplicantStaIfaceHal {
                     checkSupplicantStaNetworkAndLogFailure(ifaceName, "connectToNetwork");
             if (networkHandle == null) {
                 loge("No valid remote network handle for network configuration: "
-                        + config.configKey());
+                        + config.getKey());
                 return false;
             }
 
@@ -1263,7 +1257,7 @@ public class SupplicantStaIfaceHal {
             }
 
             if (!networkHandle.select()) {
-                loge("Failed to select network configuration: " + config.configKey());
+                loge("Failed to select network configuration: " + config.getKey());
                 return false;
             }
             return true;
@@ -1291,12 +1285,12 @@ public class SupplicantStaIfaceHal {
                 return connectToNetwork(ifaceName, config);
             }
             String bssid = config.getNetworkSelectionStatus().getNetworkSelectionBSSID();
-            logd("roamToNetwork" + config.configKey() + " (bssid " + bssid + ")");
+            logd("roamToNetwork" + config.getKey() + " (bssid " + bssid + ")");
 
             SupplicantStaNetworkHal networkHandle =
                     checkSupplicantStaNetworkAndLogFailure(ifaceName, "roamToNetwork");
             if (networkHandle == null || !networkHandle.setBssid(bssid)) {
-                loge("Failed to set new bssid on network: " + config.configKey());
+                loge("Failed to set new bssid on network: " + config.getKey());
                 return false;
             }
             if (!reassociate(ifaceName)) {
@@ -1315,9 +1309,7 @@ public class SupplicantStaIfaceHal {
     public void removeNetworkCachedData(int networkId) {
         synchronized (mLock) {
             logd("Remove cached HAL data for config id " + networkId);
-            if (mPmkCacheEntries.remove(networkId) != null) {
-                updatePmkCacheExpiration();
-            }
+            removePmkCacheEntry(networkId);
         }
     }
 
@@ -3097,6 +3089,12 @@ public class SupplicantStaIfaceHal {
         mPmkCacheEntries.put(networkId,
                 new PmkCacheStoreData(expirationTimeInSec, serializedEntry));
         updatePmkCacheExpiration();
+    }
+
+    protected void removePmkCacheEntry(int networkId) {
+        if (mPmkCacheEntries.remove(networkId) != null) {
+            updatePmkCacheExpiration();
+        }
     }
 
     private void updatePmkCacheExpiration() {

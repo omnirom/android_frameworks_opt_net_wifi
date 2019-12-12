@@ -25,6 +25,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
 import android.net.MacAddress;
+import android.net.wifi.IApInterfaceEventCallback;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApInfo;
 import android.net.wifi.WifiClient;
@@ -48,9 +49,8 @@ import com.android.internal.util.WakeupMessage;
 import com.android.server.wifi.WifiNative.InterfaceCallback;
 import com.android.server.wifi.WifiNative.SoftApListener;
 import com.android.server.wifi.util.ApConfigUtil;
-import com.android.server.wifi.wificond.IApInterfaceEventCallback;
 import com.android.server.wifi.wificond.NativeWifiClient;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -752,7 +752,7 @@ public class SoftApManager implements ActiveModeManager {
 
                 mConnectedClients = new ArrayList<>(convertedClients);
                 Log.d(TAG, "The connected wifi stations have changed with count: "
-                        + clients.size());
+                        + clients.size() + ": " + convertedClients);
 
                 if (mSoftApCallback != null) {
                     mSoftApCallback.onConnectedClientsChanged(mConnectedClients);

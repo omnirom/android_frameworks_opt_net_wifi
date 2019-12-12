@@ -54,6 +54,7 @@ import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.net.MacAddress;
 import android.net.Uri;
+import android.net.wifi.IApInterfaceEventCallback;
 import android.net.wifi.SoftApInfo;
 import android.net.wifi.WifiClient;
 import android.net.wifi.WifiConfiguration;
@@ -65,9 +66,8 @@ import android.provider.Settings;
 import androidx.test.filters.SmallTest;
 
 import com.android.internal.util.WakeupMessage;
-import com.android.server.wifi.wificond.IApInterfaceEventCallback;
 import com.android.server.wifi.wificond.NativeWifiClient;
-import com.android.wifi.R;
+import com.android.wifi.resources.R;
 
 import org.junit.Before;
 import org.junit.Test;

@@ -22,12 +22,12 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
-import android.net.wifi.IScanResultsListener;
+import android.net.wifi.IScanResultsCallback;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
 import android.os.Handler;
-import android.os.IBinder;
+import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.WorkSource;
@@ -37,7 +37,6 @@ import android.util.Log;
 import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.util.ArrayList;
@@ -107,8 +106,8 @@ public class ScanRequestProxy {
             new ArrayMap();
     // Scan results cached from the last full single scan request.
     private final List<ScanResult> mLastScanResults = new ArrayList<>();
-    // external ScanResultListener tracker
-    private final ExternalCallbackTracker<IScanResultsListener> mRegisteredScanResultsListeners;
+    // external ScanResultCallback tracker
+    private final RemoteCallbackList<IScanResultsCallback> mRegisteredScanResultsCallbacks;
     // Global scan listener for listening to all scan requests.
     private class GlobalScanListener implements WifiScanner.ScanListener {
         @Override
@@ -143,7 +142,7 @@ public class ScanRequestProxy {
                 mLastScanResults.clear();
                 mLastScanResults.addAll(Arrays.asList(scanResults));
                 sendScanResultBroadcast(true);
-                sendScanResultsAvailableToListeners();
+                sendScanResultsAvailableToCallbacks();
             }
         }
 
@@ -251,7 +250,7 @@ public class ScanRequestProxy {
         mClock = clock;
         mFrameworkFacade = frameworkFacade;
         mThrottleEnabledSettingObserver = new ThrottleEnabledSettingObserver(handler);
-        mRegisteredScanResultsListeners = new ExternalCallbackTracker<>(handler);
+        mRegisteredScanResultsCallbacks = new RemoteCallbackList<>();
     }
 
     /**
@@ -485,21 +484,19 @@ public class ScanRequestProxy {
         WifiScanner.ScanSettings settings = new WifiScanner.ScanSettings();
         // Scan requests from apps with network settings will be of high accuracy type.
         if (fromSettingsOrSetupWizard) {
-            settings.type = WifiScanner.TYPE_HIGH_ACCURACY;
+            settings.type = WifiScanner.SCAN_TYPE_HIGH_ACCURACY;
         }
         // always do full scans
         settings.band = WifiScanner.WIFI_BAND_BOTH_WITH_DFS;
         settings.reportEvents = WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN
                 | WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT;
         if (mScanningForHiddenNetworksEnabled) {
+            settings.hiddenNetworks.clear();
             // retrieve the list of hidden network SSIDs from saved network to scan for, if enabled.
-            List<WifiScanner.ScanSettings.HiddenNetwork> hiddenNetworkList =
-                    new ArrayList<>(mWifiConfigManager.retrieveHiddenNetworkList());
+            settings.hiddenNetworks.addAll(mWifiConfigManager.retrieveHiddenNetworkList());
             // retrieve the list of hidden network SSIDs from Network suggestion to scan for.
-            hiddenNetworkList.addAll(
+            settings.hiddenNetworks.addAll(
                     mWifiInjector.getWifiNetworkSuggestionsManager().retrieveHiddenNetworkList());
-            settings.hiddenNetworks = hiddenNetworkList.toArray(
-                    new WifiScanner.ScanSettings.HiddenNetwork[0]);
         }
         mWifiScanner.startScan(settings, new ScanRequestProxyScanListener(), workSource);
         return true;
@@ -537,36 +534,32 @@ public class ScanRequestProxy {
         mLastScanTimestampsForFgApps.remove(Pair.create(uid, packageName));
     }
 
-    private void sendScanResultsAvailableToListeners() {
-        Iterator<IScanResultsListener> iterator =
-                mRegisteredScanResultsListeners.getCallbacks().iterator();
-        while (iterator.hasNext()) {
-            IScanResultsListener listener = iterator.next();
+    private void sendScanResultsAvailableToCallbacks() {
+        int itemCount = mRegisteredScanResultsCallbacks.beginBroadcast();
+        for (int i = 0; i < itemCount; i++) {
             try {
-                listener.onScanResultsAvailable();
+                mRegisteredScanResultsCallbacks.getBroadcastItem(i).onScanResultsAvailable();
             } catch (RemoteException e) {
                 Log.e(TAG, "onScanResultsAvailable: remote exception -- " + e);
             }
         }
+        mRegisteredScanResultsCallbacks.finishBroadcast();
     }
 
     /**
-     * Register a listener on scan event
-     * @param binder IBinder instance to allow cleanup if the app dies.
-     * @param listener IScanResultListener instance to add.
-     * @param listenerIdentifier identifier of the listener, should be hash code of package name.
+     * Register a callback on scan event
+     * @param callback IScanResultListener instance to add.
      * @return true if succeed otherwise false.
      */
-    public boolean registerScanResultsListener(IBinder binder, IScanResultsListener listener,
-            int listenerIdentifier) {
-        return mRegisteredScanResultsListeners.add(binder, listener, listenerIdentifier);
+    public boolean registerScanResultsCallback(IScanResultsCallback callback) {
+        return mRegisteredScanResultsCallbacks.register(callback);
     }
 
     /**
-     * Unregister a listener on scan event
-     * @param listenerIdentifier identifier of the listener, should be hash code of package name.
+     * Unregister a callback on scan event
+     * @param callback IScanResultListener instance to add.
      */
-    public void unregisterScanResultsListener(int listenerIdentifier) {
-        mRegisteredScanResultsListeners.remove(listenerIdentifier);
+    public void unregisterScanResultsCallback(IScanResultsCallback callback) {
+        mRegisteredScanResultsCallbacks.unregister(callback);
     }
 }

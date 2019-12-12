@@ -16,16 +16,18 @@
 
 package com.android.server.wifi.util;
 
+import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.net.InetAddresses;
 import android.net.IpConfiguration;
 import android.net.IpConfiguration.IpAssignment;
 import android.net.IpConfiguration.ProxySettings;
 import android.net.LinkAddress;
 import android.net.MacAddress;
-import android.net.NetworkUtils;
 import android.net.ProxyInfo;
 import android.net.RouteInfo;
 import android.net.StaticIpConfiguration;
+import android.net.Uri;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiEnterpriseConfig;
@@ -45,8 +47,10 @@ import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Utils for manipulating XML data. This is essentially a wrapper over XmlUtils provided by core.
@@ -337,7 +341,6 @@ public class XmlUtil {
         public static final String XML_TAG_DEFAULT_GW_MAC_ADDRESS = "DefaultGwMacAddress";
         public static final String XML_TAG_VALIDATED_INTERNET_ACCESS = "ValidatedInternetAccess";
         public static final String XML_TAG_NO_INTERNET_ACCESS_EXPECTED = "NoInternetAccessExpected";
-        public static final String XML_TAG_USER_APPROVED = "UserApproved";
         public static final String XML_TAG_METERED_HINT = "MeteredHint";
         public static final String XML_TAG_METERED_OVERRIDE = "MeteredOverride";
         public static final String XML_TAG_USE_EXTERNAL_SCORES = "UseExternalScores";
@@ -430,7 +433,7 @@ public class XmlUtil {
                 XmlSerializer out, WifiConfiguration configuration,
                 @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
                 throws XmlPullParserException, IOException {
-            XmlUtil.writeNextValue(out, XML_TAG_CONFIG_KEY, configuration.configKey());
+            XmlUtil.writeNextValue(out, XML_TAG_CONFIG_KEY, configuration.getKey());
             XmlUtil.writeNextValue(out, XML_TAG_SSID, configuration.SSID);
             XmlUtil.writeNextValue(out, XML_TAG_BSSID, configuration.BSSID);
             XmlUtil.writeNextValue(out, XML_TAG_SHARE_THIS_AP, configuration.shareThisAp);
@@ -504,7 +507,6 @@ public class XmlUtil {
             XmlUtil.writeNextValue(
                     out, XML_TAG_NO_INTERNET_ACCESS_EXPECTED,
                     configuration.noInternetAccessExpected);
-            XmlUtil.writeNextValue(out, XML_TAG_USER_APPROVED, configuration.userApproved);
             XmlUtil.writeNextValue(out, XML_TAG_METERED_HINT, configuration.meteredHint);
             XmlUtil.writeNextValue(out, XML_TAG_METERED_OVERRIDE, configuration.meteredOverride);
             XmlUtil.writeNextValue(
@@ -680,9 +682,6 @@ public class XmlUtil {
                         case XML_TAG_NO_INTERNET_ACCESS_EXPECTED:
                             configuration.noInternetAccessExpected = (boolean) value;
                             break;
-                        case XML_TAG_USER_APPROVED:
-                            configuration.userApproved = (int) value;
-                            break;
                         case XML_TAG_METERED_HINT:
                             configuration.meteredHint = (boolean) value;
                             break;
@@ -800,6 +799,19 @@ public class XmlUtil {
         public static final String XML_TAG_PROXY_PAC_FILE = "ProxyPac";
         public static final String XML_TAG_PROXY_EXCLUSION_LIST = "ProxyExclusionList";
 
+        private static List<String> parseProxyExclusionListString(
+                @Nullable String exclusionListString) {
+            if (exclusionListString == null) {
+                return Collections.emptyList();
+            } else {
+                return Arrays.asList(exclusionListString.toLowerCase(Locale.ROOT).split(","));
+            }
+        }
+
+        private static String generateProxyExclusionListString(@NonNull String[] exclusionList) {
+            return TextUtils.join(",", exclusionList);
+        }
+
         /**
          * Write the static IP configuration data elements to XML stream.
          */
@@ -875,7 +887,8 @@ public class XmlUtil {
                             ipConfiguration.httpProxy.getPort());
                     XmlUtil.writeNextValue(
                             out, XML_TAG_PROXY_EXCLUSION_LIST,
-                            ipConfiguration.httpProxy.getExclusionListAsString());
+                            generateProxyExclusionListString(
+                                    ipConfiguration.httpProxy.getExclusionList()));
                     break;
                 case PAC:
                     XmlUtil.writeNextValue(
@@ -902,7 +915,7 @@ public class XmlUtil {
                     (Integer) XmlUtil.readNextValueWithName(in, XML_TAG_LINK_PREFIX_LENGTH);
             if (linkAddressString != null && linkPrefixLength != null) {
                 LinkAddress linkAddress = new LinkAddress(
-                        NetworkUtils.numericToInetAddress(linkAddressString),
+                        InetAddresses.parseNumericAddress(linkAddressString),
                         linkPrefixLength);
                 if (linkAddress.getAddress() instanceof Inet4Address) {
                     builder.setIpAddress(linkAddress);
@@ -914,9 +927,10 @@ public class XmlUtil {
                     (String) XmlUtil.readNextValueWithName(in, XML_TAG_GATEWAY_ADDRESS);
             if (gatewayAddressString != null) {
                 InetAddress gateway =
-                        NetworkUtils.numericToInetAddress(gatewayAddressString);
+                        InetAddresses.parseNumericAddress(gatewayAddressString);
                 RouteInfo route = new RouteInfo(null, gateway, null, RouteInfo.RTN_UNICAST);
-                if (route.isIPv4Default()) {
+                if (route.isDefaultRoute()
+                        && route.getDestination().getAddress() instanceof Inet4Address) {
                     builder.setGateway(gateway);
                 } else {
                     Log.w(TAG, "Non-IPv4 default route: " + route);
@@ -928,7 +942,7 @@ public class XmlUtil {
                 List<InetAddress> dnsServerAddresses = new ArrayList<>();
                 for (String dnsServerAddressString : dnsServerAddressesString) {
                     InetAddress dnsServerAddress =
-                            NetworkUtils.numericToInetAddress(dnsServerAddressString);
+                            InetAddresses.parseNumericAddress(dnsServerAddressString);
                     dnsServerAddresses.add(dnsServerAddress);
                 }
                 builder.setDnsServers(dnsServerAddresses);
@@ -980,12 +994,15 @@ public class XmlUtil {
                             (String) XmlUtil.readNextValueWithName(
                                     in, XML_TAG_PROXY_EXCLUSION_LIST);
                     ipConfiguration.setHttpProxy(
-                            new ProxyInfo(proxyHost, proxyPort, proxyExclusionList));
+                            ProxyInfo.buildDirectProxy(
+                                    proxyHost, proxyPort,
+                                    parseProxyExclusionListString(proxyExclusionList)));
                     break;
                 case PAC:
                     String proxyPacFile =
                             (String) XmlUtil.readNextValueWithName(in, XML_TAG_PROXY_PAC_FILE);
-                    ipConfiguration.setHttpProxy(new ProxyInfo(proxyPacFile));
+                    ipConfiguration.setHttpProxy(
+                            ProxyInfo.buildPacProxy(Uri.parse(proxyPacFile)));
                     break;
                 case NONE:
                 case UNASSIGNED:
@@ -1082,8 +1099,7 @@ public class XmlUtil {
                     Arrays.asList(NetworkSelectionStatus.QUALITY_NETWORK_SELECTION_STATUS)
                             .indexOf(statusString);
             int disableReason =
-                    Arrays.asList(NetworkSelectionStatus.QUALITY_NETWORK_SELECTION_DISABLE_REASON)
-                            .indexOf(disableReasonString);
+                    NetworkSelectionStatus.getDisableReasonByString(disableReasonString);
 
             // If either of the above codes are invalid or if the network was temporarily disabled
             // (blacklisted), restore the status as enabled. We don't want to persist blacklists

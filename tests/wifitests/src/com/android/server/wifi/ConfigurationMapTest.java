@@ -155,7 +155,7 @@ public class ConfigurationMapTest extends WifiBaseTest {
         // visible to the current user.
         for (WifiConfiguration config : configsForCurrentUser) {
             assertEquals(config, mConfigs.getForCurrentUser(config.networkId));
-            assertEquals(config, mConfigs.getByConfigKeyForCurrentUser(config.configKey()));
+            assertEquals(config, mConfigs.getByConfigKeyForCurrentUser(config.getKey()));
             final boolean wasEphemeral = config.ephemeral;
             config.ephemeral = false;
             assertNull(getEphemeralForCurrentUser(config.SSID));
@@ -168,7 +168,7 @@ public class ConfigurationMapTest extends WifiBaseTest {
         // visible to the current user.
         for (WifiConfiguration config : configsNotForCurrentUser) {
             assertNull(mConfigs.getForCurrentUser(config.networkId));
-            assertNull(mConfigs.getByConfigKeyForCurrentUser(config.configKey()));
+            assertNull(mConfigs.getByConfigKeyForCurrentUser(config.getKey()));
             final boolean wasEphemeral = config.ephemeral;
             config.ephemeral = false;
             assertNull(getEphemeralForCurrentUser(config.SSID));
@@ -202,7 +202,7 @@ public class ConfigurationMapTest extends WifiBaseTest {
         WifiConfiguration retrievedConfig =
                 mConfigs.getByScanResultForCurrentUser(scanResult);
         assertNotNull(retrievedConfig);
-        assertEquals(config.configKey(), retrievedConfig.configKey());
+        assertEquals(config.getKey(), retrievedConfig.getKey());
     }
 
     /**
@@ -281,7 +281,6 @@ public class ConfigurationMapTest extends WifiBaseTest {
         verifyScanResultMatchWithNetwork(WifiConfigurationTestUtil.createPskNetwork());
         verifyScanResultMatchWithNetwork(WifiConfigurationTestUtil.createWepNetwork());
         verifyScanResultMatchWithNetwork(WifiConfigurationTestUtil.createEapNetwork());
-        verifyScanResultMatchWithNetwork(WifiConfigurationTestUtil.createSaeNetwork());
     }
 
     /**
@@ -333,55 +332,5 @@ public class ConfigurationMapTest extends WifiBaseTest {
 
         mConfigs.clear();
         assertNull(mConfigs.getByScanResultForCurrentUser(scanResult));
-    }
-
-    /**
-     * Verifies that {@link ConfigurationMap#getPskNetworkByScanResultForCurrentUser(ScanResult)}
-     * can positively match a PSK network for transition mode AP.
-     */
-    @Test
-    public void testFindPskNetworkFromSaeScanResult() {
-        final String wpa2Wpa3TransitionSsid = "\"WPA3-Transition\"";
-        WifiConfiguration saePskConfig =
-                WifiConfigurationTestUtil.createSaeNetwork(wpa2Wpa3TransitionSsid);
-        WifiConfiguration pskConfig =
-                WifiConfigurationTestUtil.createPskNetwork(wpa2Wpa3TransitionSsid);
-        mConfigs.put(saePskConfig);
-        mConfigs.put(pskConfig);
-
-        ScanDetail scanDetail = WifiConfigurationTestUtil
-                .createScanDetailForWpa2Wpa3TransitionModeNetwork(saePskConfig,
-                        "AA:BB:CC:DD:CC:BB", -40, 2402, 0, 1);
-        ScanResult scanResult = scanDetail.getScanResult();
-
-        WifiConfiguration retrievedConfig =
-                mConfigs.getPskNetworkByScanResultForCurrentUser(scanResult);
-        assertNotNull(retrievedConfig);
-        assertEquals(pskConfig.configKey(), retrievedConfig.configKey());
-    }
-
-    /**
-     * Verifies that {@link ConfigurationMap#getOpenNetworkByScanResultForCurrentUser(ScanResult)}
-     * can positively match a PSK network for transition mode AP.
-     */
-    @Test
-    public void testFindOpenNetworkFromOweScanResult() {
-        final String oweTransitionSsid = "\"OWE-Transition\"";
-        WifiConfiguration oweOpenConfig =
-                WifiConfigurationTestUtil.createOweNetwork(oweTransitionSsid);
-        WifiConfiguration openConfig =
-                WifiConfigurationTestUtil.createOpenNetwork(oweTransitionSsid);
-        mConfigs.put(oweOpenConfig);
-        mConfigs.put(openConfig);
-
-        ScanDetail scanDetail = WifiConfigurationTestUtil
-                .createScanDetailForOweTransitionModeNetwork(oweOpenConfig,
-                        "AA:BB:CC:DD:CC:BB", -40, 2402, 0, 1);
-        ScanResult scanResult = scanDetail.getScanResult();
-
-        WifiConfiguration retrievedConfig =
-                mConfigs.getOpenNetworkByScanResultForCurrentUser(scanResult);
-        assertNotNull(retrievedConfig);
-        assertEquals(openConfig.configKey(), retrievedConfig.configKey());
     }
 }

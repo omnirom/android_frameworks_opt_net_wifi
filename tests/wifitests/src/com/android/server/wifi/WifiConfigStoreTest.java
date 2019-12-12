@@ -99,7 +99,6 @@ public class WifiConfigStoreTest extends WifiBaseTest {
                     + "<null name=\"DefaultGwMacAddress\" />\n"
                     + "<boolean name=\"ValidatedInternetAccess\" value=\"false\" />\n"
                     + "<boolean name=\"NoInternetAccessExpected\" value=\"false\" />\n"
-                    + "<int name=\"UserApproved\" value=\"0\" />\n"
                     + "<boolean name=\"MeteredHint\" value=\"false\" />\n"
                     + "<int name=\"MeteredOverride\" value=\"0\" />\n"
                     + "<boolean name=\"UseExternalScores\" value=\"false\" />\n"
@@ -534,7 +533,7 @@ public class WifiConfigStoreTest extends WifiBaseTest {
 
         // Setup user store XML bytes.
         String xmlString = String.format(TEST_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid, openNetwork.creatorName,
                 openNetwork.getRandomizedMacAddress(), testSsid.replaceAll("\"", "&quot;"));
@@ -581,7 +580,7 @@ public class WifiConfigStoreTest extends WifiBaseTest {
 
         // Setup expected XML bytes.
         String xmlString = String.format(TEST_DATA_XML_STRING_FORMAT,
-                openNetwork.configKey().replaceAll("\"", "&quot;"),
+                openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid, openNetwork.creatorName,
                 openNetwork.getRandomizedMacAddress(), testSsid.replaceAll("\"", "&quot;"));
@@ -881,11 +880,6 @@ public class WifiConfigStoreTest extends WifiBaseTest {
         public void storeRawDataToWrite(byte[] data) {
             mStoreBytes = data;
             mStoreWritten = false;
-        }
-
-        @Override
-        public boolean exists() {
-            return (mStoreBytes != null);
         }
 
         @Override
