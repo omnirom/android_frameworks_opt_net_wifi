@@ -98,6 +98,7 @@ public class WifiController extends StateMachine {
 
     // Vendor specific message. start from Base + 30
     static final int CMD_DELAY_DISCONNECT                       = BASE + 30;
+    static final int CMD_ADD_WIFI_SET                           = BASE + 31;
 
     private DefaultState mDefaultState = new DefaultState();
     private StaEnabledState mStaEnabledState = new StaEnabledState();
@@ -271,6 +272,7 @@ public class WifiController extends StateMachine {
                 case CMD_RECOVERY_RESTART_WIFI_CONTINUE:
                 case CMD_DEFERRED_RECOVERY_RESTART_WIFI:
                 case CMD_DELAY_DISCONNECT:
+                case CMD_ADD_WIFI_SET:
                     break;
                 case CMD_RECOVERY_DISABLE_WIFI:
                     log("Recovery has been throttled, disable wifi");
@@ -475,6 +477,13 @@ public class WifiController extends StateMachine {
         }
 
         @Override
+        public void exit() {
+            log("StaEnabledState.exit()");
+            // Disable all additional stations.
+            mActiveModeWarden.disableStation(0);
+        }
+
+        @Override
         public boolean processMessage(Message msg) {
             switch (msg.what) {
                 case CMD_WIFI_TOGGLED:
@@ -487,6 +496,14 @@ public class WifiController extends StateMachine {
                             transitionTo(mStaDisabledState);
                         }
                     }
+                    break;
+                case CMD_ADD_WIFI_SET:
+                    int staId = msg.arg1;
+                    int enable = msg.arg2;
+                    if (enable == 1)
+                        mActiveModeWarden.enableStation(staId);
+                    else
+                        mActiveModeWarden.disableStation(staId);
                     break;
                 case CMD_AIRPLANE_TOGGLED:
                     // airplane mode toggled on is handled in the default state

@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static android.net.wifi.WifiManager.WIFI_FEATURE_CONTROL_ROAMING;
 
+import android.annotation.NonNull;
 import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
@@ -39,9 +40,11 @@ public class WifiConnectivityHelper {
     private boolean mFirmwareRoamingSupported = false;
     private int mMaxNumBlacklistBssid = INVALID_LIST_SIZE;
     private int mMaxNumWhitelistSsid = INVALID_LIST_SIZE;
+    private String mInterfaceName;
 
     WifiConnectivityHelper(WifiNative wifiNative) {
         mWifiNative = wifiNative;
+        mInterfaceName = null;
     }
 
     /**
@@ -60,7 +63,7 @@ public class WifiConnectivityHelper {
         mMaxNumWhitelistSsid = INVALID_LIST_SIZE;
 
         long fwFeatureSet =
-                mWifiNative.getSupportedFeatureSet(mWifiNative.getClientInterfaceName());
+                mWifiNative.getSupportedFeatureSet(getInterfaceName());
         Log.d(TAG, "Firmware supported feature set: " + Long.toHexString(fwFeatureSet));
 
         if ((fwFeatureSet & WIFI_FEATURE_CONTROL_ROAMING) == 0) {
@@ -69,7 +72,7 @@ public class WifiConnectivityHelper {
         }
 
         WifiNative.RoamingCapabilities roamingCap = new WifiNative.RoamingCapabilities();
-        if (mWifiNative.getRoamingCapabilities(mWifiNative.getClientInterfaceName(), roamingCap)) {
+        if (mWifiNative.getRoamingCapabilities(getInterfaceName(), roamingCap)) {
             if (roamingCap.maxBlacklistSize < 0 || roamingCap.maxWhitelistSize < 0) {
                 Log.e(TAG, "Invalid firmware roaming capabilities: max num blacklist bssid="
                         + roamingCap.maxBlacklistSize + " max num whitelist ssid="
@@ -160,7 +163,7 @@ public class WifiConnectivityHelper {
         roamConfig.blacklistBssids = blacklistBssids;
         roamConfig.whitelistSsids = whitelistSsids;
 
-        return mWifiNative.configureRoaming(mWifiNative.getClientInterfaceName(), roamConfig);
+        return mWifiNative.configureRoaming(getInterfaceName(), roamConfig);
     }
 
     /**
@@ -170,6 +173,21 @@ public class WifiConnectivityHelper {
      * @param networkId network id of the network to be removed from supplicant.
      */
     public void removeNetworkIfCurrent(int networkId) {
-        mWifiNative.removeNetworkIfCurrent(mWifiNative.getClientInterfaceName(), networkId);
+        mWifiNative.removeNetworkIfCurrent(getInterfaceName(), networkId);
+    }
+
+    /**
+     * Set interface name to be used for helper methods in this class.
+     *
+     * @param iface interface name to be used for WifiNative API calls.
+     */
+    public void setInterfaceName(@NonNull String iface) {
+        mInterfaceName = iface;
+    }
+
+    private String getInterfaceName() {
+        return (mInterfaceName == null) ?
+                  mWifiNative.getClientInterfaceName() :
+                  mInterfaceName;
     }
 }

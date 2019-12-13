@@ -184,4 +184,18 @@ public class ExternalCallbackTracker<T> {
         }
         mCallbacks.clear();
     }
+
+    /**
+     * Retrieve all the callback objects in the tracker with proper mask
+     */
+    public List<T> getCallbacks(int mask) {
+        List<T> callbacks = new ArrayList<>();
+        for(int callbackIdentifier: mCallbacks.keySet()) {
+            if (mask == (callbackIdentifier & mask)) {
+                callbacks.add(mCallbacks.get(callbackIdentifier).getCallback());
+            }
+        }
+        return callbacks;
+    }
+
 }

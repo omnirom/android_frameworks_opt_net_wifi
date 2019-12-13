@@ -26,6 +26,7 @@ import android.util.LocalLog;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.TelephonyUtil;
+import android.net.wifi.WifiManager;
 
 import java.util.List;
 
@@ -130,11 +131,20 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         }
 
         // Last user selection award.
-        int lastUserSelectedNetworkId = mWifiConfigManager.getLastSelectedNetwork();
+        int lastUserSelectedNetworkId;
+        long timeDifference;
+        if (mStaId == WifiManager.STA_PRIMARY) {
+            lastUserSelectedNetworkId = mWifiConfigManager.getLastSelectedNetwork();
+            timeDifference = mClock.getElapsedSinceBootMillis()
+                             - mWifiConfigManager.getLastSelectedTimeStamp();
+        } else {
+            lastUserSelectedNetworkId = mWifiConfigManager.qtiGetLastSelectedNetwork(mStaId);
+            timeDifference = mClock.getElapsedSinceBootMillis()
+                             - mWifiConfigManager.qtiGetLastSelectedTimeStamp(mStaId);
+        }
+
         if (lastUserSelectedNetworkId != WifiConfiguration.INVALID_NETWORK_ID
                 && lastUserSelectedNetworkId == network.networkId) {
-            long timeDifference = mClock.getElapsedSinceBootMillis()
-                    - mWifiConfigManager.getLastSelectedTimeStamp();
             if (timeDifference > 0) {
                 int decay = (int) (timeDifference / LAST_SELECTION_AWARD_DECAY_MSEC);
                 int bonus = Math.max(mLastSelectionAward - decay, 0);
@@ -199,7 +209,7 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
             // the scores and use the highest one as the ScanResult's score.
             // TODO(b/112196799): this has side effects, rather not do that in an evaluator
             WifiConfiguration network =
-                    mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail);
+                    mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail, mStaId);
 
             if (network == null) {
                 continue;
@@ -282,5 +292,10 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
             localLog("did not see any good candidates.");
         }
         return candidate;
+    }
+
+    private int mStaId = WifiManager.STA_PRIMARY;
+    public void setStaId(int id) {
+        mStaId = id;
     }
 }
