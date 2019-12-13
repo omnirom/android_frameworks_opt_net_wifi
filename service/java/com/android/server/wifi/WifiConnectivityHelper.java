@@ -25,6 +25,9 @@ import com.android.internal.annotations.VisibleForTesting;
 
 import java.util.ArrayList;
 
+import android.net.wifi.WifiConfiguration;
+import java.util.HashMap;
+
 /**
  * This class provides helper functions for Wifi connectivity related modules to
  * access WifiNative. It starts with firmware roaming. TODO(b/34819513): Move operations
@@ -190,4 +193,9 @@ public class WifiConnectivityHelper {
                   mWifiNative.getClientInterfaceName() :
                   mInterfaceName;
     }
+
+    public boolean updateLinkedNetworksIfCurrent(int networkId, HashMap<String, WifiConfiguration> linkedConfigurations) {
+        return mWifiNative.updateLinkedNetworksIfCurrent(mWifiNative.getClientInterfaceName(), networkId, linkedConfigurations);
+    }
+
 }

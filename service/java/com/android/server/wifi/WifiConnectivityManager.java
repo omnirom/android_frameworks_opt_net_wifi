@@ -768,7 +768,8 @@ public class WifiConnectivityManager {
         if (currentConnectedNetwork != null
                 && (currentConnectedNetwork.networkId == candidate.networkId
                 //TODO(b/36788683): re-enable linked configuration check
-                /* || currentConnectedNetwork.isLinked(candidate) */)) {
+                 || (mConfigManager.isWhitelistNetworkRoamingFeatureEnabled()
+                      && currentConnectedNetwork.isLinked(candidate)))) {
             // Framework initiates roaming only if firmware doesn't support
             // {@link android.net.wifi.WifiManager#WIFI_FEATURE_CONTROL_ROAMING}.
             if (mConnectivityHelper.isFirmwareRoamingSupported()) {
@@ -1446,8 +1447,27 @@ public class WifiConnectivityManager {
                     + blacklistedBssids.size());
         }
 
+        int maxWhitelistSize = mConnectivityHelper.getMaxNumWhitelistSsid();
+        if (maxWhitelistSize <= 0) {
+            Log.wtf(TAG, "Invalid max SSID whitelist size:  " + maxWhitelistSize);
+            return;
+        }
+
+        ArrayList<String> whitelistSsids = new ArrayList<String>(buildSsidWhitelist());
+        int whitelistSize = whitelistSsids.size();
+
+        if (whitelistSize > maxWhitelistSize) {
+            Log.wtf(TAG, "Attempt to write " + whitelistSize + " whitelisted SSIDs, max size is "
+                    + maxWhitelistSize);
+
+            whitelistSsids = new ArrayList<String>(whitelistSsids.subList(0,
+                    maxWhitelistSize));
+            localLog("Trim down SSID whitelist size from " + whitelistSize + " to "
+                    + whitelistSsids.size());
+        }
+
         if (!mConnectivityHelper.setFirmwareRoamingConfiguration(blacklistedBssids,
-                new ArrayList<String>())) {  // TODO(b/36488259): SSID whitelist management.
+                whitelistSsids)) {  // TODO(b/36488259): SSID whitelist management.
             localLog("Failed to set firmware roaming configuration.");
         }
     }
@@ -1585,5 +1605,72 @@ public class WifiConnectivityManager {
         mOpenNetworkNotifier.dump(fd, pw, args);
         mCarrierNetworkNotifier.dump(fd, pw, args);
         mCarrierNetworkConfig.dump(fd, pw, args);
+    }
+
+    public void configureWhitelistNetworks() {
+        if (!mConfigManager.isWhitelistNetworkRoamingFeatureEnabled()) {
+            Log.i(TAG, "whitelist roaming feature disabled");
+            return;
+        }
+
+        WifiConfiguration currentConnectedNetwork = mConfigManager
+            .getConfiguredNetwork(mWifiInfo.getNetworkId());
+
+        Log.i(TAG, "configureWhitelistNetworks");
+        if (currentConnectedNetwork == null) {
+            return;
+        }
+
+        HashMap<String, WifiConfiguration> whitelistNetworkConfigs = new HashMap<>();
+
+        if (currentConnectedNetwork.linkedConfigurations == null) {
+            Log.i(TAG, "Empty linked networks");
+            mConnectivityHelper.updateLinkedNetworksIfCurrent(
+                                    mWifiInfo.getNetworkId(), whitelistNetworkConfigs);
+            updateFirmwareRoamingConfiguration();
+            return;
+        }
+
+        Log.i(TAG, "Current network: " + currentConnectedNetwork.configKey());
+        Log.i(TAG, "Linked networks:");
+        for (String configKey : currentConnectedNetwork.linkedConfigurations.keySet()) {
+             Log.i(TAG, configKey);
+             whitelistNetworkConfigs.put(
+                     configKey, mConfigManager.getConfiguredNetworkWithoutMasking(configKey));
+        }
+
+        if (mConnectivityHelper.updateLinkedNetworksIfCurrent(
+                                   mWifiInfo.getNetworkId(), whitelistNetworkConfigs)) {
+             Log.i(TAG, "update firmware roaming configuration with whitelist networks");
+             updateFirmwareRoamingConfiguration();
+        }
+    }
+
+    /**
+     * Compile and return a hashset of the whitelisted SSIDs
+     */
+    private HashSet<String> buildSsidWhitelist() {
+        HashSet<String> whitelistedSsids = new HashSet<String>();
+
+        WifiConfiguration currentConnectedNetwork = mConfigManager
+            .getConfiguredNetwork(mWifiInfo.getNetworkId());
+
+        if (!mConfigManager.isWhitelistNetworkRoamingFeatureEnabled()
+                || currentConnectedNetwork == null
+                || !currentConnectedNetwork.validatedInternetAccess
+                || currentConnectedNetwork.linkedConfigurations == null) {
+            return whitelistedSsids;
+        }
+        // Add current network
+        Log.i(TAG, "buildSsidWhitelist: Add SSID: " + currentConnectedNetwork.SSID);
+        whitelistedSsids.add(currentConnectedNetwork.SSID);
+        // Add linked networks
+        for (String configKey : currentConnectedNetwork.linkedConfigurations.keySet()) {
+             Log.i(TAG, "buildSsidWhitelist: Add SSID: "
+                                + configKey.substring(0, configKey.lastIndexOf('"') + 1));
+             whitelistedSsids.add(configKey.substring(0, configKey.lastIndexOf('"') + 1));
+        }
+
+        return whitelistedSsids;
     }
 }

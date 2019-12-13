@@ -3829,4 +3829,16 @@ public class WifiNative {
         }
         return false;
     }
+
+    /** updates linked networks of the |networkId| in supplicant if it's the current network,
+     * if the current configured network matches |networkId|.
+     *
+     * @param ifaceName Name of the interface.
+     * @param networkId network id of the network to be updated from supplicant.
+     * @param linkedNetworks linked networks to be configured in supplicant.
+     */
+    public boolean updateLinkedNetworksIfCurrent(@NonNull String ifaceName, int networkId,
+                    HashMap<String, WifiConfiguration> linkedNetworks) {
+        return mSupplicantStaIfaceHal.updateLinkedNetworksIfCurrent(ifaceName, networkId, linkedNetworks);
+    }
 }

@@ -353,6 +353,10 @@ public class ClientModeImpl extends StateMachine {
     // wifi connects or fails to connect
     private boolean mIsAutoRoaming = false;
 
+    // Indicates that driver is attempting to whitelit roam, set true on whitelist roam BSSID
+    // associated, set false when wifi connects or fails to connect
+    private boolean mIsWhitelistRoaming = false;
+
     // Roaming failure count
     private int mRoamFailCount = 0;
 
@@ -4393,16 +4397,19 @@ public class ClientModeImpl extends StateMachine {
                     }
                     break;
                 case CMD_REMOVE_NETWORK:
+                    netId = message.arg1;
+                    WifiConfiguration removedConfig = mWifiConfigManager.getConfiguredNetwork(netId);
                     if (!deleteNetworkConfigAndSendReply(message, false)) {
                         // failed to remove the config and caller was notified
                         mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_FAIL;
                         break;
                     }
                     //  we successfully deleted the network config
-                    netId = message.arg1;
                     if (netId == mTargetNetworkId || netId == mLastNetworkId) {
                         // Disconnect and let autojoin reselect a new network
                         sendMessage(CMD_DISCONNECT);
+                    } else {
+                        updateWhitelistNetworksIfRequired(removedConfig);
                     }
                     break;
                 case CMD_ENABLE_NETWORK:
@@ -4734,18 +4741,23 @@ public class ClientModeImpl extends StateMachine {
                                 }
                             }
                         }
+                    } else if (result.isSuccess() && result.hasCredentialChanged()) {
+                        updateWhitelistNetworksIfRequired(mWifiConfigManager.getConfiguredNetwork(netId));
                     }
                     break;
                 case WifiManager.FORGET_NETWORK:
+                    netId = message.arg1;
+                    WifiConfiguration forgetConfig = mWifiConfigManager.getConfiguredNetwork(netId);
                     if (!deleteNetworkConfigAndSendReply(message, true)) {
                         // Caller was notified of failure, nothing else to do
                         break;
                     }
                     // the network was deleted
-                    netId = message.arg1;
                     if (netId == mTargetNetworkId || netId == mLastNetworkId) {
                         // Disconnect and let autojoin reselect a new network
                         sendMessage(CMD_DISCONNECT);
+                    } else {
+                        updateWhitelistNetworksIfRequired(forgetConfig);
                     }
                     break;
                 case CMD_ASSOCIATED_BSSID:
@@ -5354,6 +5366,7 @@ public class ClientModeImpl extends StateMachine {
             mCountryCode.setReadyForChange(false);
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_ASSOCIATED);
             mWifiScoreCard.noteNetworkAgentCreated(mWifiInfo, mNetworkAgent.netId);
+            mIsWhitelistRoaming = false;
         }
 
         @Override
@@ -5502,7 +5515,13 @@ public class ClientModeImpl extends StateMachine {
                     mLastNetworkId = message.arg1;
                     mWifiInfo.setNetworkId(mLastNetworkId);
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
-                    if (!mLastBssid.equals(message.obj)) {
+                    if (mIsWhitelistRoaming) {
+                        mIsWhitelistRoaming = false;
+                        mTargetNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
+                        mTargetWifiConfiguration = null;
+                        clearTargetBssid("WhitelistRoamingCompleted");
+                    }
+                    if (!mLastBssid.equals((String) message.obj)) {
                         updateWifiGenerationInfo();
                         mLastBssid = (String) message.obj;
                         sendNetworkStateChangeBroadcast(mLastBssid);
@@ -5591,6 +5610,10 @@ public class ClientModeImpl extends StateMachine {
                         logw("Associated command w/o BSSID");
                         break;
                     }
+
+                    if (checkAndHandleWhitelistRoaming((String) message.obj))
+                        break;
+
                     mLastBssid = (String) message.obj;
                     if (mLastBssid != null && (mWifiInfo.getBSSID() == null
                             || !mLastBssid.equals(mWifiInfo.getBSSID()))) {
@@ -6146,6 +6169,9 @@ public class ClientModeImpl extends StateMachine {
                                             .NETWORK_SELECTION_ENABLE);
                             mWifiConfigManager.setNetworkValidatedInternetAccess(
                                     config.networkId, true);
+                        }
+                        if (getConnectedNetworkDefaultGatewayMacAddress()) {
+                            configureWhitelistNetworks();
                         }
                     }
                     break;
@@ -7253,5 +7279,99 @@ public class ClientModeImpl extends StateMachine {
                 }
             }
         }
+    }
+
+    private boolean getConnectedNetworkDefaultGatewayMacAddress() {
+        WifiConfiguration currentConfig = getCurrentWifiConfiguration();
+        if (currentConfig == null) {
+            logi("can't fetch config of current network id " + mLastNetworkId);
+            return false;
+        }
+
+        // Find IPv4 default gateway.
+        String gatewayIPv4 = null;
+        for (RouteInfo routeInfo : mLinkProperties.getRoutes()) {
+            if (routeInfo.isIPv4Default() && routeInfo.hasGateway()) {
+                gatewayIPv4 = routeInfo.getGateway().getHostAddress();
+                break;
+            }
+        }
+        if (TextUtils.isEmpty(gatewayIPv4)) {
+            logi("default gateway ipv4 is null");
+            return false;
+        }
+
+        String gatewayMac = macAddressFromRoute(gatewayIPv4);
+        if (TextUtils.isEmpty(gatewayMac)) {
+            logi("default gateway mac fetch failed for ipv4 addr = " + gatewayIPv4);
+            return false;
+        }
+
+        logi("Default Gateway MAC address of " + mLastBssid + " from routes is : " + gatewayMac);
+        if (!mWifiConfigManager.setNetworkDefaultGwMacAddress(mLastNetworkId, gatewayMac)) {
+            logi("default gateway mac set failed for " + currentConfig.configKey() + " network");
+            return false;
+        }
+
+        mWifiConfigManager.saveToStore(true);
+        return true;
+    }
+
+    private void configureWhitelistNetworks() {
+        WifiConfiguration config = getCurrentWifiConfiguration();
+        if (config == null) {
+            return;
+        }
+
+        if (config.defaultGwMacAddress == null) {
+            logi("current network default gateway mac is not available.");
+            return;
+        }
+
+        if (!config.validatedInternetAccess) {
+            logi("current network doesn't have internet access");
+            return;
+        }
+
+        mWifiConfigManager.attemptNetworkLinking(mLastNetworkId);
+        mWifiConnectivityManager.configureWhitelistNetworks();
+    }
+
+    private void updateWhitelistNetworksIfRequired(WifiConfiguration updatedConfig) {
+        WifiConfiguration currentConfig = getCurrentWifiConfiguration();
+        if (currentConfig != null && updatedConfig != null
+                && currentConfig.isLinked(updatedConfig)) {
+            logi("current network linked configuration updated. refresh whitelist networks");
+            configureWhitelistNetworks();
+        }
+    }
+
+    private ScanDetail getScanDetailForBssid(String bssid) {
+      ArrayList<ScanDetail> scanResults = mWifiNative.getScanResults(mInterfaceName);
+      ScanResult scanRes;
+          for (ScanDetail result : scanResults) {
+              scanRes = result.getScanResult();
+              Log.e(TAG, "getScanResults scanRes.BSSID = " + scanRes.BSSID);
+              if (scanRes.BSSID.equals(bssid))
+                  return result;
+          }
+          return null;
+    }
+
+    private boolean checkAndHandleWhitelistRoaming(String associatedBssid) {
+        ScanDetail scanDetail = getScanDetailForBssid(associatedBssid);
+        if (scanDetail != null) {
+            WifiConfiguration config = mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail);
+            if (config != null && mLastNetworkId != config.networkId) {
+                Log.i(TAG, "Driver initiated whitelist SSID roaming");
+                mIsWhitelistRoaming = true;
+                setTargetBssid(config, associatedBssid);
+                mTargetNetworkId = config.networkId;
+                mTargetWifiConfiguration = config;
+                updateConnectedBand(scanDetail.getScanResult().frequency, true);
+                return true;
+            }
+        }
+        return false;
     }
 }
