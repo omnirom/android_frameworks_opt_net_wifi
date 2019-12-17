@@ -65,7 +65,6 @@ public class HostapdHal {
     private boolean mVerboseLoggingEnabled = false;
     private final Context mContext;
     private final Handler mEventHandler;
-    private final boolean mAcsShouldExcludeDfs;
     private final List<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange>
             mVendorAcsChannelRanges;
     private String mCountryCode = null;
@@ -140,7 +139,6 @@ public class HostapdHal {
     public HostapdHal(Context context, Handler handler) {
         mContext = context;
         mEventHandler = handler;
-        mAcsShouldExcludeDfs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_should_exclude_dfs);
 
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mHostapdDeathRecipient = new HostapdDeathRecipient();
@@ -380,7 +378,7 @@ public class HostapdHal {
             } else if (mContext.getResources().getBoolean(
                     R.bool.config_wifi_softap_acs_supported)) {
                 ifaceParams.channelParams.enableAcs = true;
-                if(mAcsShouldExcludeDfs) {
+                if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
                 }
             } else {
@@ -899,7 +897,7 @@ public class HostapdHal {
             }
             if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
                 ifaceParams.channelParams.enableAcs = true;
-                if(mAcsShouldExcludeDfs) {
+                if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
                 }
             } else {
