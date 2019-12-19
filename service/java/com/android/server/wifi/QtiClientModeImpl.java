@@ -4703,7 +4703,7 @@ public class QtiClientModeImpl extends StateMachine {
                             mWifiScoreReport.noteIpCheck();
                         }
                         int statusDataStall =
-                                mWifiDataStall.checkForDataStall(mLastLinkLayerStats, stats);
+                                mWifiDataStall.checkForDataStall(mLastLinkLayerStats, stats, mWifiInfo);
                         mLastLinkLayerStats = stats;
                         mWifiScoreCard.noteSignalPoll(mWifiInfo);
                         mLinkProbeManager.updateConnectionStats(
