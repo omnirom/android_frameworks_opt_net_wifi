@@ -369,7 +369,7 @@ public class SoftApManager implements ActiveModeManager {
             return result;
         }
 
-        if (config.apBand == WifiConfiguration.AP_BAND_5GHZ
+        if (config.getBand() == SoftApConfiguration.BAND_5GHZ
                 && !mWifiNative.is5GhzBandSupported()) {
             mSoftApStartFailureDesc = WifiManager.WIFI_AP_FAILURE_DESC_NO_5GHZ_SUPPORT;
             Log.e(TAG, "Failed to start soft AP as 5Ghz band not supported");
@@ -530,19 +530,20 @@ public class SoftApManager implements ActiveModeManager {
         /**
          * Start Dual band soft AP.
          */
-        private boolean setupForDualBandSoftApMode(WifiConfiguration config) {
+        private boolean setupForDualBandSoftApMode(SoftApConfiguration config) {
             if (!setupInterfacesForDualSoftApMode())
                 return false;
 
-            WifiConfiguration localConfig = new WifiConfiguration(config);
+            SoftApConfiguration localConfig;
+            SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder(config);
             String bridgeIfacename = mApInterfaceName;
 
             mApInterfaceName = mdualApInterfaces[0];
-            localConfig.apBand =  WifiConfiguration.AP_BAND_2GHZ;
+            localConfig = configBuilder.setBand(SoftApConfiguration.BAND_2GHZ).build();
             mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig);
             int result = startSoftAp();
             if (result == SUCCESS) {
-                localConfig.apBand =  WifiConfiguration.AP_BAND_5GHZ;
+                localConfig = configBuilder.setBand(SoftApConfiguration.BAND_5GHZ).build();
                 mApInterfaceName = mdualApInterfaces[1];
                 mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig);
                 result = startSoftAp();
@@ -556,28 +557,31 @@ public class SoftApManager implements ActiveModeManager {
         /**
          * Start OWE transition soft AP.
          */
-        private boolean setupForOweTransitionSoftApMode(WifiConfiguration config) {
+        private boolean setupForOweTransitionSoftApMode(SoftApConfiguration config) {
             if (!setupInterfacesForDualSoftApMode())
                 return false;
 
-            WifiConfiguration oweConfig = new WifiConfiguration(config);
-            WifiConfiguration openConfig = new WifiConfiguration(config);
+            SoftApConfiguration.Builder oweConfigBuilder = new SoftApConfiguration.Builder(config);
+            SoftApConfiguration.Builder openConfigBuilder = new SoftApConfiguration.Builder(config);
+
             String bridgeIfacename = mApInterfaceName;
 
             mApInterfaceName = mdualApInterfaces[0];
-            oweConfig.oweTransIfaceName =  mdualApInterfaces[1];
+            oweConfigBuilder.setOweTransIfaceName(mdualApInterfaces[1]);
+
             // hashCode() generates integer hash for given string
             // As maximum string size of a integer is 12 bytes SSID size never crosses 32 bytes
-            oweConfig.SSID =  "OWE_" + oweConfig.SSID.hashCode();
-            Log.i(TAG, "Generated OWE SSID: " + oweConfig.SSID);
-            oweConfig.hiddenSSID =  true;
+            oweConfigBuilder.setSsid("OWE_" + config.getSsid().hashCode());
+            oweConfigBuilder.setHiddenSsid(true);
+            SoftApConfiguration oweConfig = oweConfigBuilder.build();
+            Log.i(TAG, "Generated OWE SSID: " + oweConfig.getSsid());
             mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), oweConfig);
             int result = startSoftAp();
             if (result == SUCCESS) {
                 mApInterfaceName = mdualApInterfaces[1];
-                openConfig.oweTransIfaceName =  mdualApInterfaces[0];
-                openConfig.allowedKeyManagement.clear();
-                openConfig.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                openConfigBuilder.setOweTransIfaceName(mdualApInterfaces[0]);
+                openConfigBuilder.setWpa2Passphrase(null);
+                SoftApConfiguration openConfig = openConfigBuilder.build();
                 mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), openConfig);
                 result = startSoftAp();
             }
@@ -610,15 +614,15 @@ public class SoftApManager implements ActiveModeManager {
             public boolean processMessage(Message message) {
                 switch (message.what) {
                     case CMD_START:
-                        WifiConfiguration config = (WifiConfiguration) message.obj;
-                        if (config != null && config.apBand == WifiConfiguration.AP_BAND_DUAL) {
+                        SoftApConfiguration config = (SoftApConfiguration) message.obj;
+                        if (config != null && config.getBand() == SoftApConfiguration.BAND_ANY) {
                             if (!setupForDualBandSoftApMode(config)) {
                                 Log.d(TAG, "Dual band sap start failed");
                                 break;
                             }
                             transitionTo(mStartedState);
                             break;
-                        } else if (config != null && config.getAuthType() == WifiConfiguration.KeyMgmt.OWE) {
+                        } else if (config != null && config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_OWE) {
                             if (!setupForOweTransitionSoftApMode(config)) {
                                 Log.d(TAG, "OWE transition sap start failed");
                                 break;

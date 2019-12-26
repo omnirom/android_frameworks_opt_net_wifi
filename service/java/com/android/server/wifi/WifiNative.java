@@ -1930,7 +1930,7 @@ public class WifiNative {
         int wifiGeneration = WIFI_GENERATION_DEFAULT;
 
         if (wifiGenerationCapabilities != null) {
-            if (config.apBand == WifiConfiguration.AP_BAND_2GHZ)
+            if (config.getBand() == SoftApConfiguration.BAND_2GHZ)
                 wifiGeneration = wifiGenerationCapabilities.sapHeSupport2g ? WIFI_GENERATION_6 :
                                  (wifiGenerationCapabilities.vhtSupport2g ? WIFI_GENERATION_5 :
                                  (wifiGenerationCapabilities.htSupport2g ? WIFI_GENERATION_4 : WIFI_GENERATION_DEFAULT));

@@ -657,22 +657,19 @@ public class HostapdHal {
         return encryptionType;
     }
 
-    private static int getVendorEncryptionType(WifiConfiguration localConfig) {
+    private static int getVendorEncryptionType(SoftApConfiguration localConfig) {
         int encryptionType;
-        switch (localConfig.getAuthType()) {
-            case WifiConfiguration.KeyMgmt.NONE:
+        switch (localConfig.getSecurityType()) {
+            case SoftApConfiguration.SECURITY_TYPE_OPEN:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.NONE;
                 break;
-            case WifiConfiguration.KeyMgmt.WPA_PSK:
-                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA;
-                break;
-            case WifiConfiguration.KeyMgmt.WPA2_PSK:
+            case SoftApConfiguration.SECURITY_TYPE_WPA2_PSK:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA2;
                 break;
-            case WifiConfiguration.KeyMgmt.SAE:
+            case SoftApConfiguration.SECURITY_TYPE_SAE:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.SAE;
                 break;
-            case WifiConfiguration.KeyMgmt.OWE:
+            case SoftApConfiguration.SECURITY_TYPE_OWE:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.OWE;
                 break;
             default:
@@ -876,7 +873,7 @@ public class HostapdHal {
      * @param listener Callback for AP events.
      * @return true on success, false otherwise.
      */
-    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config, SoftApListener listener) {
+    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull SoftApConfiguration config, SoftApListener listener) {
         synchronized (mLock) {
             final String methodStr = "addVendorAccessPoint";
             WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
@@ -892,7 +889,7 @@ public class HostapdHal {
             try {
                 ifaceParams.channelParams.band = getBand(config);
             } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Unrecognized apBand " + config.apBand);
+                Log.e(TAG, "Unrecognized apBand " + config.getBand());
                 return false;
             }
             if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
@@ -910,14 +907,14 @@ public class HostapdHal {
                     ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
                 }
                 ifaceParams.channelParams.enableAcs = false;
-                ifaceParams.channelParams.channel = config.apChannel;
+                ifaceParams.channelParams.channel = config.getChannel();
             }
 
             IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
-            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
-            nwParams.isHidden = config.hiddenSSID;
+            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.getSsid()));
+            nwParams.isHidden = config.isHiddenSsid();
             nwParams.encryptionType = getEncryptionType(config);
-            nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+            nwParams.pskPassphrase = (config.getWpa2Passphrase() != null) ? config.getWpa2Passphrase() : "";
 
             if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
             try {
@@ -940,7 +937,7 @@ public class HostapdHal {
                     vendorIfaceParams1_1.VendorV1_0 = vendorIfaceParams;
                     vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
                     vendorIfaceParams1_1.vendorEncryptionType = getVendorEncryptionType(config);
-                    vendorIfaceParams1_1.oweTransIfaceName = (config.oweTransIfaceName != null) ? config.oweTransIfaceName : "";
+                    vendorIfaceParams1_1.oweTransIfaceName = (config.getOweTransIfaceName() != null) ? config.getOweTransIfaceName() : "";
                     if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
                         vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(mVendorAcsChannelRanges);
                     }

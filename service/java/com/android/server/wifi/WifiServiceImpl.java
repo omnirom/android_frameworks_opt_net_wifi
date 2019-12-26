@@ -872,25 +872,24 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(apConfig.getTargetMode()).flush();
 
-        WifiConfiguration wifiConfig = apConfig.getWifiConfiguration();
+        SoftApConfiguration softApConfig = apConfig.getSoftApConfiguration();
 
-        if (wifiConfig == null && TextUtils.isEmpty(mCountryCode.getCountryCode())) {
+        if (softApConfig == null && TextUtils.isEmpty(mCountryCode.getCountryCode())) {
             Log.d(TAG, "Starting softap without country code. Fallback to 2G band");
-            wifiConfig = new WifiConfiguration(mWifiApConfigStore.getApConfiguration());
-            wifiConfig.apBand = WifiConfiguration.AP_BAND_2GHZ;
+            softApConfig = new SoftApConfiguration.Builder(mWifiApConfigStore.getApConfiguration())
+                .setBand(SoftApConfiguration.BAND_2GHZ).build();
         }
 
-        setDualSapMode(wifiConfig);
+        setDualSapMode(softApConfig);
 
         mSoftApExtendingWifi = (!mWifiApConfigStore.getDualSapStatus()) && isCurrentStaShareThisAp();
         if (mSoftApExtendingWifi) {
-            startSoftApInRepeaterMode(apConfig.getTargetMode(), wifiConfig);
+            startSoftApInRepeaterMode(apConfig.getTargetMode(), softApConfig);
             return true;
         }
 
         // null wifiConfig is a meaningful input for CMD_SET_AP; it means to use the persistent
         // AP config.
-        SoftApConfiguration softApConfig = apConfig.getSoftApConfiguration();
         if (softApConfig != null && !WifiApConfigStore.validateApWifiConfiguration(softApConfig)) {
             Log.e(TAG, "Invalid SoftApConfiguration");
             return false;
@@ -1305,8 +1304,8 @@ public class WifiServiceImpl extends BaseWifiService {
                     R.bool.config_wifi_local_only_hotspot_5ghz)
                     && is5GhzSupported();
 
-            int band = is5Ghz ? WifiConfiguration.AP_BAND_5GHZ
-                    : WifiConfiguration.AP_BAND_2GHZ;
+            int band = is5Ghz ? SoftApConfiguration.BAND_5GHZ
+                    : SoftApConfiguration.BAND_2GHZ;
 
             SoftApConfiguration softApConfig = WifiApConfigStore.generateLocalOnlyHotspotConfig(
                     mContext, band, request.getCustomConfig());
@@ -3706,12 +3705,12 @@ public class WifiServiceImpl extends BaseWifiService {
         return mClientModeImpl.syncDppConfiguratorGetKey(mClientModeImplChannel, id);
     }
 
-    private void setDualSapMode(WifiConfiguration apConfig) {
+    private void setDualSapMode(SoftApConfiguration apConfig) {
         if (apConfig == null)
             apConfig = mWifiApConfigStore.getApConfiguration();
 
-        if (apConfig.apBand == WifiConfiguration.AP_BAND_DUAL
-                || apConfig.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.OWE)) {
+        if (apConfig.getBand() == SoftApConfiguration.BAND_ANY
+                || apConfig.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_OWE) {
             mLog.trace("setDualSapMode uid=%").c(Binder.getCallingUid()).flush();
             mWifiApConfigStore.setDualSapStatus(true);
         } else {
@@ -3740,24 +3739,28 @@ public class WifiServiceImpl extends BaseWifiService {
         return false;
     }
 
-    private void startSoftApInRepeaterMode(int mode, WifiConfiguration apConfig) {
+    private void startSoftApInRepeaterMode(int mode, SoftApConfiguration apConfig) {
         WifiInfo wifiInfo = mClientModeImpl.getWifiInfo();
         WifiConfigManager wifiConfigManager = mWifiInjector.getWifiConfigManager();
         WifiConfiguration currentStaConfig = wifiConfigManager.getConfiguredNetworkWithPassword(wifiInfo.getNetworkId());
-        SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, currentStaConfig);
+        SoftApConfiguration.Builder softApConfigBuilder = new SoftApConfiguration.Builder(
+            ApConfigUtil.fromWifiConfiguration(currentStaConfig));
 
         // Remove double quotes in SSID and psk
-        softApConfig.getWifiConfiguration().SSID = WifiInfo.removeDoubleQuotes(softApConfig.getWifiConfiguration().SSID);
-        softApConfig.getWifiConfiguration().preSharedKey = WifiInfo.removeDoubleQuotes(softApConfig.getWifiConfiguration().preSharedKey);
+        softApConfigBuilder.setSsid(WifiInfo.removeDoubleQuotes(currentStaConfig.SSID));
+        softApConfigBuilder.setWpa2Passphrase(WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey));
 
         // Get band info from SoftAP configuration
         if (apConfig == null)
-            softApConfig.getWifiConfiguration().apBand = mWifiApConfigStore.getApConfiguration().apBand;
+            softApConfigBuilder.setBand(mWifiApConfigStore.getApConfiguration().getBand());
         else
-            softApConfig.getWifiConfiguration().apBand = apConfig.apBand;
+            softApConfigBuilder.setBand(apConfig.getBand());
 
-        Log.d(TAG,"Repeater mode config - " + softApConfig.getWifiConfiguration());
-        mActiveModeWarden.startSoftAp(softApConfig);
+        SoftApConfiguration softApConfig = softApConfigBuilder.build();
+        Log.d(TAG,"Repeater mode config - " + softApConfig);
+        SoftApModeConfiguration softApModeConfig = new SoftApModeConfiguration(mode, softApConfig);
+        mActiveModeWarden.startSoftAp(softApModeConfig);
+
     }
 
     public boolean isWifiCoverageExtendFeatureEnabled() {
