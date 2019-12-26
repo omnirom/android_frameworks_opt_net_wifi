@@ -2811,13 +2811,6 @@ public class ClientModeImpl extends StateMachine {
 
         if (newRssi > WifiInfo.INVALID_RSSI && newRssi < WifiInfo.MAX_RSSI) {
             // screen out invalid values
-            /* some implementations avoid negative values by adding 256
-             * so we need to adjust for that here.
-             */
-            if (newRssi > 0) {
-                Log.wtf(TAG, "Error! +ve value RSSI: " + newRssi);
-                newRssi -= 256;
-            }
             mWifiInfo.setRssi(newRssi);
             /*
              * Rather then sending the raw RSSI out every time it
