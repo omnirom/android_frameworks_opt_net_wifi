@@ -76,7 +76,8 @@ filegroup {
         "java/**/*.java",
         "java/**/I*.aidl",
         "java/**/*.logtags",
-        ":framework-wifistack-shared-srcs",
+        ":framework-wifi-service-shared-srcs",
+        ":statslog-wifi-java-gen",
     ],
 }
 
@@ -108,6 +109,7 @@ java_library {
         "android.hardware.wifi-V1.4-java",
         "android.hardware.wifi.hostapd-V1.0-java",
         "android.hardware.wifi.hostapd-V1.1-java",
+        "android.hardware.wifi.hostapd-V1.2-java",
         "android.hardware.wifi.supplicant-V1.0-java",
         "android.hardware.wifi.supplicant-V1.1-java",
         "android.hardware.wifi.supplicant-V1.2-java",
@@ -126,6 +128,7 @@ java_library {
 	// the necessary core platform APIs.
         "libprotobuf-java-lite",
         "libnanohttpd",
+        "netd_aidl_interface-V2-java",
         "services.net",
         "wifi_proto_scorecard",
         "wifi_proto_metrics",
@@ -154,6 +157,16 @@ java_library {
     platform_apis: true,
 
     init_rc: ["wifi.rc"],
+}
+
+// Westworld auto-generated code
+// ============================================================
+genrule {
+    name: "statslog-wifi-java-gen",
+    tools: ["stats-log-api-gen"],
+    cmd: "$(location stats-log-api-gen) --java $(out) --module wifi " +
+         " --javaPackage com.android.server.wifi.proto --javaClass WifiStatsLog",
+    out: ["com/android/server/wifi/proto/WifiStatsLog.java"],
 }
 
 // APK to hold all the wifi overlayable resources.

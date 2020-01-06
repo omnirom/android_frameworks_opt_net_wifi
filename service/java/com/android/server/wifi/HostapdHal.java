@@ -23,7 +23,7 @@ import android.hardware.wifi.hostapd.V1_0.HostapdStatusCode;
 import android.hardware.wifi.hostapd.V1_0.IHostapd;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
-import android.net.wifi.WifiConfiguration;
+import android.net.wifi.SoftApConfiguration;
 import android.os.Handler;
 import android.os.HwRemoteBinder;
 import android.os.RemoteException;
@@ -76,7 +76,7 @@ public class HostapdHal {
     private IServiceManager mIServiceManager = null;
     private IHostapd mIHostapd;
     private IHostapdVendor mIHostapdVendor;
-    private HashMap<String, WifiNative.SoftApListener> mSoftApListeners = new HashMap<>();
+    private HashMap<String, Runnable> mSoftApFailureListeners = new HashMap<>();
     private HostapdDeathEventHandler mDeathEventHandler;
     private ServiceManagerDeathRecipient mServiceManagerDeathRecipient;
     private HostapdDeathRecipient mHostapdDeathRecipient;
@@ -350,11 +350,11 @@ public class HostapdHal {
      *
      * @param ifaceName Name of the interface.
      * @param config Configuration to use for the AP.
-     * @param listener Callback for AP events.
+     * @param onFailureListener A runnable to be triggered on failure.
      * @return true on success, false otherwise.
      */
-    public boolean addAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config,
-                                  @NonNull WifiNative.SoftApListener listener) {
+    public boolean addAccessPoint(@NonNull String ifaceName, @NonNull SoftApConfiguration config,
+                                  @NonNull Runnable onFailureListener) {
         synchronized (mLock) {
             final String methodStr = "addAccessPoint";
             IHostapd.IfaceParams ifaceParams = new IHostapd.IfaceParams();
@@ -366,7 +366,7 @@ public class HostapdHal {
             try {
                 ifaceParams.channelParams.band = getBand(config);
             } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Unrecognized apBand " + config.apBand);
+                Log.e(TAG, "Unrecognized apBand " + config.getBand());
                 return false;
             }
             if (mForceApChannel) {
@@ -393,7 +393,7 @@ public class HostapdHal {
                     ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
                 }
                 ifaceParams.channelParams.enableAcs = false;
-                ifaceParams.channelParams.channel = config.apChannel;
+                ifaceParams.channelParams.channel = config.getChannel();
             }
 
             IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
@@ -401,10 +401,11 @@ public class HostapdHal {
             // hex string or "double quoted".
             // However, it seems that whatever is handing us these configurations does not obey
             // this convention.
-            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
-            nwParams.isHidden = config.hiddenSSID;
+            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.getSsid()));
+            nwParams.isHidden = config.isHiddenSsid();
             nwParams.encryptionType = getEncryptionType(config);
-            nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+            nwParams.pskPassphrase = (config.getWpa2Passphrase() != null)
+                    ? config.getWpa2Passphrase() : "";
             if (!checkHostapdAndLogFailure(methodStr)) return false;
             try {
                 HostapdStatus status;
@@ -428,7 +429,7 @@ public class HostapdHal {
                 if (!checkStatusAndLogFailure(status, methodStr)) {
                     return false;
                 }
-                mSoftApListeners.put(ifaceName, listener);
+                mSoftApFailureListeners.put(ifaceName, onFailureListener);
                 return true;
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -452,7 +453,7 @@ public class HostapdHal {
                 if (!checkStatusAndLogFailure(status, methodStr)) {
                     return false;
                 }
-                mSoftApListeners.remove(ifaceName);
+                mSoftApFailureListeners.remove(ifaceName);
                 return true;
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
@@ -638,16 +639,13 @@ public class HostapdHal {
         }
     }
 
-    private static int getEncryptionType(WifiConfiguration localConfig) {
+    private static int getEncryptionType(SoftApConfiguration localConfig) {
         int encryptionType;
-        switch (localConfig.getAuthType()) {
-            case WifiConfiguration.KeyMgmt.NONE:
+        switch (localConfig.getSecurityType()) {
+            case SoftApConfiguration.SECURITY_TYPE_OPEN:
                 encryptionType = IHostapd.EncryptionType.NONE;
                 break;
-            case WifiConfiguration.KeyMgmt.WPA_PSK:
-                encryptionType = IHostapd.EncryptionType.WPA;
-                break;
-            case WifiConfiguration.KeyMgmt.WPA2_PSK:
+            case SoftApConfiguration.SECURITY_TYPE_WPA2_PSK:
                 encryptionType = IHostapd.EncryptionType.WPA2;
                 break;
             default:
@@ -659,22 +657,19 @@ public class HostapdHal {
         return encryptionType;
     }
 
-    private static int getVendorEncryptionType(WifiConfiguration localConfig) {
+    private static int getVendorEncryptionType(SoftApConfiguration localConfig) {
         int encryptionType;
-        switch (localConfig.getAuthType()) {
-            case WifiConfiguration.KeyMgmt.NONE:
+        switch (localConfig.getSecurityType()) {
+            case SoftApConfiguration.SECURITY_TYPE_OPEN:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.NONE;
                 break;
-            case WifiConfiguration.KeyMgmt.WPA_PSK:
-                encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA;
-                break;
-            case WifiConfiguration.KeyMgmt.WPA2_PSK:
+            case SoftApConfiguration.SECURITY_TYPE_WPA2_PSK:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA2;
                 break;
-            case WifiConfiguration.KeyMgmt.SAE:
+            case SoftApConfiguration.SECURITY_TYPE_SAE:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.SAE;
                 break;
-            case WifiConfiguration.KeyMgmt.OWE:
+            case SoftApConfiguration.SECURITY_TYPE_OWE:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.OWE;
                 break;
             default:
@@ -686,16 +681,16 @@ public class HostapdHal {
         return encryptionType;
     }
 
-    private static int getBand(WifiConfiguration localConfig) {
+    private static int getBand(SoftApConfiguration localConfig) {
         int bandType;
-        switch (localConfig.apBand) {
-            case WifiConfiguration.AP_BAND_2GHZ:
+        switch (localConfig.getBand()) {
+            case SoftApConfiguration.BAND_2GHZ:
                 bandType = IHostapd.Band.BAND_2_4_GHZ;
                 break;
-            case WifiConfiguration.AP_BAND_5GHZ:
+            case SoftApConfiguration.BAND_5GHZ:
                 bandType = IHostapd.Band.BAND_5_GHZ;
                 break;
-            case WifiConfiguration.AP_BAND_ANY:
+            case SoftApConfiguration.BAND_ANY:
                 bandType = IHostapd.Band.BAND_ANY;
                 break;
             default:
@@ -790,9 +785,9 @@ public class HostapdHal {
         @Override
         public void onFailure(String ifaceName) {
             Log.w(TAG, "Failure on iface " + ifaceName);
-            WifiNative.SoftApListener listener = mSoftApListeners.get(ifaceName);
-            if (listener != null) {
-                listener.onFailure();
+            Runnable onFailureListener = mSoftApFailureListeners.get(ifaceName);
+            if (onFailureListener != null) {
+                onFailureListener.run();
             }
         }
     }
@@ -878,7 +873,7 @@ public class HostapdHal {
      * @param listener Callback for AP events.
      * @return true on success, false otherwise.
      */
-    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull WifiConfiguration config, SoftApListener listener) {
+    public boolean addVendorAccessPoint(@NonNull String ifaceName, @NonNull SoftApConfiguration config, SoftApListener listener) {
         synchronized (mLock) {
             final String methodStr = "addVendorAccessPoint";
             WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
@@ -894,7 +889,7 @@ public class HostapdHal {
             try {
                 ifaceParams.channelParams.band = getBand(config);
             } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Unrecognized apBand " + config.apBand);
+                Log.e(TAG, "Unrecognized apBand " + config.getBand());
                 return false;
             }
             if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
@@ -912,14 +907,14 @@ public class HostapdHal {
                     ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
                 }
                 ifaceParams.channelParams.enableAcs = false;
-                ifaceParams.channelParams.channel = config.apChannel;
+                ifaceParams.channelParams.channel = config.getChannel();
             }
 
             IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
-            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
-            nwParams.isHidden = config.hiddenSSID;
+            nwParams.ssid.addAll(NativeUtil.stringToByteArrayList(config.getSsid()));
+            nwParams.isHidden = config.isHiddenSsid();
             nwParams.encryptionType = getEncryptionType(config);
-            nwParams.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
+            nwParams.pskPassphrase = (config.getWpa2Passphrase() != null) ? config.getWpa2Passphrase() : "";
 
             if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
             try {
@@ -942,7 +937,7 @@ public class HostapdHal {
                     vendorIfaceParams1_1.VendorV1_0 = vendorIfaceParams;
                     vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
                     vendorIfaceParams1_1.vendorEncryptionType = getVendorEncryptionType(config);
-                    vendorIfaceParams1_1.oweTransIfaceName = (config.oweTransIfaceName != null) ? config.oweTransIfaceName : "";
+                    vendorIfaceParams1_1.oweTransIfaceName = (config.getOweTransIfaceName() != null) ? config.getOweTransIfaceName() : "";
                     if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
                         vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(mVendorAcsChannelRanges);
                     }

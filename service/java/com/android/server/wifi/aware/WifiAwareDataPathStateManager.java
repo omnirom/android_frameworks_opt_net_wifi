@@ -41,12 +41,10 @@ import android.net.wifi.aware.WifiAwareManager;
 import android.net.wifi.aware.WifiAwareNetworkInfo;
 import android.net.wifi.aware.WifiAwareNetworkSpecifier;
 import android.net.wifi.aware.WifiAwareUtils;
+import android.net.wifi.util.HexEncoding;
 import android.os.Build;
 import android.os.Handler;
-import android.os.IBinder;
-import android.os.INetworkManagementService;
 import android.os.Looper;
-import android.os.ServiceManager;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.Log;
@@ -54,10 +52,9 @@ import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.Clock;
+import com.android.server.wifi.util.NetdWrapper;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
-
-import libcore.util.HexEncoding;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -119,7 +116,7 @@ public class WifiAwareDataPathStateManager {
     private Looper mLooper;
     private Handler mHandler;
     private WifiAwareNetworkFactory mNetworkFactory;
-    public INetworkManagementService mNwService;
+    public NetdWrapper mNetdWrapper;
 
     // internal debug flag to override API check
     /* package */ boolean mAllowNdpResponderFromAnyOverride = false;
@@ -143,13 +140,15 @@ public class WifiAwareDataPathStateManager {
      * connectivity service.
      */
     public void start(Context context, Looper looper, WifiAwareMetrics awareMetrics,
-            WifiPermissionsUtil wifiPermissionsUtil, WifiPermissionsWrapper permissionsWrapper) {
+            WifiPermissionsUtil wifiPermissionsUtil, WifiPermissionsWrapper permissionsWrapper,
+            NetdWrapper netdWrapper) {
         if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "start");
 
         mContext = context;
         mAwareMetrics = awareMetrics;
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mPermissionsWrapper = permissionsWrapper;
+        mNetdWrapper = netdWrapper;
         mLooper = looper;
         mHandler = new Handler(mLooper);
 
@@ -170,9 +169,6 @@ public class WifiAwareDataPathStateManager {
         mNetworkFactory = new WifiAwareNetworkFactory(looper, context, sNetworkCapabilitiesFilter);
         mNetworkFactory.setScoreFilter(NETWORK_FACTORY_SCORE_AVAIL);
         mNetworkFactory.register();
-
-        IBinder b = ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE);
-        mNwService = INetworkManagementService.Stub.asInterface(b);
     }
 
     private Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation>
@@ -579,8 +575,8 @@ public class WifiAwareDataPathStateManager {
             boolean interfaceUsedByAnotherNdp = isInterfaceUpAndUsedByAnotherNdp(nnri);
             if (!interfaceUsedByAnotherNdp) {
                 try {
-                    mNwService.setInterfaceUp(nnri.interfaceName);
-                    mNwService.enableIpv6(nnri.interfaceName);
+                    mNetdWrapper.setInterfaceUp(nnri.interfaceName);
+                    mNetdWrapper.enableIpv6(nnri.interfaceName);
                 } catch (Exception e) { // NwService throws runtime exceptions for errors
                     Log.e(TAG, "onDataPathConfirm: ACCEPT nnri=" + nnri
                             + ": can't configure network - "
@@ -1081,7 +1077,7 @@ public class WifiAwareDataPathStateManager {
                 }
             } else {
                 try {
-                    mNwService.setInterfaceDown(nnri.interfaceName);
+                    mNetdWrapper.setInterfaceDown(nnri.interfaceName);
                 } catch (Exception e) { // NwService throws runtime exceptions for errors
                     Log.e(TAG, "tearDownInterfaceIfPossible: nnri=" + nnri
                             + ": can't bring interface down - " + e);
