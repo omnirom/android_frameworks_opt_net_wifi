@@ -129,7 +129,6 @@ public class WifiConnectivityManager {
     private final WifiNetworkSelector mNetworkSelector;
     private final WifiLastResortWatchdog mWifiLastResortWatchdog;
     private final OpenNetworkNotifier mOpenNetworkNotifier;
-    private final CarrierNetworkConfig mCarrierNetworkConfig;
     private final WifiMetrics mWifiMetrics;
     private final AlarmManager mAlarmManager;
     private final Handler mEventHandler;
@@ -568,7 +567,7 @@ public class WifiConnectivityManager {
             WifiInjector injector, WifiConfigManager configManager, WifiInfo wifiInfo,
             WifiNetworkSelector networkSelector, WifiConnectivityHelper connectivityHelper,
             WifiLastResortWatchdog wifiLastResortWatchdog, OpenNetworkNotifier openNetworkNotifier,
-            CarrierNetworkConfig carrierNetworkConfig, WifiMetrics wifiMetrics, Handler handler,
+            WifiMetrics wifiMetrics, Handler handler,
             Clock clock, LocalLog localLog) {
         mContext = context;
         mStateMachine = stateMachine;
@@ -580,7 +579,6 @@ public class WifiConnectivityManager {
         mLocalLog = localLog;
         mWifiLastResortWatchdog = wifiLastResortWatchdog;
         mOpenNetworkNotifier = openNetworkNotifier;
-        mCarrierNetworkConfig = carrierNetworkConfig;
         mWifiMetrics = wifiMetrics;
         mAlarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         mEventHandler = handler;
@@ -637,8 +635,10 @@ public class WifiConnectivityManager {
                 R.integer.config_wifi_framework_RSSI_SCORE_OFFSET);
         final int rssiScoreSlope = mContext.getResources().getInteger(
                 R.integer.config_wifi_framework_RSSI_SCORE_SLOPE);
-        return rssiScoreSlope * (Math.max(mScoringParams.getGoodRssi(ScoringParams.BAND2),
-                                           mScoringParams.getGoodRssi(ScoringParams.BAND5))
+
+        return rssiScoreSlope * (Math.max(Math.max(mScoringParams.getGoodRssi(ScoringParams.BAND2),
+                                           mScoringParams.getGoodRssi(ScoringParams.BAND5)),
+                                           mScoringParams.getGoodRssi(ScoringParams.BAND6))
                                   + rssiScoreOffset);
     }
 
@@ -1035,6 +1035,7 @@ public class WifiConnectivityManager {
 
         pnoSettings.networkList = new PnoSettings.PnoNetwork[listSize];
         pnoSettings.networkList = pnoNetworkList.toArray(pnoSettings.networkList);
+        pnoSettings.min6GHzRssi = mScoringParams.getEntryRssi(ScoringParams.BAND6);
         pnoSettings.min5GHzRssi = mScoringParams.getEntryRssi(ScoringParams.BAND5);
         pnoSettings.min24GHzRssi = mScoringParams.getEntryRssi(ScoringParams.BAND2);
         pnoSettings.initialScoreMax = initialScoreMax();
@@ -1046,6 +1047,8 @@ public class WifiConnectivityManager {
                 R.integer.config_wifi_framework_SECURITY_AWARD);
         pnoSettings.band5GHzBonus = mContext.getResources().getInteger(
                 R.integer.config_wifi_framework_5GHz_preference_boost_factor);
+        pnoSettings.band6GHzBonus = mContext.getResources().getInteger(
+                R.integer.config_wifiFramework6ghzPreferenceBoostFactor);
 
         // Initialize scan settings
         ScanSettings scanSettings = new ScanSettings();
@@ -1423,7 +1426,6 @@ public class WifiConnectivityManager {
         mLocalLog.dump(fd, pw, args);
         pw.println("WifiConnectivityManager - Log End ----");
         mOpenNetworkNotifier.dump(fd, pw, args);
-        mCarrierNetworkConfig.dump(fd, pw, args);
         mBssidBlocklistMonitor.dump(fd, pw, args);
     }
 }

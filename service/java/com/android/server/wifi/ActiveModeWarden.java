@@ -73,7 +73,6 @@ public class ActiveModeWarden {
     private final BatteryStatsManager mBatteryStatsManager;
     private final ScanRequestProxy mScanRequestProxy;
     private final WifiController mWifiController;
-    private final boolean mScanHiddenNetworksScanOnlyMode;
     private final WifiApConfigStore mWifiApConfigStore;
 
     private WifiManager.SoftApCallback mSoftApCallback;
@@ -118,8 +117,6 @@ public class ActiveModeWarden {
         mBatteryStatsManager = batteryStatsManager;
         mScanRequestProxy = wifiInjector.getScanRequestProxy();
         mWifiController = new WifiController();
-        mScanHiddenNetworksScanOnlyMode = context.getResources().getBoolean(
-                R.bool.config_wifiScanHiddenNetworksScanOnlyMode);
         mWifiApConfigStore = wifiInjector.getWifiApConfigStore();
 
         wifiNative.registerStatusListener(isReady -> {
@@ -263,7 +260,7 @@ public class ActiveModeWarden {
      */
     private void startSoftApModeManager(@NonNull SoftApModeConfiguration softApConfig) {
         Log.d(TAG, "Starting SoftApModeManager config = "
-                + softApConfig.getWifiConfiguration());
+                + softApConfig.getSoftApConfiguration());
         Preconditions.checkState(softApConfig.getTargetMode() == IFACE_IP_MODE_LOCAL_ONLY
                 || softApConfig.getTargetMode() == IFACE_IP_MODE_TETHERED);
 
@@ -477,7 +474,7 @@ public class ActiveModeWarden {
         boolean scanEnabled = hasAnyClientModeManager();
         boolean scanningForHiddenNetworksEnabled;
 
-        if (mScanHiddenNetworksScanOnlyMode) {
+        if (mContext.getResources().getBoolean(R.bool.config_wifiScanHiddenNetworksScanOnlyMode)) {
             scanningForHiddenNetworksEnabled = hasAnyClientModeManager();
         } else {
             scanningForHiddenNetworksEnabled = hasAnyClientModeManagerInConnectivityRole();

@@ -461,9 +461,10 @@ public class WifiMetricsTest extends WifiBaseTest {
         }
         if (isProvider) {
             PasspointProvider provider = mock(PasspointProvider.class);
-            Pair<PasspointProvider, PasspointMatch> providerMatch = Pair.create(provider, null);
+            List<Pair<PasspointProvider, PasspointMatch>> matchedProviders = new ArrayList<>();
+            matchedProviders.add(Pair.create(provider, null));
             when(mockNetworkDetail.isInterworking()).thenReturn(true);
-            when(mPpm.matchProvider(eq(scanResult))).thenReturn(providerMatch);
+            when(mPpm.matchProvider(eq(scanResult))).thenReturn(matchedProviders);
         }
         return mockScanDetail;
     }
@@ -792,7 +793,7 @@ public class WifiMetricsTest extends WifiBaseTest {
 
         // increment pno scan metrics
         for (int i = 0; i < NUM_PNO_SCAN_ATTEMPTS; i++) {
-            mWifiMetrics.incrementPnoScanStartAttempCount();
+            mWifiMetrics.incrementPnoScanStartAttemptCount();
         }
         for (int i = 0; i < NUM_PNO_SCAN_FAILED; i++) {
             mWifiMetrics.incrementPnoScanFailedCount();
@@ -3411,13 +3412,13 @@ public class WifiMetricsTest extends WifiBaseTest {
     public void testLogLinkProbeMetrics() throws Exception {
         mWifiMetrics.logLinkProbeSuccess(10000, -75, 50, 5);
         mWifiMetrics.logLinkProbeFailure(30000, -80, 10,
-                WifiNative.SEND_MGMT_FRAME_ERROR_NO_ACK);
+                WificondControl.SEND_MGMT_FRAME_ERROR_NO_ACK);
         mWifiMetrics.logLinkProbeSuccess(3000, -71, 160, 12);
         mWifiMetrics.logLinkProbeFailure(40000, -80, 6,
-                WifiNative.SEND_MGMT_FRAME_ERROR_NO_ACK);
+                WificondControl.SEND_MGMT_FRAME_ERROR_NO_ACK);
         mWifiMetrics.logLinkProbeSuccess(5000, -73, 160, 10);
         mWifiMetrics.logLinkProbeFailure(2000, -78, 6,
-                WifiNative.SEND_MGMT_FRAME_ERROR_TIMEOUT);
+                WificondControl.SEND_MGMT_FRAME_ERROR_TIMEOUT);
 
         dumpProtoAndDeserialize();
 

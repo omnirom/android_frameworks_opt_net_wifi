@@ -59,6 +59,7 @@ import android.net.wifi.aware.IWifiAwareMacAddressProvider;
 import android.net.wifi.aware.PublishConfig;
 import android.net.wifi.aware.SubscribeConfig;
 import android.net.wifi.aware.WifiAwareManager;
+import android.net.wifi.util.HexEncoding;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.IPowerManager;
@@ -74,10 +75,9 @@ import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.WifiBaseTest;
+import com.android.server.wifi.util.NetdWrapper;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
-
-import libcore.util.HexEncoding;
 
 import org.junit.After;
 import org.junit.Before;
@@ -172,7 +172,8 @@ public class WifiAwareStateManagerTest extends WifiBaseTest {
         mDut = new WifiAwareStateManager();
         mDut.setNative(mMockNativeManager, mMockNative);
         mDut.start(mMockContext, mMockLooper.getLooper(), mAwareMetricsMock,
-                mWifiPermissionsUtil, mPermissionsWrapperMock, new Clock());
+                mWifiPermissionsUtil, mPermissionsWrapperMock, new Clock(),
+                mock(NetdWrapper.class));
         mDut.startLate();
         mMockLooper.dispatchAll();
         verify(mMockContext, times(3)).registerReceiver(bcastRxCaptor.capture(),
@@ -2717,12 +2718,14 @@ public class WifiAwareStateManagerTest extends WifiBaseTest {
 
         ConfigRequest configRequest2 = new ConfigRequest.Builder()
                 .setSupport5gBand(true) // compatible
+                .setSupport6gBand(false)
                 .setClusterLow(7).setClusterHigh(155) // incompatible!
                 .setMasterPreference(0) // compatible
                 .build();
 
         ConfigRequest configRequest3  = new ConfigRequest.Builder()
                 .setSupport5gBand(true) // compatible (will use true)
+                .setSupport6gBand(false)
                 .setClusterLow(5).setClusterHigh(100) // identical (hence compatible)
                 .setMasterPreference(masterPref3) // compatible (will use max)
                 // compatible: will use min
@@ -2772,6 +2775,7 @@ public class WifiAwareStateManagerTest extends WifiBaseTest {
         inOrder.verify(mockCallback3).onConnectSuccess(clientId3);
 
         collector.checkThat("support 5g: or", true, equalTo(crCapture.getValue().mSupport5gBand));
+        collector.checkThat("support 6g: or", false, equalTo(crCapture.getValue().mSupport6gBand));
         collector.checkThat("master preference: max", Math.max(masterPref1, masterPref3),
                 equalTo(crCapture.getValue().mMasterPreference));
         collector.checkThat("dw interval on 2.4: ~min",
