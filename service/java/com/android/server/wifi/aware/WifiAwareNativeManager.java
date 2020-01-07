@@ -38,7 +38,7 @@ public class WifiAwareNativeManager {
     private static final String TAG = "WifiAwareNativeManager";
     private static final boolean VDBG = false;
     /* package */ boolean mDbg = false;
-
+    private boolean mVerboseLoggingEnabled = false;
     // to be used for synchronizing access to any of the WifiAwareNative objects
     private final Object mLock = new Object();
 
@@ -52,12 +52,22 @@ public class WifiAwareNativeManager {
             new InterfaceAvailableForRequestListener();
     private int mReferenceCount = 0;
 
+
     WifiAwareNativeManager(WifiAwareStateManager awareStateManager,
             HalDeviceManager halDeviceManager,
             WifiAwareNativeCallback wifiAwareNativeCallback) {
         mWifiAwareStateManager = awareStateManager;
         mHalDeviceManager = halDeviceManager;
         mWifiAwareNativeCallback = wifiAwareNativeCallback;
+    }
+
+    public void enableVerboseLogging(int verbose)
+    {
+        if( verbose > 0) {
+            mVerboseLoggingEnabled = true;
+        } else {
+            mVerboseLoggingEnabled = false;
+        }
     }
 
     /**
@@ -81,7 +91,7 @@ public class WifiAwareNativeManager {
                 new HalDeviceManager.ManagerStatusListener() {
                     @Override
                     public void onStatusChanged() {
-                        if (VDBG) Log.v(TAG, "onStatusChanged");
+                        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onStatusChanged");
                         // only care about isStarted (Wi-Fi started) not isReady - since if not
                         // ready then Wi-Fi will also be down.
                         if (mHalDeviceManager.isStarted()) {
