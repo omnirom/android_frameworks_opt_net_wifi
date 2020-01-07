@@ -687,6 +687,7 @@ public class ActiveModeWarden {
                     case CMD_STA_START_FAILURE:
                     case CMD_AP_STOPPED:
                     case CMD_AP_START_FAILURE:
+                    case CMD_RECOVERY_RESTART_WIFI:
                     case CMD_RECOVERY_RESTART_WIFI_CONTINUE:
                     case CMD_DEFERRED_RECOVERY_RESTART_WIFI:
                     case CMD_DELAY_DISCONNECT:
