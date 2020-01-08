@@ -494,6 +494,14 @@ public class WifiConfigManager {
         mPnoRecencySortingEnabled = (flag == 1);
     }
 
+    public boolean isWhitelistNetworkRoamingFeatureEnabled() {
+        return mFrameworkFacade.getIntegerSetting(mContext, Settings.Global.WIFI_WHIELIST_ROAMING_FEATURE_ENABLED, 0) > 0 ;
+    }
+
+    public boolean isUnsavedNetworkLinkingFeatureEnabled() {
+        return mFrameworkFacade.getIntegerSetting(mContext, Settings.Global.WIFI_UNSAVED_NETWORK_LINKING_FEATURE_ENABLED, 0) > 0 ;
+    }
+
     /**
      * Helper method to mask all passwords/keys from the provided WifiConfiguration object. This
      * is needed when the network configurations are being requested via the public WifiManager
