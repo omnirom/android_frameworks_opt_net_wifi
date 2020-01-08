@@ -1250,6 +1250,8 @@ public class InformationElementUtil {
                     return "RSN";
                 case ScanResult.PROTOCOL_OSEN:
                     return "OSEN";
+                case ScanResult.PROTOCOL_WAPI:
+                    return "WAPI";
                 default:
                     return "?";
             }
@@ -1283,6 +1285,10 @@ public class InformationElementUtil {
                     return "EAP_SUITE_B_192";
                 case ScanResult.KEY_MGMT_OSEN:
                     return "OSEN";
+                case ScanResult.KEY_MGMT_WAPI_PSK:
+                    return "WAPI-PSK";
+                case ScanResult.KEY_MGMT_WAPI_CERT:
+                    return "WAPI-CERT";
                 case ScanResult.KEY_MGMT_DPP:
                     return "DPP";
                 case ScanResult.KEY_MGMT_FILS_SHA256:

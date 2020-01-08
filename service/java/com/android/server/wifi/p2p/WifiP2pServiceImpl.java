@@ -99,6 +99,7 @@ import com.android.wifi.resources.R;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -146,6 +147,11 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             android.Manifest.permission.ACCESS_FINE_LOCATION,
             android.Manifest.permission.ACCESS_WIFI_STATE
     };
+
+    // Maximum number of bytes allowed for a network name, i.e. SSID.
+    private static final int MAX_NETWORK_NAME_BYTES = 32;
+    // Minimum number of bytes for a network name, i.e. DIRECT-xy.
+    private static final int MIN_NETWORK_NAME_BYTES = 9;
 
     // Two minutes comes from the wpa_supplicant setting
     private static final int GROUP_CREATING_WAIT_TIME_MS = 120 * 1000;
@@ -2815,12 +2821,12 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         break;
                     case IPC_DHCP_RESULTS:
                         mDhcpResults = (DhcpResults) message.obj;
-                        break;
-                    case IPC_PROVISIONING_SUCCESS:
-                        if (mVerboseLoggingEnabled) logd("mDhcpResults: " + mDhcpResults);
-                        if (mDhcpResults != null) {
-                            setWifiP2pInfoOnGroupFormation(mDhcpResults.serverAddress);
+                        if (mDhcpResults == null) {
+                            break;
                         }
+
+                        if (mVerboseLoggingEnabled) logd("mDhcpResults: " + mDhcpResults);
+                        setWifiP2pInfoOnGroupFormation(mDhcpResults.serverAddress);
                         sendP2pConnectionChangedBroadcast();
                         try {
                             final String ifname = mGroup.getInterface();
@@ -2831,6 +2837,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         } catch (Exception e) {
                             loge("Failed to add iface to local network " + e);
                         }
+                        break;
+                    case IPC_PROVISIONING_SUCCESS:
                         break;
                     case IPC_PROVISIONING_FAILURE:
                         loge("IP provisioning failed");
@@ -3005,6 +3013,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             }
 
             public void exit() {
+                // The group is still there and handling incoming request,
+                // no need to update P2P connection information.
+                if (mGroup != null) return;
+
                 mWifiP2pMetrics.endGroupEvent();
                 updateThisDevice(WifiP2pDevice.AVAILABLE);
                 resetWifiP2pInfo();
@@ -3413,6 +3425,23 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         }
 
         /**
+         * Check the network name complies standard SSID naming rules.
+         *
+         * The network name of a group is also the broadcasting SSID,
+         * as a result, the network name must complies standard SSID naming
+         * rules.
+         */
+        private boolean isValidNetworkName(String networkName) {
+            if (TextUtils.isEmpty(networkName)) return false;
+
+            byte[] ssidBytes = networkName.getBytes(StandardCharsets.UTF_8);
+            if (ssidBytes.length < MIN_NETWORK_NAME_BYTES) return false;
+            if (ssidBytes.length > MAX_NETWORK_NAME_BYTES) return false;
+
+            return true;
+        }
+
+        /**
          * A config is valid as a group if it has network name and passphrase.
          * Supplicant can construct a group on the fly for creating a group with specified config
          * or join a group without negotiation and WPS.
@@ -3422,7 +3451,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         private boolean isConfigValidAsGroup(WifiP2pConfig config) {
             if (config == null) return false;
             if (TextUtils.isEmpty(config.deviceAddress)) return false;
-            if (!TextUtils.isEmpty(config.networkName)
+            if (isValidNetworkName(config.networkName)
                     && !TextUtils.isEmpty(config.passphrase)) {
                 return true;
             }

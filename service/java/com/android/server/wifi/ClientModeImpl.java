@@ -36,6 +36,7 @@ import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.net.ConnectivityManager;
 import android.net.DhcpResults;
+import android.net.InvalidPacketException;
 import android.net.IpConfiguration;
 import android.net.KeepalivePacketData;
 import android.net.LinkProperties;
@@ -50,7 +51,6 @@ import android.net.NetworkInfo.DetailedState;
 import android.net.NetworkMisc;
 import android.net.RouteInfo;
 import android.net.SocketKeepalive;
-import android.net.SocketKeepalive.InvalidPacketException;
 import android.net.StaticIpConfiguration;
 import android.net.TcpKeepalivePacketData;
 import android.net.ip.IIpClient;
@@ -72,6 +72,7 @@ import android.net.wifi.WifiNetworkAgentSpecifier;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.wificond.WifiCondManager;
 import android.net.wifi.WifiDppConfig;
 import android.net.wifi.WifiDppConfig.DppResult;
 import android.os.BatteryStatsManager;
@@ -105,6 +106,7 @@ import com.android.internal.util.MessageUtils;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
+import com.android.server.wifi.MboOceController.BtmFrameData;
 import com.android.server.wifi.hotspot2.AnqpEvent;
 import com.android.server.wifi.hotspot2.IconEvent;
 import com.android.server.wifi.hotspot2.NetworkDetail;
@@ -446,8 +448,10 @@ public class ClientModeImpl extends StateMachine {
 
     /* The base for wifi message types */
     static final int BASE = Protocol.BASE_WIFI;
-
+    /* BT state change, e.g., on or off */
     static final int CMD_BLUETOOTH_ADAPTER_STATE_CHANGE                 = BASE + 31;
+    /* BT connection state change, e.g., connected or disconnected */
+    static final int CMD_BLUETOOTH_ADAPTER_CONNECTION_STATE_CHANGE      = BASE + 32;
 
     /* Get adaptors */
     static final int CMD_GET_SUPPORTED_FEATURES                         = BASE + 61;
@@ -952,6 +956,8 @@ public class ClientModeImpl extends StateMachine {
                 mSupplicantStateTracker.getHandler());
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT,
                 mSupplicantStateTracker.getHandler());
+        mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE,
+                getHandler());
     }
 
     private void setMulticastFilter(boolean enabled) {
@@ -1344,7 +1350,7 @@ public class ClientModeImpl extends StateMachine {
             String dstMacStr = macAddressFromRoute(gateway.getHostAddress());
             return NativeUtil.macAddressToByteArray(dstMacStr);
         } catch (NullPointerException | IllegalArgumentException e) {
-            throw new InvalidPacketException(SocketKeepalive.ERROR_INVALID_IP_ADDRESS);
+            throw new InvalidPacketException(InvalidPacketException.ERROR_INVALID_IP_ADDRESS);
         }
     }
 
@@ -1355,7 +1361,7 @@ public class ClientModeImpl extends StateMachine {
         } else if (packetData.dstAddress instanceof Inet6Address) {
             return OsConstants.ETH_P_IPV6;
         } else {
-            throw new InvalidPacketException(SocketKeepalive.ERROR_INVALID_IP_ADDRESS);
+            throw new InvalidPacketException(InvalidPacketException.ERROR_INVALID_IP_ADDRESS);
         }
     }
 
@@ -1775,10 +1781,19 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
-     * Send a message indicating bluetooth adapter connection state changed
+     * Send a message indicating bluetooth adapter state changed, e.g., turn on or ff
      */
     public void sendBluetoothAdapterStateChange(int state) {
         sendMessage(CMD_BLUETOOTH_ADAPTER_STATE_CHANGE, state, 0);
+    }
+
+    /**
+     * Send a message indicating bluetooth adapter connection state changed, e.g., connected
+     * or disconnected. Note that turning off BT after pairing success keeps connection state in
+     * connected state.
+     */
+    public void sendBluetoothAdapterConnectionStateChange(int state) {
+        sendMessage(CMD_BLUETOOTH_ADAPTER_CONNECTION_STATE_CHANGE, state, 0);
     }
 
     /**
@@ -2143,6 +2158,12 @@ public class ClientModeImpl extends StateMachine {
                 sb.append(" ");
                 sb.append(/* DhcpResults */ msg.obj);
                 break;
+            case WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE:
+                BtmFrameData frameData = (BtmFrameData) msg.obj;
+                if (frameData != null) {
+                    sb.append(" ").append(frameData.toString());
+                }
+                break;
             case WifiMonitor.DPP_EVENT:
                 sb.append(" type=");
                 sb.append(msg.arg1);
@@ -2214,6 +2235,9 @@ public class ClientModeImpl extends StateMachine {
                 break;
             case WifiMonitor.GAS_QUERY_START_EVENT:
                 s = "GAS_QUERY_START_EVENT";
+                break;
+            case WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE:
+                s = "MBO_OCE_BSS_TM_HANDLING_DONE";
                 break;
             case WifiP2pServiceImpl.GROUP_CREATING_TIMED_OUT:
                 s = "GROUP_CREATING_TIMED_OUT";
@@ -2344,15 +2368,15 @@ public class ClientModeImpl extends StateMachine {
      * Fetch RSSI, linkspeed, and frequency on current connection
      */
     private void fetchRssiLinkSpeedAndFrequencyNative() {
-        WificondControl.SignalPollResult pollResult = mWifiNative.signalPoll(mInterfaceName);
+        WifiCondManager.SignalPollResult pollResult = mWifiNative.signalPoll(mInterfaceName);
         if (pollResult == null) {
             return;
         }
 
-        int newRssi = pollResult.currentRssi;
-        int newTxLinkSpeed = pollResult.txBitrate;
-        int newFrequency = pollResult.associationFrequency;
-        int newRxLinkSpeed = pollResult.rxBitrate;
+        int newRssi = pollResult.currentRssiDbm;
+        int newTxLinkSpeed = pollResult.txBitrateMbps;
+        int newFrequency = pollResult.associationFrequencyMHz;
+        int newRxLinkSpeed = pollResult.rxBitrateMbps;
 
         if (mVerboseLoggingEnabled) {
             logd("fetchRssiLinkSpeedAndFrequencyNative rssi=" + newRssi
@@ -3284,8 +3308,18 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 }
                 case CMD_BLUETOOTH_ADAPTER_STATE_CHANGE:
+                    // If BT was connected and then turned off, there is no CONNECTION_STATE_CHANGE
+                    // message. So we need to rely on STATE_CHANGE message to detect on->off
+                    // transition and update mBluetoothConnectionActive status correctly.
+                    mBluetoothConnectionActive = mBluetoothConnectionActive
+                            && message.arg1 != BluetoothAdapter.STATE_OFF;
+                    mWifiConnectivityManager.setBluetoothConnected(mBluetoothConnectionActive);
+                    break;
+                case CMD_BLUETOOTH_ADAPTER_CONNECTION_STATE_CHANGE:
+                    // Transition to a non-disconnected state does correctly
+                    // indicate BT is connected or being connected.
                     mBluetoothConnectionActive =
-                            (message.arg1 != BluetoothAdapter.STATE_DISCONNECTED);
+                            message.arg1 != BluetoothAdapter.STATE_DISCONNECTED;
                     mWifiConnectivityManager.setBluetoothConnected(mBluetoothConnectionActive);
                     break;
                 case CMD_ENABLE_RSSI_POLL:
@@ -4205,8 +4239,20 @@ public class ClientModeImpl extends StateMachine {
                     }
                     break;
                 case CMD_BLUETOOTH_ADAPTER_STATE_CHANGE:
-                    mBluetoothConnectionActive = (message.arg1
-                            != BluetoothAdapter.STATE_DISCONNECTED);
+                    // If BT was connected and then turned off, there is no CONNECTION_STATE_CHANGE
+                    // message. So we need to rely on STATE_CHANGE message to detect on->off
+                    // transition and update mBluetoothConnectionActive status correctly.
+                    mBluetoothConnectionActive = mBluetoothConnectionActive
+                            && message.arg1 != BluetoothAdapter.STATE_OFF;
+                    mWifiNative.setBluetoothCoexistenceScanMode(
+                            mInterfaceName, mBluetoothConnectionActive);
+                    mWifiConnectivityManager.setBluetoothConnected(mBluetoothConnectionActive);
+                    break;
+                case CMD_BLUETOOTH_ADAPTER_CONNECTION_STATE_CHANGE:
+                    // Transition to a non-disconnected state does correctly
+                    // indicate BT is connected or being connected.
+                    mBluetoothConnectionActive =
+                            message.arg1 != BluetoothAdapter.STATE_DISCONNECTED;
                     mWifiNative.setBluetoothCoexistenceScanMode(
                             mInterfaceName, mBluetoothConnectionActive);
                     mWifiConnectivityManager.setBluetoothConnected(mBluetoothConnectionActive);
@@ -4255,6 +4301,9 @@ public class ClientModeImpl extends StateMachine {
                     // TODO(zqiu): remove this when switch over to wificond for WNM frames
                     // monitoring.
                     mPasspointManager.receivedWnmFrame((WnmData) message.obj);
+                    break;
+                case WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE:
+                    handleBssTransitionRequest((BtmFrameData) message.obj);
                     break;
                 case CMD_CONFIG_ND_OFFLOAD:
                     final boolean enabled = (message.arg1 > 0);
@@ -4800,11 +4849,11 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_PKT_CNT_FETCH:
                     callbackIdentifier = message.arg2;
-                    WificondControl.TxPacketCounters counters =
+                    WifiCondManager.TxPacketCounters counters =
                             mWifiNative.getTxPacketCounters(mInterfaceName);
                     if (counters != null) {
-                        sendTxPacketCountListenerSuccess(
-                                callbackIdentifier, counters.txSucceeded + counters.txFailed);
+                        sendTxPacketCountListenerSuccess(callbackIdentifier,
+                                counters.txPacketSucceeded + counters.txPacketFailed);
                     } else {
                         sendTxPacketCountListenerSuccess(callbackIdentifier, WifiManager.ERROR);
                     }
@@ -6282,7 +6331,7 @@ public class ClientModeImpl extends StateMachine {
      * Sends a link probe.
      */
     @VisibleForTesting
-    public void probeLink(WificondControl.SendMgmtFrameCallback callback, int mcs) {
+    public void probeLink(WifiCondManager.SendMgmtFrameCallback callback, int mcs) {
         mWifiNative.probeLink(mInterfaceName, MacAddress.fromString(mWifiInfo.getBSSID()),
                 callback, mcs);
     }
@@ -6459,5 +6508,48 @@ public class ClientModeImpl extends StateMachine {
             message.sendingUid = callingUid;
             sendMessage(message);
         });
+    }
+
+    /**
+     * Handle BSS transition request from Connected BSS.
+     *
+     * @param frameData Data retrieved from received BTM request frame.
+     */
+    private void handleBssTransitionRequest(BtmFrameData frameData) {
+        if (frameData == null) {
+            return;
+        }
+
+        String bssid = mWifiInfo.getBSSID();
+        String ssid = mWifiInfo.getSSID();
+        if ((bssid == null) || (ssid == null) || WifiManager.UNKNOWN_SSID.equals(ssid)) {
+            Log.e(TAG, "Failed to handle BSS transition: bssid: " + bssid + " ssid: " + ssid);
+            return;
+        }
+
+        boolean isImminentBit = (frameData.mBssTmDataFlagsMask
+                & (MboOceConstants.BTM_DATA_FLAG_DISASSOCIATION_IMMINENT
+                | MboOceConstants.BTM_DATA_FLAG_BSS_TERMINATION_INCLUDED
+                | MboOceConstants.BTM_DATA_FLAG_ESS_DISASSOCIATION_IMMINENT)) != 0;
+
+
+        if (isImminentBit) {
+            long duration = frameData.mBlackListDurationMs;
+            if (duration == 0) {
+                /*
+                 * When AP sets one of the imminent bits and disassociation timer / BSS termination
+                 * duration / MBO assoc retry delay is set to zero(reserved as per spec),
+                 * blacklist the BSS for sometime to avoid AP rejecting the re-connect request.
+                 */
+                duration = MboOceConstants.DEFAULT_BLACKLIST_DURATION_MS;
+            }
+            // Blacklist the current BSS
+            mBssidBlocklistMonitor.blockBssidForDurationMs(bssid, ssid, duration);
+        }
+
+        if (frameData.mStatus != MboOceConstants.BTM_RESPONSE_STATUS_ACCEPT) {
+            // Trigger the network selection and re-connect to new network if available.
+            mWifiConnectivityManager.forceConnectivityScan(ClientModeImpl.WIFI_WORK_SOURCE);
+        }
     }
 }

@@ -29,9 +29,13 @@ import android.net.TrafficStats;
 import android.net.apf.ApfCapabilities;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
+import android.net.wifi.WifiAnnotations;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
+import android.net.wifi.wificond.NativeScanResult;
+import android.net.wifi.wificond.RadioChainInfo;
+import android.net.wifi.wificond.WifiCondManager;
 import android.os.Handler;
 import android.net.wifi.WifiDppConfig;
 import android.os.SystemClock;
@@ -48,8 +52,6 @@ import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.NetdWrapper;
 import com.android.server.wifi.util.NetdWrapper.NetdEventObserver;
-import com.android.server.wifi.wificond.NativeScanResult;
-import com.android.server.wifi.wificond.RadioChainInfo;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -88,7 +90,7 @@ public class WifiNative {
     private final SupplicantStaIfaceHal mSupplicantStaIfaceHal;
     private final HostapdHal mHostapdHal;
     private final WifiVendorHal mWifiVendorHal;
-    private final WificondControl mWificondControl;
+    private final WifiCondManager mWifiCondManager;
     private final WifiMonitor mWifiMonitor;
     private final PropertyService mPropertyService;
     private final WifiMetrics mWifiMetrics;
@@ -102,14 +104,14 @@ public class WifiNative {
 
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
-                      WificondControl condControl, WifiMonitor wifiMonitor,
+                      WifiCondManager condManager, WifiMonitor wifiMonitor,
                       PropertyService propertyService, WifiMetrics wifiMetrics,
                       Handler handler, Random random,
                       WifiInjector wifiInjector) {
         mWifiVendorHal = vendorHal;
         mSupplicantStaIfaceHal = staIfaceHal;
         mHostapdHal = hostapdHal;
-        mWificondControl = condControl;
+        mWifiCondManager = condManager;
         mWifiMonitor = wifiMonitor;
         mPropertyService = propertyService;
         mWifiMetrics = wifiMetrics;
@@ -123,8 +125,9 @@ public class WifiNative {
      */
     public void enableVerboseLogging(int verbose) {
         mVerboseLoggingEnabled = verbose > 0 ? true : false;
-        mWificondControl.enableVerboseLogging(mVerboseLoggingEnabled);
+        mWifiCondManager.enableVerboseLogging(mVerboseLoggingEnabled);
         mSupplicantStaIfaceHal.enableVerboseLogging(mVerboseLoggingEnabled);
+        mHostapdHal.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiVendorHal.enableVerboseLogging(mVerboseLoggingEnabled);
         mHostapdHal.enableVerboseLogging(mVerboseLoggingEnabled);
     }
@@ -149,26 +152,11 @@ public class WifiNative {
 
     }
 
-    public static class WifiGenerationCapabilities {
-
-        public boolean htSupport2g = false;
-        public boolean vhtSupport2g = false;
-        public boolean staHeSupport2g = false;
-        public boolean sapHeSupport2g = false;
-        public boolean htSupport5g = false;
-        public boolean vhtSupport5g = false;
-        public boolean staHeSupport5g = false;
-        public boolean sapHeSupport5g = false;
-
-        public WifiGenerationCapabilities() {
-        }
-    }
-
     /**
      * Callbacks for SoftAp interface.
      */
-    public interface SoftApListener extends WificondControl.SoftApListener {
-        // dummy for now - provide a shell so that clients don't use a WificondControl-specific API.
+    public interface SoftApListener extends WifiCondManager.SoftApCallback {
+        // dummy for now - provide a shell so that clients don't use a WifiCondManager-specific API.
     }
 
     /********************************************************
@@ -379,7 +367,7 @@ public class WifiNative {
         }
     }
 
-    private class NormalScanEventCallback implements WificondControl.ScanEventCallback {
+    private class NormalScanEventCallback implements WifiCondManager.ScanEventCallback {
         private String mIfaceName;
 
         NormalScanEventCallback(String ifaceName) {
@@ -399,7 +387,7 @@ public class WifiNative {
         }
     }
 
-    private class PnoScanEventCallback implements WificondControl.ScanEventCallback {
+    private class PnoScanEventCallback implements WifiCondManager.ScanEventCallback {
         private String mIfaceName;
 
         PnoScanEventCallback(String ifaceName) {
@@ -445,7 +433,7 @@ public class WifiNative {
     private void stopHalAndWificondIfNecessary() {
         synchronized (mLock) {
             if (!mIfaceMgr.hasAnyIface()) {
-                if (!mWificondControl.tearDownInterfaces()) {
+                if (!mWifiCondManager.tearDownInterfaces()) {
                     Log.e(TAG, "Failed to teardown ifaces from wificond");
                 }
                 if (mWifiVendorHal.isVendorHalSupported()) {
@@ -577,7 +565,7 @@ public class WifiNative {
             if (!mSupplicantStaIfaceHal.teardownIface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in supplicant on " + iface);
             }
-            if (!mWificondControl.tearDownClientInterface(iface.name)) {
+            if (!mWifiCondManager.tearDownClientInterface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopSupplicantIfNecessary();
@@ -593,7 +581,7 @@ public class WifiNative {
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
-            if (!mWificondControl.tearDownClientInterface(iface.name)) {
+            if (!mWifiCondManager.tearDownClientInterface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopHalAndWificondIfNecessary();
@@ -614,7 +602,7 @@ public class WifiNative {
             } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
-            if (!mWificondControl.tearDownSoftApInterface(iface.name)) {
+            if (!mWifiCondManager.tearDownSoftApInterface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopHostapdIfNecessary();
@@ -965,7 +953,7 @@ public class WifiNative {
                 Log.e(TAG, "Failed to initialize vendor HAL");
                 return false;
             }
-            if (!mWificondControl.initialize(new WificondDeathHandlerInternal())) {
+            if (!mWifiCondManager.initialize(new WificondDeathHandlerInternal())) {
                 Log.e(TAG, "Failed to initialize wificond");
                 return false;
             }
@@ -1159,7 +1147,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToWificond();
                 return null;
             }
-            if (!mWificondControl.setupInterfaceForClientMode(iface.name,
+            if (!mWifiCondManager.setupInterfaceForClientMode(iface.name, Runnable::run,
                     new NormalScanEventCallback(iface.name),
                     new PnoScanEventCallback(iface.name))) {
                 Log.e(TAG, "Failed to setup iface in wificond on " + iface);
@@ -1221,7 +1209,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToHal();
                 return null;
             }
-            if (!mWificondControl.setupInterfaceForClientMode(iface.name,
+            if (!mWifiCondManager.setupInterfaceForClientMode(iface.name, Runnable::run,
                     new NormalScanEventCallback(iface.name),
                     new PnoScanEventCallback(iface.name))) {
                 Log.e(TAG, "Failed to setup iface in wificond=" + iface.name);
@@ -1286,7 +1274,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToWificond();
                 return null;
             }
-            if (!mWificondControl.setupInterfaceForSoftApMode(iface.name)) {
+            if (!mWifiCondManager.setupInterfaceForSoftApMode(iface.name)) {
                 Log.e(TAG, "Failed to setup iface in wificond on " + iface);
                 teardownInterface(iface.name);
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToWificond();
@@ -1568,8 +1556,8 @@ public class WifiNative {
      * Returns an SignalPollResult object.
      * Returns null on failure.
      */
-    public WificondControl.SignalPollResult signalPoll(@NonNull String ifaceName) {
-        return mWificondControl.signalPoll(ifaceName);
+    public WifiCondManager.SignalPollResult signalPoll(@NonNull String ifaceName) {
+        return mWifiCondManager.signalPoll(ifaceName);
     }
 
     /**
@@ -1578,8 +1566,8 @@ public class WifiNative {
      * Returns an TxPacketCounters object.
      * Returns null on failure.
      */
-    public WificondControl.TxPacketCounters getTxPacketCounters(@NonNull String ifaceName) {
-        return mWificondControl.getTxPacketCounters(ifaceName);
+    public WifiCondManager.TxPacketCounters getTxPacketCounters(@NonNull String ifaceName) {
+        return mWifiCondManager.getTxPacketCounters(ifaceName);
     }
 
     /**
@@ -1587,7 +1575,7 @@ public class WifiNative {
      * The result depends on the on the country code that has been set.
      *
      * @param band as specified by one of the WifiScanner.WIFI_BAND_* constants.
-     * The following bands are supported {@link WifiBandBasic}:
+     * The following bands are supported {@link WifiAnnotations.WifiBandBasic}:
      * WifiScanner.WIFI_BAND_24_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY
@@ -1595,8 +1583,8 @@ public class WifiNative {
      * @return frequencies vector of valid frequencies (MHz), or null for error.
      * @throws IllegalArgumentException if band is not recognized.
      */
-    public int [] getChannelsForBand(@WifiScanner.WifiBandBasic int band) {
-        return mWificondControl.getChannelsForBand(band);
+    public int [] getChannelsForBand(@WifiAnnotations.WifiBandBasic int band) {
+        return mWifiCondManager.getChannelsMhzForBand(band);
     }
 
     /**
@@ -1609,9 +1597,20 @@ public class WifiNative {
      * @return Returns true on success.
      */
     public boolean scan(
-            @NonNull String ifaceName, @WifiScanner.ScanType int scanType, Set<Integer> freqs,
+            @NonNull String ifaceName, @WifiAnnotations.ScanType int scanType, Set<Integer> freqs,
             List<String> hiddenNetworkSSIDs) {
-        return mWificondControl.scan(ifaceName, scanType, freqs, hiddenNetworkSSIDs);
+        List<byte[]> hiddenNetworkSsidsArrays = new ArrayList<>();
+        for (String hiddenNetworkSsid : hiddenNetworkSSIDs) {
+            try {
+                hiddenNetworkSsidsArrays.add(
+                        NativeUtil.byteArrayFromArrayList(
+                                NativeUtil.decodeSsid(hiddenNetworkSsid)));
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Illegal argument " + hiddenNetworkSsid, e);
+                continue;
+            }
+        }
+        return mWifiCondManager.startScan(ifaceName, scanType, freqs, hiddenNetworkSsidsArrays);
     }
 
     /**
@@ -1621,8 +1620,8 @@ public class WifiNative {
      * Returns an empty ArrayList on failure.
      */
     public ArrayList<ScanDetail> getScanResults(@NonNull String ifaceName) {
-        return convertNativeScanResults(mWificondControl.getScanResults(
-                ifaceName, WificondControl.SCAN_TYPE_SINGLE_SCAN));
+        return convertNativeScanResults(mWifiCondManager.getScanResults(
+                ifaceName, WifiCondManager.SCAN_TYPE_SINGLE_SCAN));
     }
 
     /**
@@ -1633,19 +1632,19 @@ public class WifiNative {
      */
     public ArrayList<ScanDetail> getPnoScanResults(@NonNull String ifaceName) {
         return convertNativeScanResults(
-                mWificondControl.getScanResults(ifaceName, WificondControl.SCAN_TYPE_PNO_SCAN));
+                mWifiCondManager.getScanResults(ifaceName, WifiCondManager.SCAN_TYPE_PNO_SCAN));
     }
 
     private ArrayList<ScanDetail> convertNativeScanResults(List<NativeScanResult> nativeResults) {
         ArrayList<ScanDetail> results = new ArrayList<>();
         WifiGenerationCapabilities wifiGenerationCapa = mWificondControl.getWifiGenerationCapabilities();
         for (NativeScanResult result : nativeResults) {
-            WifiSsid wifiSsid = WifiSsid.createFromByteArray(result.ssid);
+            WifiSsid wifiSsid = WifiSsid.createFromByteArray(result.getSsid());
             String bssid;
             try {
-                bssid = NativeUtil.macAddressFromByteArray(result.bssid);
+                bssid = NativeUtil.macAddressFromByteArray(result.getBssid());
             } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Illegal argument " + result.bssid, e);
+                Log.e(TAG, "Illegal argument " + result.getBssid(), e);
                 continue;
             }
             if (bssid == null) {
@@ -1666,33 +1665,31 @@ public class WifiNative {
                 capabilities.reportHe = wifiGenerationCapa.staHeSupport5g;
             }
 
-            capabilities.from(ies, result.capability, isEnhancedOpenSupported());
+            capabilities.from(ies, result.getCapabilities(), isEnhancedOpenSupported());
             String flags = capabilities.generateCapabilitiesString();
             NetworkDetail networkDetail;
             try {
-                networkDetail = new NetworkDetail(bssid, ies, null, result.frequency);
+                networkDetail = new NetworkDetail(bssid, ies, null, result.getFrequencyMhz());
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Illegal argument for scan result with bssid: " + bssid, e);
                 continue;
             }
 
             ScanDetail scanDetail = new ScanDetail(networkDetail, wifiSsid, bssid, flags,
-                    result.signalMbm / 100, result.frequency, result.tsf, ies, null,
-                    result.infoElement);
+                    result.getSignalMbm() / 100, result.getFrequencyMhz(), result.getTsf(), ies,
+                    null, result.getInformationElements());
             ScanResult scanResult = scanDetail.getScanResult();
             scanResult.setWifiStandard(networkDetail.getWifiMode());
 
             // Fill up the radio chain info.
-            if (result.radioChainInfos != null) {
-                scanResult.radioChainInfos =
-                        new ScanResult.RadioChainInfo[result.radioChainInfos.size()];
-                int idx = 0;
-                for (RadioChainInfo nativeRadioChainInfo : result.radioChainInfos) {
-                    scanResult.radioChainInfos[idx] = new ScanResult.RadioChainInfo();
-                    scanResult.radioChainInfos[idx].id = nativeRadioChainInfo.chainId;
-                    scanResult.radioChainInfos[idx].level = nativeRadioChainInfo.level;
-                    idx++;
-                }
+            scanResult.radioChainInfos =
+                    new ScanResult.RadioChainInfo[result.getRadioChainInfos().size()];
+            int idx = 0;
+            for (RadioChainInfo nativeRadioChainInfo : result.getRadioChainInfos()) {
+                scanResult.radioChainInfos[idx] = new ScanResult.RadioChainInfo();
+                scanResult.radioChainInfos[idx].id = nativeRadioChainInfo.getChainId();
+                scanResult.radioChainInfos[idx].level = nativeRadioChainInfo.getLevelDbm();
+                idx++;
             }
             results.add(scanDetail);
         }
@@ -1734,8 +1731,9 @@ public class WifiNative {
      * @return true on success.
      */
     public boolean startPnoScan(@NonNull String ifaceName, PnoSettings pnoSettings) {
-        return mWificondControl.startPnoScan(ifaceName, pnoSettings.toNativePnoSettings(),
-                new WificondControl.PnoScanRequestCallback() {
+        return mWifiCondManager.startPnoScan(ifaceName, pnoSettings.toNativePnoSettings(),
+                Runnable::run,
+                new WifiCondManager.PnoScanRequestCallback() {
                     @Override
                     public void onPnoRequestSucceeded() {
                         mWifiMetrics.incrementPnoScanStartAttemptCount();
@@ -1755,7 +1753,7 @@ public class WifiNative {
      * @return true on success.
      */
     public boolean stopPnoScan(@NonNull String ifaceName) {
-        return mWificondControl.stopPnoScan(ifaceName);
+        return mWifiCondManager.stopPnoScan(ifaceName);
     }
 
     /**
@@ -1769,12 +1767,12 @@ public class WifiNative {
      * @param mcs The MCS index that the frame will be sent at. If mcs < 0, the driver will select
      *            the rate automatically. If the device does not support sending the frame at a
      *            specified MCS rate, the transmission will be aborted and
-     *            {@link WificondControl.SendMgmtFrameCallback#onFailure(int)} will be called
-     *            with reason {@link WificondControl#SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED}.
+     *            {@link WifiCondManager.SendMgmtFrameCallback#onFailure(int)} will be called
+     *            with reason {@link WifiCondManager#SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED}.
      */
     public void sendMgmtFrame(@NonNull String ifaceName, @NonNull byte[] frame,
-            @NonNull WificondControl.SendMgmtFrameCallback callback, int mcs) {
-        mWificondControl.sendMgmtFrame(ifaceName, frame, callback, mcs);
+            @NonNull WifiCondManager.SendMgmtFrameCallback callback, int mcs) {
+        mWifiCondManager.sendMgmtFrame(ifaceName, frame, mcs, Runnable::run, callback);
     }
 
     /**
@@ -1788,11 +1786,11 @@ public class WifiNative {
      * @param mcs The MCS index that this probe will be sent at. If mcs < 0, the driver will select
      *            the rate automatically. If the device does not support sending the frame at a
      *            specified MCS rate, the transmission will be aborted and
-     *            {@link WificondControl.SendMgmtFrameCallback#onFailure(int)} will be called
-     *            with reason {@link WificondControl#SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED}.
+     *            {@link WifiCondManager.SendMgmtFrameCallback#onFailure(int)} will be called
+     *            with reason {@link WifiCondManager#SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED}.
      */
     public void probeLink(@NonNull String ifaceName, @NonNull MacAddress receiverMac,
-            @NonNull WificondControl.SendMgmtFrameCallback callback, int mcs) {
+            @NonNull WifiCondManager.SendMgmtFrameCallback callback, int mcs) {
         if (callback == null) {
             Log.e(TAG, "callback cannot be null!");
             return;
@@ -1800,14 +1798,14 @@ public class WifiNative {
 
         if (receiverMac == null) {
             Log.e(TAG, "Receiver MAC address cannot be null!");
-            callback.onFailure(WificondControl.SEND_MGMT_FRAME_ERROR_UNKNOWN);
+            callback.onFailure(WifiCondManager.SEND_MGMT_FRAME_ERROR_UNKNOWN);
             return;
         }
 
         String senderMacStr = getMacAddress(ifaceName);
         if (senderMacStr == null) {
             Log.e(TAG, "Failed to get this device's MAC Address");
-            callback.onFailure(WificondControl.SEND_MGMT_FRAME_ERROR_UNKNOWN);
+            callback.onFailure(WifiCondManager.SEND_MGMT_FRAME_ERROR_UNKNOWN);
             return;
         }
 
@@ -1909,7 +1907,7 @@ public class WifiNative {
      */
     public boolean startSoftAp(
             @NonNull String ifaceName, SoftApConfiguration config, SoftApListener listener) {
-        if (!mWificondControl.registerApListener(ifaceName, listener)) {
+        if (!mWifiCondManager.registerApCallback(ifaceName, Runnable::run, listener)) {
             Log.e(TAG, "Failed to register ap listener");
             return false;
         }
@@ -1920,7 +1918,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
                 return false;
             }
-        } else if (!mHostapdHal.addAccessPoint(ifaceName, config, () -> listener.onFailure())) {
+        } else if (!mHostapdHal.addAccessPoint(ifaceName, config, listener::onFailure)) {
             Log.e(TAG, "Failed to add acccess point");
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
@@ -1944,6 +1942,19 @@ public class WifiNative {
         WifiInjector.getInstance().getWifiApConfigStore().setWifiGeneration(wifiGeneration);
 
         return true;
+    }
+
+    /**
+     * Force a softap client disconnect with specific reason code.
+     *
+     * @param ifaceName Name of the interface.
+     * @param client Mac address to force disconnect in clients of the SoftAp.
+     * @param reasonCode One of disconnect reason code which defined in {@link ApConfigUtil}.
+     * @return true on success, false otherwise.
+     */
+    public boolean forceClientDisconnect(@NonNull String ifaceName,
+            @NonNull MacAddress client, int reasonCode) {
+        return mHostapdHal.forceClientDisconnect(ifaceName, client, reasonCode);
     }
 
     /**
@@ -2526,7 +2537,7 @@ public class WifiNative {
      */
     public boolean connectToNetwork(@NonNull String ifaceName, WifiConfiguration configuration) {
         // Abort ongoing scan before connect() to unblock connection request.
-        mWificondControl.abortScan(ifaceName);
+        mWifiCondManager.abortScan(ifaceName);
         return mSupplicantStaIfaceHal.connectToNetwork(ifaceName, configuration);
     }
 
@@ -2546,7 +2557,7 @@ public class WifiNative {
      */
     public boolean roamToNetwork(@NonNull String ifaceName, WifiConfiguration configuration) {
         // Abort ongoing scan before connect() to unblock roaming request.
-        mWificondControl.abortScan(ifaceName);
+        mWifiCondManager.abortScan(ifaceName);
         return mSupplicantStaIfaceHal.roamToNetwork(ifaceName, configuration);
     }
 
@@ -2707,7 +2718,7 @@ public class WifiNative {
      */
     public interface DppEventCallback {
         /**
-         * Called when local DPP Enrollee successfully receives a new Wi-Fi configuratrion from the
+         * Called when local DPP Enrollee successfully receives a new Wi-Fi configuration from the
          * peer DPP configurator.
          *
          * @param newWifiConfiguration New Wi-Fi configuration received from the configurator
@@ -2715,10 +2726,11 @@ public class WifiNative {
         void onSuccessConfigReceived(WifiConfiguration newWifiConfiguration);
 
         /**
-         * Called when local DPP configurator successfully sends Wi-Fi configuration to a remote
-         * Enrollee.
+         * DPP Success event.
+         *
+         * @param dppStatusCode Status code of the success event.
          */
-        void onSuccessConfigSent();
+        void onSuccess(int dppStatusCode);
 
         /**
          * DPP Progress event.
@@ -2731,8 +2743,11 @@ public class WifiNative {
          * DPP Failure event.
          *
          * @param dppStatusCode Status code of the failure event.
+         * @param ssid SSID of the network the Enrollee tried to connect to.
+         * @param channelList List of channels the Enrollee scanned for the network.
+         * @param bandList List of bands the Enrollee supports.
          */
-        void onFailure(int dppStatusCode);
+        void onFailure(int dppStatusCode, String ssid, String channelList, int[] bandList);
     }
 
     /**
@@ -2869,7 +2884,8 @@ public class WifiNative {
          * Type of scan to perform. One of {@link WifiScanner#SCAN_TYPE_LOW_LATENCY},
          * {@link WifiScanner#SCAN_TYPE_LOW_POWER} or {@link WifiScanner#SCAN_TYPE_HIGH_ACCURACY}.
          */
-        public @WifiScanner.ScanType int scanType;
+        @WifiAnnotations.ScanType
+        public int scanType;
         public int base_period_ms;
         public int max_ap_per_scan;
         public int report_threshold_percent;
@@ -2907,19 +2923,19 @@ public class WifiNative {
             return Objects.hash(ssid, flags, auth_bit_field, frequencies);
         }
 
-        com.android.server.wifi.wificond.PnoNetwork toNativePnoNetwork() {
-            com.android.server.wifi.wificond.PnoNetwork nativePnoNetwork =
-                    new com.android.server.wifi.wificond.PnoNetwork();
-            nativePnoNetwork.isHidden =
-                    (flags & WifiScanner.PnoSettings.PnoNetwork.FLAG_DIRECTED_SCAN) != 0;
+        android.net.wifi.wificond.PnoNetwork toNativePnoNetwork() {
+            android.net.wifi.wificond.PnoNetwork nativePnoNetwork =
+                    new android.net.wifi.wificond.PnoNetwork();
+            nativePnoNetwork.setHidden(
+                    (flags & WifiScanner.PnoSettings.PnoNetwork.FLAG_DIRECTED_SCAN) != 0);
             try {
-                nativePnoNetwork.ssid =
-                        NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(ssid));
+                nativePnoNetwork.setSsid(
+                        NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(ssid)));
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Illegal argument " + ssid, e);
                 return null;
             }
-            nativePnoNetwork.frequencies = frequencies;
+            nativePnoNetwork.setFrequenciesMhz(frequencies);
             return nativePnoNetwork;
         }
     }
@@ -2932,32 +2948,26 @@ public class WifiNative {
         public int min5GHzRssi;
         public int min24GHzRssi;
         public int min6GHzRssi;
-        public int initialScoreMax;
-        public int currentConnectionBonus;
-        public int sameNetworkBonus;
-        public int secureBonus;
-        public int band5GHzBonus;
-        public int band6GHzBonus;
         public int periodInMs;
         public boolean isConnected;
         public PnoNetwork[] networkList;
 
-        com.android.server.wifi.wificond.PnoSettings toNativePnoSettings() {
-            com.android.server.wifi.wificond.PnoSettings nativePnoSettings =
-                    new com.android.server.wifi.wificond.PnoSettings();
-            nativePnoSettings.intervalMs = periodInMs;
-            nativePnoSettings.min2gRssi = min24GHzRssi;
-            nativePnoSettings.min5gRssi = min5GHzRssi;
-            nativePnoSettings.min6gRssi = min6GHzRssi;
+        android.net.wifi.wificond.PnoSettings toNativePnoSettings() {
+            android.net.wifi.wificond.PnoSettings nativePnoSettings =
+                    new android.net.wifi.wificond.PnoSettings();
+            nativePnoSettings.setIntervalMillis(periodInMs);
+            nativePnoSettings.setMin2gRssiDbm(min24GHzRssi);
+            nativePnoSettings.setMin5gRssiDbm(min5GHzRssi);
+            nativePnoSettings.setMin6gRssiDbm(min6GHzRssi);
 
-            nativePnoSettings.pnoNetworks  = new ArrayList<>();
+            List<android.net.wifi.wificond.PnoNetwork> pnoNetworks = new ArrayList<>();
             if (networkList != null) {
                 for (PnoNetwork network : networkList) {
-                    com.android.server.wifi.wificond.PnoNetwork nativeNetwork =
+                    android.net.wifi.wificond.PnoNetwork nativeNetwork =
                             network.toNativePnoNetwork();
                     if (nativeNetwork != null) {
                         if (nativeNetwork.ssid.length <= WifiGbk.MAX_SSID_LENGTH) { //wifigbk++
-                            nativePnoSettings.pnoNetworks.add(nativeNetwork);
+                            pnoNetworks.add(nativeNetwork);
                         }
                         //wifigbk++
                         if (!WifiGbk.isAllAscii(nativeNetwork.ssid)) {
@@ -2967,7 +2977,7 @@ public class WifiNative {
                             nativeNetwork2.ssid = WifiGbk.toGbk(nativeNetwork.ssid);
                             nativeNetwork2.frequencies = nativeNetwork.frequencies;
                             if (nativeNetwork2.ssid != null) {
-                                nativePnoSettings.pnoNetworks.add(nativeNetwork2);
+                                pnoNetworks.add(nativeNetwork2);
                                 Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for " + nativeNetwork.ssid);
                             }
                         }
@@ -2975,6 +2985,7 @@ public class WifiNative {
                     }
                 }
             }
+            nativePnoSettings.setPnoNetworks(pnoNetworks);
             return nativePnoSettings;
         }
     }

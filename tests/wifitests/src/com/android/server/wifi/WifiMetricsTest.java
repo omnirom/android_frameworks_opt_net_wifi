@@ -64,6 +64,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
 import android.net.wifi.hotspot2.pps.Credential;
+import android.net.wifi.wificond.WifiCondManager;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
@@ -143,6 +144,7 @@ public class WifiMetricsTest extends WifiBaseTest {
     @Mock Clock mClock;
     @Mock ScoringParams mScoringParams;
     @Mock WifiConfigManager mWcm;
+    @Mock BssidBlocklistMonitor mBssidBlocklistMonitor;
     @Mock PasspointManager mPpm;
     @Mock WifiNetworkSelector mWns;
     @Mock WifiPowerMetrics mWifiPowerMetrics;
@@ -165,6 +167,7 @@ public class WifiMetricsTest extends WifiBaseTest {
                 new WifiAwareMetrics(mClock), new RttMetrics(mClock), mWifiPowerMetrics,
                 mWifiP2pMetrics, mDppMetrics);
         mWifiMetrics.setWifiConfigManager(mWcm);
+        mWifiMetrics.setBssidBlocklistMonitor(mBssidBlocklistMonitor);
         mWifiMetrics.setPasspointManager(mPpm);
         mWifiMetrics.setScoringParams(mScoringParams);
         mWifiMetrics.setWifiNetworkSelector(mWns);
@@ -1473,6 +1476,28 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.connectionEvent[0].level2FailureCode);
         assertEquals(WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN,
                 mDecodedProto.connectionEvent[0].level2FailureReason);
+    }
+
+    /**
+     * Verify the logging of number of blocked BSSIDs in ConnectionEvent.
+     */
+    @Test
+    public void testMetricNumBssidInBlocklist() throws Exception {
+        WifiConfiguration config = mock(WifiConfiguration.class);
+        config.SSID = "\"" + SSID + "\"";
+        when(config.getNetworkSelectionStatus()).thenReturn(
+                mock(WifiConfiguration.NetworkSelectionStatus.class));
+        when(mBssidBlocklistMonitor.getNumBlockedBssidsForSsid(eq(config.SSID))).thenReturn(3);
+        mWifiMetrics.startConnectionEvent(config, "RED",
+                WifiMetricsProto.ConnectionEvent.ROAM_NONE);
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_TIMED_OUT,
+                WifiMetricsProto.ConnectionEvent.HLF_NONE,
+                WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
+        dumpProtoAndDeserialize();
+
+        assertEquals(1, mDecodedProto.connectionEvent.length);
+        assertEquals(3, mDecodedProto.connectionEvent[0].numBssidInBlocklist);
     }
 
     /**
@@ -3412,13 +3437,13 @@ public class WifiMetricsTest extends WifiBaseTest {
     public void testLogLinkProbeMetrics() throws Exception {
         mWifiMetrics.logLinkProbeSuccess(10000, -75, 50, 5);
         mWifiMetrics.logLinkProbeFailure(30000, -80, 10,
-                WificondControl.SEND_MGMT_FRAME_ERROR_NO_ACK);
+                WifiCondManager.SEND_MGMT_FRAME_ERROR_NO_ACK);
         mWifiMetrics.logLinkProbeSuccess(3000, -71, 160, 12);
         mWifiMetrics.logLinkProbeFailure(40000, -80, 6,
-                WificondControl.SEND_MGMT_FRAME_ERROR_NO_ACK);
+                WifiCondManager.SEND_MGMT_FRAME_ERROR_NO_ACK);
         mWifiMetrics.logLinkProbeSuccess(5000, -73, 160, 10);
         mWifiMetrics.logLinkProbeFailure(2000, -78, 6,
-                WificondControl.SEND_MGMT_FRAME_ERROR_TIMEOUT);
+                WifiCondManager.SEND_MGMT_FRAME_ERROR_TIMEOUT);
 
         dumpProtoAndDeserialize();
 

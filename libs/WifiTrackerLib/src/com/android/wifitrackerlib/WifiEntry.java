@@ -18,6 +18,7 @@ package com.android.wifitrackerlib;
 
 import static androidx.core.util.Preconditions.checkNotNull;
 
+import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 
@@ -25,6 +26,7 @@ import androidx.annotation.AnyThread;
 import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -132,7 +134,7 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
 
     // Callback associated with this WifiEntry. Subclasses should call its methods appropriately.
     private WifiEntryCallback mListener;
-    private Handler mCallbackHandler;
+    protected Handler mCallbackHandler;
 
     WifiEntry(@NonNull Handler callbackHandler, boolean forSavedNetworksPage,
             @NonNull WifiManager wifiManager) throws IllegalArgumentException {
@@ -164,9 +166,17 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
      */
     public abstract int getLevel();
 
+    /**
+     * Returns the SSID of the entry, if applicable. Null otherwise.
+     */
+    public abstract String getSsid();
+
     /** Returns the security type defined by the SECURITY constants */
     @Security
     public abstract int getSecurity();
+
+    /** Returns the MAC address of the connection */
+    public abstract String getMacAddress();
 
     /**
      * Indicates when a network is metered or the user marked the network as metered.
@@ -178,6 +188,18 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
      * subscription.
      */
     public abstract boolean isSaved();
+
+    /**
+     * Indicates whether or not an entry is for a subscription.
+     */
+    public abstract boolean isSubscription();
+
+    /**
+     * Returns the WifiConfiguration of an entry or null if unavailable. This should be used when
+     * information on the WifiConfiguration needs to be modified and saved via
+     * {@link WifiManager#save(WifiConfiguration, WifiManager.ActionListener)}.
+     */
+    public abstract WifiConfiguration getWifiConfiguration();
 
     /**
      * Returns the ConnectedInfo object pertaining to an active connection.
@@ -205,17 +227,29 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     /** Returns whether the entry should show a connect option */
     public abstract boolean canConnect();
     /** Connects to the network */
-    public abstract void connect();
+    public abstract void connect(@Nullable ConnectCallback callback);
 
     /** Returns whether the entry should show a disconnect option */
     public abstract boolean canDisconnect();
     /** Disconnects from the network */
-    public abstract void disconnect();
+    public abstract void disconnect(@Nullable DisconnectCallback callback);
 
     /** Returns whether the entry should show a forget option */
     public abstract boolean canForget();
     /** Forgets the network */
-    public abstract void forget();
+    public abstract void forget(@Nullable ForgetCallback callback);
+
+    /** Returns whether the network can be signed-in to */
+    public abstract boolean canSignIn();
+    /** Sign-in to the network. For captive portals. */
+    public abstract void signIn(@Nullable SignInCallback callback);
+
+    /** Returns whether the network can be shared via QR code */
+    public abstract boolean canShare();
+    /** Returns whether the user can use Easy Connect to onboard a device to the network */
+    public abstract boolean canEasyConnect();
+    /** Returns the QR code string for the network */
+    public abstract String getQrCodeString();
 
     // Modifiable settings
 
@@ -253,69 +287,6 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     /** Sets whether a network will be auto-joined or not */
     public abstract void setAutoJoinEnabled(boolean enabled);
 
-    /** Returns the ProxySettings for the network */
-    public abstract ProxySettings getProxySettings();
-    /** Returns whether the user can modify the ProxySettings for the network */
-    public abstract boolean canSetProxySettings();
-    /** Sets the ProxySettinsg for the network */
-    public abstract void setProxySettings(@NonNull ProxySettings proxySettings);
-
-    /** Returns the IpSettings for the network */
-    public abstract IpSettings getIpSettings();
-    /** Returns whether the user can set the IpSettings for the network */
-    public abstract boolean canSetIpSettings();
-    /** Sets the IpSettings for the network */
-    public abstract void setIpSettings(@NonNull IpSettings ipSettings);
-
-    /**
-     * Data class used for proxy settings
-     */
-    public static class ProxySettings {
-        @Retention(RetentionPolicy.SOURCE)
-        @IntDef(value = {
-                TYPE_NONE,
-                TYPE_MANUAL,
-                TYPE_PROXY_AUTOCONFIG
-        })
-
-        public @interface Type {}
-
-        public static final int TYPE_NONE = 0;
-        public static final int TYPE_MANUAL = 1;
-        public static final int TYPE_PROXY_AUTOCONFIG = 2;
-
-        @Type
-        public int type;
-        public String hostname;
-        public String port;
-        public String bypassAddresses;
-        public String pacUrl;
-    }
-
-    /**
-     * Data class used for IP settings
-     */
-    public static class IpSettings {
-        @Retention(RetentionPolicy.SOURCE)
-        @IntDef(value = {
-                TYPE_DCHP,
-                TYPE_STATIC
-        })
-
-        public @interface Type {}
-
-        public static final int TYPE_DCHP = 0;
-        public static final int TYPE_STATIC = 1;
-
-        @Type
-        public int type;
-        public String ipAddress;
-        public String gateway;
-        public int prefixLength;
-        public String dns1;
-        public String dns2;
-    }
-
     /**
      * Sets the callback listener for WifiEntryCallback methods.
      * Subsequent calls will overwrite the previous listener.
@@ -325,34 +296,77 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     }
 
     /**
-     * Listener for changes to the state of the WifiEntry or the result of actions on the WifiEntry.
-     * These callbacks will be invoked on the main thread.
+     * Listener for changes to the state of the WifiEntry.
+     * This callback will be invoked on the main thread.
      */
     public interface WifiEntryCallback {
+        /**
+         * Indicates the state of the WifiEntry has changed and clients may retrieve updates through
+         * the WifiEntry getter methods.
+         */
+        @MainThread
+        void onUpdated();
+    }
+
+    @AnyThread
+    protected void notifyOnUpdated() {
+        if (mListener != null) {
+            mCallbackHandler.post(() -> mListener.onUpdated());
+        }
+    }
+
+    /**
+     * Listener for changes to the state of the WifiEntry.
+     * This callback will be invoked on the main thread.
+     */
+    public interface ConnectCallback {
         @Retention(RetentionPolicy.SOURCE)
         @IntDef(value = {
                 CONNECT_STATUS_SUCCESS,
-                CONNECT_STATUS_FAILURE_NO_PASSWORD,
+                CONNECT_STATUS_FAILURE_NO_CONFIG,
                 CONNECT_STATUS_FAILURE_UNKNOWN
         })
 
         public @interface ConnectStatus {}
 
         int CONNECT_STATUS_SUCCESS = 0;
-        int CONNECT_STATUS_FAILURE_NO_PASSWORD = 1;
+        int CONNECT_STATUS_FAILURE_NO_CONFIG = 1;
         int CONNECT_STATUS_FAILURE_UNKNOWN = 2;
 
+        /**
+         * Result of the connect request indicated by the CONNECT_STATUS constants.
+         */
+        @MainThread
+        void onConnectResult(@ConnectStatus int status);
+    }
+
+    /**
+     * Listener for changes to the state of the WifiEntry.
+     * This callback will be invoked on the main thread.
+     */
+    public interface DisconnectCallback {
         @Retention(RetentionPolicy.SOURCE)
         @IntDef(value = {
-                CONNECT_STATUS_SUCCESS,
-                CONNECT_STATUS_FAILURE_UNKNOWN
+                DISCONNECT_STATUS_SUCCESS,
+                DISCONNECT_STATUS_FAILURE_UNKNOWN
         })
 
         public @interface DisconnectStatus {}
 
         int DISCONNECT_STATUS_SUCCESS = 0;
         int DISCONNECT_STATUS_FAILURE_UNKNOWN = 1;
+        /**
+         * Result of the disconnect request indicated by the DISCONNECT_STATUS constants.
+         */
+        @MainThread
+        void onDisconnectResult(@DisconnectStatus int status);
+    }
 
+    /**
+     * Listener for changes to the state of the WifiEntry.
+     * This callback will be invoked on the main thread.
+     */
+    public interface ForgetCallback {
         @Retention(RetentionPolicy.SOURCE)
         @IntDef(value = {
                 FORGET_STATUS_SUCCESS,
@@ -365,30 +379,35 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
         int FORGET_STATUS_FAILURE_UNKNOWN = 1;
 
         /**
-         * Indicates the state of the WifiEntry has changed and clients may retrieve updates through
-         * the WifiEntry getter methods.
-         */
-        @MainThread
-        void onUpdated();
-
-        /**
-         * Result of the connect request indicated by the CONNECT_STATUS constants.
-         */
-        @MainThread
-        void onConnectResult(@ConnectStatus int status);
-
-        /**
-         * Result of the disconnect request indicated by the DISCONNECT_STATUS constants.
-         */
-        @MainThread
-        void onDisconnectResult(@DisconnectStatus int status);
-
-        /**
          * Result of the forget request indicated by the FORGET_STATUS constants.
          */
         @MainThread
         void onForgetResult(@ForgetStatus int status);
     }
+
+    /**
+     * Listener for changes to the state of the WifiEntry.
+     * This callback will be invoked on the main thread.
+     */
+    public interface SignInCallback {
+        @Retention(RetentionPolicy.SOURCE)
+        @IntDef(value = {
+                SIGNIN_STATUS_SUCCESS,
+                SIGNIN_STATUS_FAILURE_UNKNOWN
+        })
+
+        public @interface SignInStatus {}
+
+        int SIGNIN_STATUS_SUCCESS = 0;
+        int SIGNIN_STATUS_FAILURE_UNKNOWN = 1;
+
+        /**
+         * Result of the sign-in request indicated by the SIGNIN_STATUS constants.
+         */
+        @MainThread
+        void onSignInResult(@SignInStatus int status);
+    }
+
 
     // TODO (b/70983952) Come up with a sorting scheme that does the right thing.
     @Override
@@ -428,33 +447,5 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
                 .append(",security:")
                 .append(getSecurity())
                 .toString();
-    }
-
-    @AnyThread
-    protected void notifyOnUpdated() {
-        if (mListener != null) {
-            mCallbackHandler.post(() -> mListener.onUpdated());
-        }
-    }
-
-    @AnyThread
-    protected void notifyOnConnectResult(int status) {
-        if (mListener != null) {
-            mCallbackHandler.post(() -> mListener.onConnectResult(status));
-        }
-    }
-
-    @AnyThread
-    protected void notifyOnDisconnectResult(int status) {
-        if (mListener != null) {
-            mCallbackHandler.post(() -> mListener.onDisconnectResult(status));
-        }
-    }
-
-    @AnyThread
-    protected void notifyOnForgetResult(int status) {
-        if (mListener != null) {
-            mCallbackHandler.post(() -> mListener.onForgetResult(status));
-        }
     }
 }

@@ -385,6 +385,30 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
     }
 
     /**
+     * Tests the saving of WifiConfiguration to wpa_supplicant.
+     */
+    @Test
+    public void testWapiPskNetworkWifiConfigurationSaveLoad() throws Exception {
+        // Now expose the V1.3 ISupplicantStaNetwork
+        createSupplicantStaNetwork(SupplicantStaNetworkVersion.V1_3);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createWapiPskNetwork();
+        testWifiConfigurationSaveLoad(config);
+    }
+
+    /**
+     * Tests the saving of WifiConfiguration to wpa_supplicant.
+     */
+    @Test
+    public void testWapiCertNetworkWifiConfigurationSaveLoad() throws Exception {
+        // Now expose the V1.3 ISupplicantStaNetwork
+        createSupplicantStaNetwork(SupplicantStaNetworkVersion.V1_3);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createWapiCertNetwork();
+        testWifiConfigurationSaveLoad(config);
+    }
+
+    /**
      * Tests the failure to save ssid.
      */
     @Test
@@ -976,7 +1000,11 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
     /** Verifies that setPmkCache can set PMK cache
      *
      */
+    @Test
     public void testSetPmkCache() {
+        // Now expose the V1.3 ISupplicantStaNetwork
+        createSupplicantStaNetwork(SupplicantStaNetworkVersion.V1_3);
+
         WifiConfiguration config = WifiConfigurationTestUtil.createEapNetwork();
         config.enterpriseConfig =
                 WifiConfigurationTestUtil.createTLSWifiEnterpriseConfigWithNonePhase2();
@@ -1192,6 +1220,22 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
                 .getKeyMgmt_1_2(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
                         .getKeyMgmt_1_2Callback.class));
 
+        /** allowedKeyManagement v1.3 */
+        doAnswer(new AnswerWithArguments() {
+            public SupplicantStatus answer(int mask) throws RemoteException {
+                mSupplicantVariables.keyMgmtMask = mask;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaNetworkV13).setKeyMgmt_1_3(any(int.class));
+        doAnswer(new AnswerWithArguments() {
+            public void answer(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                    .getKeyMgmt_1_3Callback cb) throws RemoteException {
+                cb.onValues(mStatusSuccess, mSupplicantVariables.keyMgmtMask);
+            }
+        }).when(mISupplicantStaNetworkV13)
+                .getKeyMgmt_1_3(any(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        .getKeyMgmt_1_3Callback.class));
+
         /** allowedProtocols */
         doAnswer(new AnswerWithArguments() {
             public SupplicantStatus answer(int mask) throws RemoteException {
@@ -1205,6 +1249,22 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
             }
         }).when(mISupplicantStaNetworkMock)
                 .getProto(any(ISupplicantStaNetwork.getProtoCallback.class));
+
+        /** allowedProtocols v1.3*/
+        doAnswer(new AnswerWithArguments() {
+            public SupplicantStatus answer(int mask) throws RemoteException {
+                mSupplicantVariables.protoMask = mask;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaNetworkV13).setProto_1_3(any(int.class));
+        doAnswer(new AnswerWithArguments() {
+            public void answer(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                    .getProto_1_3Callback cb) throws RemoteException {
+                cb.onValues(mStatusSuccess, mSupplicantVariables.protoMask);
+            }
+        }).when(mISupplicantStaNetworkV13)
+                .getProto_1_3(any(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        .getProto_1_3Callback.class));
 
         /** allowedAuthAlgorithms */
         doAnswer(new AnswerWithArguments() {
@@ -1251,6 +1311,23 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
                 .getGroupCipher_1_2(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
                         .getGroupCipher_1_2Callback.class));
 
+        /** allowedGroupCiphers v1.3*/
+        doAnswer(new AnswerWithArguments() {
+            public SupplicantStatus answer(int mask) throws RemoteException {
+                mSupplicantVariables.groupCipherMask = mask;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaNetworkV13).setGroupCipher_1_3(any(int.class));
+        doAnswer(new AnswerWithArguments() {
+            public void answer(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                    .getGroupCipher_1_3Callback cb)
+                    throws RemoteException {
+                cb.onValues(mStatusSuccess, mSupplicantVariables.groupCipherMask);
+            }
+        }).when(mISupplicantStaNetworkV13)
+                .getGroupCipher_1_3(any(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        .getGroupCipher_1_3Callback.class));
+
         /** allowedPairwiseCiphers */
         doAnswer(new AnswerWithArguments() {
             public SupplicantStatus answer(int mask) throws RemoteException {
@@ -1281,6 +1358,23 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         }).when(mISupplicantStaNetworkV12)
                 .getPairwiseCipher_1_2(any(android.hardware.wifi.supplicant.V1_2
                         .ISupplicantStaNetwork.getPairwiseCipher_1_2Callback.class));
+
+        /** allowedPairwiseCiphers v1.3 */
+        doAnswer(new AnswerWithArguments() {
+            public SupplicantStatus answer(int mask) throws RemoteException {
+                mSupplicantVariables.pairwiseCipherMask = mask;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaNetworkV13).setPairwiseCipher_1_3(any(int.class));
+        doAnswer(new AnswerWithArguments() {
+            public void answer(android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                    .getPairwiseCipher_1_3Callback cb)
+                    throws RemoteException {
+                cb.onValues(mStatusSuccess, mSupplicantVariables.pairwiseCipherMask);
+            }
+        }).when(mISupplicantStaNetworkV13)
+                .getPairwiseCipher_1_3(any(android.hardware.wifi.supplicant.V1_3
+                        .ISupplicantStaNetwork.getPairwiseCipher_1_3Callback.class));
 
         /** metadata: idstr */
         doAnswer(new AnswerWithArguments() {
@@ -1583,6 +1677,22 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
             }
         }).when(mISupplicantStaNetworkV13).setPmkCache(any(ArrayList.class));
 
+        /** WAPI Cert */
+        doAnswer(new AnswerWithArguments() {
+            public SupplicantStatus answer(String cert) throws RemoteException {
+                mSupplicantVariables.wapiCertSuite = cert;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaNetworkV13).setWapiCertSuite(any(String.class));
+        doAnswer(new AnswerWithArguments() {
+            public void answer(android.hardware.wifi.supplicant.V1_3
+                    .ISupplicantStaNetwork.getWapiCertSuiteCallback cb)
+                    throws RemoteException {
+                cb.onValues(mStatusSuccess, mSupplicantVariables.wapiCertSuite);
+            }
+        }).when(mISupplicantStaNetworkV13)
+                .getWapiCertSuite(any(android.hardware.wifi.supplicant.V1_3
+                        .ISupplicantStaNetwork.getWapiCertSuiteCallback.class));
     }
 
     private SupplicantStatus createSupplicantStatus(int code) {
@@ -1648,5 +1758,6 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         public boolean eapProactiveKeyCaching;
         public int ocsp;
         public ArrayList<Byte> serializedPmkCache;
+        public String wapiCertSuite;
     }
 }

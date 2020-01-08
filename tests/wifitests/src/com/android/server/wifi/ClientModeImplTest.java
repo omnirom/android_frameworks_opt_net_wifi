@@ -32,6 +32,7 @@ import static org.mockito.Mockito.*;
 import android.app.ActivityManager;
 import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.app.test.TestAlarmManager;
+import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -60,6 +61,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.wificond.WifiCondManager;
 import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
@@ -2558,11 +2560,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         WifiLinkLayerStats llStats = new WifiLinkLayerStats();
         llStats.txmpdu_be = 1000;
         llStats.rxmpdu_bk = 2000;
-        WificondControl.SignalPollResult signalPollResult = new WificondControl.SignalPollResult();
-        signalPollResult.currentRssi = -42;
-        signalPollResult.txBitrate = 65;
-        signalPollResult.associationFrequency = sFreq;
-        signalPollResult.rxBitrate = 54;
+        WifiCondManager.SignalPollResult signalPollResult = new WifiCondManager.SignalPollResult(
+                -42, 65, 54, sFreq);
         when(mWifiNative.getWifiLinkLayerStats(any())).thenReturn(llStats);
         when(mWifiNative.signalPoll(any())).thenReturn(signalPollResult);
         when(mClock.getWallClockMillis()).thenReturn(startMillis + 0);
@@ -2574,10 +2573,10 @@ public class ClientModeImplTest extends WifiBaseTest {
         WifiInfo wifiInfo = mCmi.getWifiInfo();
         assertEquals(llStats.txmpdu_be, wifiInfo.txSuccess);
         assertEquals(llStats.rxmpdu_bk, wifiInfo.rxSuccess);
-        assertEquals(signalPollResult.currentRssi, wifiInfo.getRssi());
-        assertEquals(signalPollResult.txBitrate, wifiInfo.getLinkSpeed());
-        assertEquals(signalPollResult.txBitrate, wifiInfo.getTxLinkSpeedMbps());
-        assertEquals(signalPollResult.rxBitrate, wifiInfo.getRxLinkSpeedMbps());
+        assertEquals(signalPollResult.currentRssiDbm, wifiInfo.getRssi());
+        assertEquals(signalPollResult.txBitrateMbps, wifiInfo.getLinkSpeed());
+        assertEquals(signalPollResult.txBitrateMbps, wifiInfo.getTxLinkSpeedMbps());
+        assertEquals(signalPollResult.rxBitrateMbps, wifiInfo.getRxLinkSpeedMbps());
         assertEquals(sFreq, wifiInfo.getFrequency());
         verify(mWifiScoreCard).noteSignalPoll(any());
     }
@@ -3897,7 +3896,7 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verifies that we trigger a disconnect when the {@link WifiConfigManager.
+     * Verifies that we trigger a disconnect when the {@link WifiConfigManager}.
      * OnNetworkUpdateListener#onNetworkRemoved(WifiConfiguration)} is invoked.
      */
     @Test
@@ -3974,5 +3973,106 @@ public class ClientModeImplTest extends WifiBaseTest {
         mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
         mLooper.dispatchAll();
         verify(mMboOceController).disable();
+    }
+
+    /**
+     * Verify that Bluetooth active is set correctly with BT state/connection state changes
+     */
+    @Test
+    public void verifyBluetoothStateAndConnectionStateChanges() throws Exception {
+        startSupplicantAndDispatchMessages();
+        mCmi.sendBluetoothAdapterStateChange(BluetoothAdapter.STATE_ON);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(1)).setBluetoothConnected(false);
+
+        mCmi.sendBluetoothAdapterConnectionStateChange(BluetoothAdapter.STATE_CONNECTED);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(1)).setBluetoothConnected(true);
+
+        mCmi.sendBluetoothAdapterStateChange(BluetoothAdapter.STATE_OFF);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(2)).setBluetoothConnected(false);
+
+        mCmi.sendBluetoothAdapterStateChange(BluetoothAdapter.STATE_ON);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(3)).setBluetoothConnected(false);
+
+        mCmi.sendBluetoothAdapterConnectionStateChange(BluetoothAdapter.STATE_CONNECTING);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(2)).setBluetoothConnected(true);
+
+        mCmi.sendBluetoothAdapterConnectionStateChange(BluetoothAdapter.STATE_DISCONNECTED);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(4)).setBluetoothConnected(false);
+
+        mCmi.sendBluetoothAdapterConnectionStateChange(BluetoothAdapter.STATE_CONNECTED);
+        mLooper.dispatchAll();
+        verify(mWifiConnectivityManager, times(3)).setBluetoothConnected(true);
+    }
+
+    /**
+     * Test that handleBssTransitionRequest() blacklist the BSS when
+     * imminent bit is set.
+     */
+    @Test
+    public void testBtmFrameWithImminentBitBlackListTheBssid() throws Exception {
+        // Connect to network with |sBSSID|, |sFreq|.
+        connect();
+
+        MboOceController.BtmFrameData btmFrmData = new MboOceController.BtmFrameData();
+
+        btmFrmData.mStatus = MboOceConstants.BTM_RESPONSE_STATUS_REJECT_UNSPECIFIED;
+        btmFrmData.mBssTmDataFlagsMask = MboOceConstants.BTM_DATA_FLAG_DISASSOCIATION_IMMINENT;
+        btmFrmData.mBlackListDurationMs = 60000;
+
+        mCmi.sendMessage(WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE, btmFrmData);
+        mLooper.dispatchAll();
+
+        verify(mBssidBlocklistMonitor).blockBssidForDurationMs(sBSSID, sSSID,
+                btmFrmData.mBlackListDurationMs);
+    }
+
+    /**
+     * Test that handleBssTransitionRequest() trigger force scan for
+     * network selection when status code is REJECT.
+     */
+    @Test
+    public void testBTMRequestRejectTriggerNetworkSelction() throws Exception {
+        // Connect to network with |sBSSID|, |sFreq|.
+        connect();
+
+        MboOceController.BtmFrameData btmFrmData = new MboOceController.BtmFrameData();
+
+        btmFrmData.mStatus = MboOceConstants.BTM_RESPONSE_STATUS_REJECT_UNSPECIFIED;
+        btmFrmData.mBssTmDataFlagsMask = MboOceConstants.BTM_DATA_FLAG_DISASSOCIATION_IMMINENT;
+        btmFrmData.mBlackListDurationMs = 0;
+
+        mCmi.sendMessage(WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE, btmFrmData);
+        mLooper.dispatchAll();
+
+        verify(mBssidBlocklistMonitor).blockBssidForDurationMs(sBSSID, sSSID,
+                MboOceConstants.DEFAULT_BLACKLIST_DURATION_MS);
+        verify(mWifiConnectivityManager).forceConnectivityScan(ClientModeImpl.WIFI_WORK_SOURCE);
+    }
+
+    /**
+     * Test that handleBssTransitionRequest() does not trigger force
+     * scan when status code is accept.
+     */
+    @Test
+    public void testBTMRequestAcceptDoNotTriggerNetworkSelction() throws Exception {
+        // Connect to network with |sBSSID|, |sFreq|.
+        connect();
+
+        MboOceController.BtmFrameData btmFrmData = new MboOceController.BtmFrameData();
+
+        btmFrmData.mStatus = MboOceConstants.BTM_RESPONSE_STATUS_ACCEPT;
+        btmFrmData.mBssTmDataFlagsMask = MboOceConstants.BTM_DATA_FLAG_DISASSOCIATION_IMMINENT;
+
+        mCmi.sendMessage(WifiMonitor.MBO_OCE_BSS_TM_HANDLING_DONE, btmFrmData);
+        mLooper.dispatchAll();
+
+        verify(mWifiConnectivityManager, never())
+                .forceConnectivityScan(ClientModeImpl.WIFI_WORK_SOURCE);
     }
 }

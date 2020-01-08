@@ -21,8 +21,14 @@
      entries do not follow the convention, but all new entries should. -->
 
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <!-- Boolean indicating whether the wifi chipset has dual frequency band support -->
-    <bool translatable="false" name="config_wifi_dual_band_support">false</bool>
+    <!-- boolean indicating whether the WiFi chipset has 5GHz band support.
+         Note: This config is replacing the config_wifi_dual_band_support
+         since more bands may now be supported (such as 6GHz), the naming dual_band
+         is no longer indicative, and a separate config now exists for each band -->
+    <bool translatable="false" name ="config_wifi5ghzSupport">false</bool>
+
+    <!-- boolean indicating whether the WiFi chipset has 6GHz band support -->
+    <bool translatable="false" name ="config_wifi6ghzSupport">false</bool>
 
     <!-- Maximum number of concurrent WiFi interfaces in AP mode -->
     <integer translatable="false" name="config_wifi_max_ap_interfaces">1</integer>
@@ -66,20 +72,38 @@
     <!-- Boolean indicating whether or not wifi should turn off when emergency call is made -->
     <bool translatable="false" name="config_wifi_turn_off_during_emergency_call">false</bool>
 
-    <!-- Integer specifying the basic autojoin parameters -->
-    <integer translatable="false" name="config_wifi_framework_5GHz_preference_boost_factor">40</integer>
-    <integer translatable="false" name="config_wifiFramework6ghzPreferenceBoostFactor">40</integer>
-    <integer translatable="false" name="config_wifi_framework_RSSI_SCORE_OFFSET">85</integer>
-    <integer translatable="false" name="config_wifi_framework_RSSI_SCORE_SLOPE">4</integer>
-    <integer translatable="false" name="config_wifi_framework_SAME_BSSID_AWARD">24</integer>
-    <integer translatable="false" name="config_wifi_framework_LAST_SELECTION_AWARD">480</integer>
-    <integer translatable="false" name="config_wifi_framework_SECURITY_AWARD">80</integer>
-    <!-- Integers specifying the max packet Tx/Rx rates for full scan -->
-    <integer translatable="false" name="config_wifi_framework_max_tx_rate_for_full_scan">8</integer>
-    <integer translatable="false" name="config_wifi_framework_max_rx_rate_for_full_scan">16</integer>
-    <!-- Integers specifying the min packet Tx/Rx rates in packets per second for staying on the same network -->
-    <integer translatable="false" name="config_wifi_framework_min_tx_rate_for_staying_on_network">16</integer>
-    <integer translatable="false" name="config_wifi_framework_min_rx_rate_for_staying_on_network">16</integer>
+    <!-- Parameters for controlling network selection by the framework -->
+
+    <!-- The ratio of the next two parameters is the multiplier that converts the estimated
+         throughput in Mbps to score points. -->
+    <integer translatable="false" name="config_wifiFrameworkThroughputBonusNumerator">120</integer>
+    <integer translatable="false" name="config_wifiFrameworkThroughputBonusDenominator">433</integer>
+
+    <!-- Maximum contribution (in score points) due to the estimated throughput. -->
+    <integer translatable="false" name="config_wifiFrameworkThroughputBonusLimit">200</integer>
+
+    <!-- The default values chosen here establish four non-overlapping categories:
+             saved, unmetered
+             unsaved, unmetered
+             saved, metered
+             unsaved, metered
+         These values can be reduced to allow overlapping between categories. -->
+    <integer translatable="false" name="config_wifiFrameworkSavedNetworkBonus">500</integer>
+    <integer translatable="false" name="config_wifiFrameworkUnmeteredNetworkBonus">1000</integer>
+
+    <integer translatable="false" name="config_wifiFrameworkCurrentNetworkBonus">20</integer>
+    <integer translatable="false" name="config_wifiFrameworkSecureNetworkBonus">10</integer>
+
+    <!-- The bonus for the last-selected network starts out very large to override the category
+         boundaries. -->
+    <integer translatable="false" name="config_wifiFrameworkLastSelectionBonus">1999</integer>
+
+    <!-- Integer specifying the min packet Tx/Rx rates in packets per second to be considered
+         active traffic so that network selection and scan could be skipped-->
+    <integer translatable="false" name="config_wifiFrameworkMinPacketPerSecondActiveTraffic">16</integer>
+    <!-- Integer specifying the min packet Tx/Rx rates in packets per second to be considered
+         high traffic so that the device should stay on WiFi even if RSSI is very low -->
+    <integer translatable="false" name="config_wifiFrameworkMinPacketPerSecondHighTraffic">100</integer>
     <!-- Integer parameters of the wifi to cellular handover feature
          wifi should not stick to bad networks -->
     <!-- Integer threshold for low network score, should be somewhat less than the entry threshhold -->
@@ -103,14 +127,14 @@
          smaller than the limit. -->
     <integer translatable="false" name="config_wifi_framework_soft_ap_timeout_delay">600000</integer>
 
+    <!-- Integer indicating maximum hardware supported client number of soft ap -->
+    <integer translatable="false" name="config_wifi_hardware_soft_ap_max_client_count">16</integer>
+
     <string  translatable="false" name="config_wifi_random_mac_oui">DA-A1-19</string>
     <string  translatable="false" name="config_wifi_framework_sap_2G_channel_list">1,6,11</string>
 
     <!-- Integer indicating associated full scan max num active channels -->
     <integer translatable="false" name="config_wifi_framework_associated_partial_scan_max_num_active_channels">6</integer>
-
-    <!-- Integer indicating RSSI boost given to current network -->
-    <integer translatable="false" name="config_wifi_framework_current_network_boost">16</integer>
 
     <!-- Integer delay in milliseconds before set wlan interface up during watchdog recovery -->
     <integer translatable="false" name="config_wifi_framework_recovery_timeout_delay">2000</integer>
@@ -131,6 +155,9 @@
          power limit for meeting SAR requirements -->
     <bool translatable="false" name="config_wifi_framework_enable_soft_ap_sar_tx_power_limit">false</bool>
 
+    <!-- Wifi Hal supports force client disconnect for softap -->
+    <bool translatable="false" name="config_wifi_sofap_client_force_disconnect_supported">true</bool>
+
     <!-- Wifi driver supports Automatic channel selection (ACS) for softap -->
     <bool translatable="false" name="config_wifi_softap_acs_supported">false</bool>
 
@@ -146,7 +173,10 @@
     <bool translatable="false" name="config_wifi_softap_ieee80211ac_supported">false</bool>
 
     <!-- Wifi driver supports IEEE80211AX for softap -->
-    <bool translatable="false" name="config_wifi_softap_ieee80211ax_supported">false</bool>
+    <bool translatable="false" name="config_wifiSoftapIeee80211axSupported">false</bool>
+
+    <!-- Wifi driver supports 6GHz band for softap -->
+    <bool translatable="false" name="config_wifiSoftap6ghzSupported">false</bool>
 
     <!-- Indicates that local-only hotspot should be brought up at 5GHz.  This option is
          for automotive builds only (the one that have PackageManager#FEATURE_AUTOMOTIVE) -->
@@ -161,8 +191,22 @@
     <!-- Indicates that AP mode MAC randomization is supported on this device -->
     <bool translatable="false" name="config_wifi_ap_mac_randomization_supported">true</bool>
 
-    <!-- flag for activating paranoid MAC randomization on a limited set of SSIDs -->
-    <bool translatable="false" name="config_wifi_aggressive_randomization_ssid_whitelist_enabled">false</bool>
+    <!-- list of SSIDs to enable aggressive MAC randomization on -->
+    <string-array translatable="false" name="config_wifi_aggressive_randomization_ssid_allowlist">
+        <!-- SSIDs are expected in quoted format:
+        <item>\"SSID_1\"</item>
+        <item>\"SSID_2\"</item>
+        -->
+    </string-array>
+
+    <!-- list of SSIDs to disable aggressive MAC randomization on. If a SSID is in both the
+    allowlist and blocklist, then aggressive MAC randomization will still be disabled. -->
+    <string-array translatable="false" name="config_wifi_aggressive_randomization_ssid_blocklist">
+        <!-- SSIDs are expected in quoted format:
+        <item>\"SSID_1\"</item>
+        <item>\"SSID_2\"</item>
+        -->
+    </string-array>
 
     <!-- Indicates that wifi link probing is supported on this device -->
     <bool translatable="false" name="config_wifi_link_probing_supported">false</bool>

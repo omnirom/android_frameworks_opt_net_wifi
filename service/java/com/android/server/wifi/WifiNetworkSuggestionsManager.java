@@ -661,6 +661,8 @@ public class WifiNetworkSuggestionsManager {
                 sendUserApprovalNotification(packageName, uid);
             }
         }
+        // If PerAppInfo is upgrade from pre-R, uid may not be set.
+        perAppInfo.setUid(uid);
         Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions =
                 convertToExtendedWnsSet(networkSuggestions, perAppInfo);
         boolean isLowRamDevice = mContext.getSystemService(ActivityManager.class).isLowRamDevice();
@@ -936,7 +938,7 @@ public class WifiNetworkSuggestionsManager {
         CharSequence appName = getAppName(packageName, uid);
         Notification notification = new Notification.Builder(
                 mContext, WifiService.NOTIFICATION_NETWORK_STATUS)
-                .setSmallIcon(android.R.drawable.stat_notify_wifi_in_range)
+                .setSmallIcon(com.android.wifi.resources.R.drawable.stat_notify_wifi_in_range)
                 .setTicker(mResources.getString(R.string.wifi_suggestion_title))
                 .setContentTitle(mResources.getString(R.string.wifi_suggestion_title))
                 .setStyle(new Notification.BigTextStyle()
@@ -1010,6 +1012,43 @@ public class WifiNetworkSuggestionsManager {
             return null;
         }
         return mPasspointInfo.get(fqdn);
+    }
+
+    /**
+     * Returns a set of all network suggestions matching the provided FQDN.
+     */
+    public @Nullable Set<ExtendedWifiNetworkSuggestion> getNetworkSuggestionsForFqfn(String fqdn) {
+        Set<ExtendedWifiNetworkSuggestion> extNetworkSuggestions =
+                getNetworkSuggestionsForFqdnMatch(fqdn);
+        if (extNetworkSuggestions == null) {
+            return null;
+        }
+        Set<ExtendedWifiNetworkSuggestion> approvedExtNetworkSuggestions =
+                extNetworkSuggestions
+                        .stream()
+                        .filter(n -> n.perAppInfo.hasUserApproved)
+                        .collect(Collectors.toSet());
+        // If there is no active notification, check if we need to get approval for any of the apps
+        // & send a notification for one of them. If there are multiple packages awaiting approval,
+        // we end up picking the first one. The others will be reconsidered in the next iteration.
+        if (!mUserApprovalNotificationActive
+                && approvedExtNetworkSuggestions.size() != extNetworkSuggestions.size()) {
+            for (ExtendedWifiNetworkSuggestion extNetworkSuggestion : extNetworkSuggestions) {
+                if (sendUserApprovalNotificationIfNotApproved(
+                        extNetworkSuggestion.perAppInfo.packageName,
+                        extNetworkSuggestion.perAppInfo.uid)) {
+                    break;
+                }
+            }
+        }
+        if (approvedExtNetworkSuggestions.isEmpty()) {
+            return null;
+        }
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "getNetworkSuggestionsForFqdn Found "
+                    + approvedExtNetworkSuggestions + " for " + fqdn);
+        }
+        return approvedExtNetworkSuggestions;
     }
 
     /**

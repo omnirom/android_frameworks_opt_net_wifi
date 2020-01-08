@@ -26,7 +26,6 @@ import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_FAILED;
-import static android.net.wifi.WifiManager.WIFI_FEATURE_INFRA_5G;
 
 import android.annotation.CheckResult;
 import android.annotation.NonNull;
@@ -60,6 +59,7 @@ import android.net.wifi.ISuggestionConnectionStatusListener;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ITxPacketCountListener;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApCapability;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApInfo;
 import android.net.wifi.WifiClient;
@@ -80,9 +80,12 @@ import android.net.wifi.SupplicantState;
 import android.os.AsyncTask;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerExecutor;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
+import android.os.PersistableBundle;
 import android.os.PowerManager;
 import android.os.Process;
 import android.os.RemoteException;
@@ -93,6 +96,9 @@ import android.os.UserManager;
 import android.os.WorkSource;
 import android.os.connectivity.WifiActivityEnergyInfo;
 import android.provider.Settings;
+import android.telephony.CarrierConfigManager;
+import android.telephony.PhoneStateListener;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
@@ -102,7 +108,6 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.IccCardConstants;
 import com.android.internal.telephony.PhoneConstants;
-import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.util.AsyncChannel;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvider;
@@ -261,6 +266,23 @@ public class WifiServiceImpl extends BaseWifiService {
         }
     }
 
+    /**
+     * Listen for phone call state events to get active data subcription id.
+     */
+    private class WifiPhoneStateListener extends PhoneStateListener {
+        WifiPhoneStateListener(Looper looper) {
+            super(new HandlerExecutor(new Handler(looper)));
+        }
+
+        @Override
+        public void onActiveDataSubscriptionIdChanged(int subId) {
+            Log.d(TAG, "OBSERVED active data subscription change, subId: " + subId);
+
+            mTetheredSoftApTracker.updateSoftApCapability(subId);
+            mActiveModeWarden.updateSoftApCapability(mTetheredSoftApTracker.getSoftApCapability());
+        }
+    }
+
     private final ClientModeImplHandler mClientModeImplHandler;
     private final WifiLockManager mWifiLockManager;
     private final WifiMulticastLockManager mWifiMulticastLockManager;
@@ -388,7 +410,7 @@ public class WifiServiceImpl extends BaseWifiService {
                             }
                         }
                     },
-                    new IntentFilter(TelephonyIntents.ACTION_SIM_STATE_CHANGED));
+                    new IntentFilter(Intent.ACTION_SIM_STATE_CHANGED));
 
             // Adding optimizations of only receiving broadcasts when wifi is enabled
             // can result in race conditions when apps toggle wifi in the background
@@ -398,6 +420,7 @@ public class WifiServiceImpl extends BaseWifiService {
 
             mClientModeImpl.initialize();
             mActiveModeWarden.start();
+            registerForCarrierConfigChange();
             mIsControllerStarted = true;
         });
     }
@@ -410,12 +433,13 @@ public class WifiServiceImpl extends BaseWifiService {
             IntentFilter intentFilter = new IntentFilter();
             intentFilter.addAction(Intent.ACTION_USER_REMOVED);
             intentFilter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
-            intentFilter.addAction(TelephonyIntents.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED);
+            intentFilter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+            intentFilter.addAction(TelephonyManager.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED);
             intentFilter.addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
             boolean trackEmergencyCallState = mContext.getResources().getBoolean(
                     R.bool.config_wifi_turn_off_during_emergency_call);
             if (trackEmergencyCallState) {
-                intentFilter.addAction(TelephonyIntents.ACTION_EMERGENCY_CALL_STATE_CHANGED);
+                intentFilter.addAction(TelephonyManager.ACTION_EMERGENCY_CALL_STATE_CHANGED);
             }
             mContext.registerReceiver(mReceiver, intentFilter);
 
@@ -829,11 +853,37 @@ public class WifiServiceImpl extends BaseWifiService {
         if (wifiConfig != null) {
             return startSoftApInternal(new SoftApModeConfiguration(
                     WifiManager.IFACE_IP_MODE_TETHERED,
-                    ApConfigUtil.fromWifiConfiguration(wifiConfig)));
+                    ApConfigUtil.fromWifiConfiguration(wifiConfig),
+                    mTetheredSoftApTracker.getSoftApCapability()));
         } else {
             return startSoftApInternal(new SoftApModeConfiguration(
-                    WifiManager.IFACE_IP_MODE_TETHERED, null));
+                    WifiManager.IFACE_IP_MODE_TETHERED, null,
+                    mTetheredSoftApTracker.getSoftApCapability()));
         }
+    }
+
+    private boolean validateSoftApBand(int apBand) {
+        if (!ApConfigUtil.isBandValid(apBand)) {
+            mLog.err("Invalid SoftAp band. ").flush();
+            return false;
+        }
+
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_5GHZ)
+                && !is5GhzBandSupportedInternal()) {
+            mLog.err("Can not start softAp with 5GHz band, not supported.").flush();
+            return false;
+        }
+
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_6GHZ)) {
+            if (!is6GhzBandSupportedInternal()
+                    || !mContext.getResources().getBoolean(
+                            R.bool.config_wifiSoftap6ghzSupported)) {
+                mLog.err("Can not start softAp with 6GHz band, not supported.").flush();
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -860,7 +910,8 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         return startSoftApInternal(new SoftApModeConfiguration(
-                WifiManager.IFACE_IP_MODE_TETHERED, softApConfig));
+                WifiManager.IFACE_IP_MODE_TETHERED, softApConfig,
+                mTetheredSoftApTracker.getSoftApCapability()));
     }
 
 
@@ -890,7 +941,9 @@ public class WifiServiceImpl extends BaseWifiService {
 
         // null wifiConfig is a meaningful input for CMD_SET_AP; it means to use the persistent
         // AP config.
-        if (softApConfig != null && !WifiApConfigStore.validateApWifiConfiguration(softApConfig)) {
+        if (softApConfig != null
+                && (!WifiApConfigStore.validateApWifiConfiguration(softApConfig)
+                    || !validateSoftApBand(softApConfig.getBand()))) {
             Log.e(TAG, "Invalid SoftApConfiguration");
             return false;
         }
@@ -952,6 +1005,8 @@ public class WifiServiceImpl extends BaseWifiService {
         private int mTetheredSoftApState = WIFI_AP_STATE_DISABLED;
         private List<WifiClient> mTetheredSoftApConnectedClients = new ArrayList<>();
         private SoftApInfo mTetheredSoftApInfo = new SoftApInfo();
+        // TODO: We need to maintain two capability. One for LTE + SAP and one for WIFI + SAP
+        private SoftApCapability mTetheredSoftApCapability = null;
 
         public int getState() {
             synchronized (mLock) {
@@ -969,11 +1024,51 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         public List<WifiClient> getConnectedClients() {
-            return mTetheredSoftApConnectedClients;
+            synchronized (mLock) {
+                return mTetheredSoftApConnectedClients;
+            }
         }
 
         public SoftApInfo getSoftApInfo() {
-            return mTetheredSoftApInfo;
+            synchronized (mLock) {
+                return mTetheredSoftApInfo;
+            }
+        }
+
+        public SoftApCapability getSoftApCapability() {
+            synchronized (mLock) {
+                if (mTetheredSoftApCapability == null) {
+                    mTetheredSoftApCapability = ApConfigUtil.updateCapabilityFromResource(mContext);
+                }
+                return mTetheredSoftApCapability;
+            }
+        }
+
+        public void updateSoftApCapability(int subId) {
+            synchronized (mLock) {
+                CarrierConfigManager carrierConfigManager =
+                        (CarrierConfigManager) mContext.getSystemService(
+                        Context.CARRIER_CONFIG_SERVICE);
+                if (carrierConfigManager == null) {
+                    return;
+                }
+                PersistableBundle carrierConfig = carrierConfigManager.getConfigForSubId(
+                        subId);
+                int carrierMaxClient = carrierConfig.getInt(
+                        CarrierConfigManager.Wifi.KEY_HOTSPOT_MAX_CLIENT_COUNT);
+                int finalSupportedClientNumber = mContext.getResources().getInteger(
+                        R.integer.config_wifi_hardware_soft_ap_max_client_count);
+                if (carrierMaxClient > 0) {
+                    finalSupportedClientNumber = Math.min(finalSupportedClientNumber,
+                            carrierMaxClient);
+                }
+                if (finalSupportedClientNumber == getSoftApCapability().getMaxSupportedClients()) {
+                    return;
+                }
+                mTetheredSoftApCapability.setMaxSupportedClients(
+                        finalSupportedClientNumber);
+            }
+            onCapabilityChanged(mTetheredSoftApCapability);
         }
 
         private final ExternalCallbackTracker<ISoftApCallback> mRegisteredSoftApCallbacks =
@@ -1024,7 +1119,9 @@ public class WifiServiceImpl extends BaseWifiService {
          */
         @Override
         public void onConnectedClientsChanged(List<WifiClient> clients) {
-            mTetheredSoftApConnectedClients = new ArrayList<>(clients);
+            synchronized (mLock) {
+                mTetheredSoftApConnectedClients = new ArrayList<>(clients);
+            }
 
             Iterator<ISoftApCallback> iterator =
                     mRegisteredSoftApCallbacks.getCallbacks().iterator();
@@ -1047,7 +1144,9 @@ public class WifiServiceImpl extends BaseWifiService {
          */
         @Override
         public void onInfoChanged(SoftApInfo softApInfo) {
-            mTetheredSoftApInfo = new SoftApInfo(softApInfo);
+            synchronized (mLock) {
+                mTetheredSoftApInfo = new SoftApInfo(softApInfo);
+            }
 
             Iterator<ISoftApCallback> iterator =
                     mRegisteredSoftApCallbacks.getCallbacks().iterator();
@@ -1057,6 +1156,29 @@ public class WifiServiceImpl extends BaseWifiService {
                     callback.onInfoChanged(mTetheredSoftApInfo);
                 } catch (RemoteException e) {
                     Log.e(TAG, "onInfoChanged: remote exception -- " + e);
+                }
+            }
+        }
+
+        /**
+         * Called when capability of softap changes.
+         *
+         * @param capability is the softap capability. {@link SoftApCapability}
+         */
+        @Override
+        public void onCapabilityChanged(SoftApCapability capability) {
+            synchronized (mLock) {
+                mTetheredSoftApCapability = new SoftApCapability(capability);
+            }
+
+            Iterator<ISoftApCallback> iterator =
+                    mRegisteredSoftApCallbacks.getCallbacks().iterator();
+            while (iterator.hasNext()) {
+                ISoftApCallback callback = iterator.next();
+                try {
+                    callback.onCapabilityChanged(mTetheredSoftApCapability);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "onCapabiliyChanged: remote exception -- " + e);
                 }
             }
         }
@@ -1145,6 +1267,15 @@ public class WifiServiceImpl extends BaseWifiService {
 
         @GuardedBy("mLocalOnlyHotspotRequests")
         private int mLohsInterfaceMode = WifiManager.IFACE_IP_MODE_UNSPECIFIED;
+
+        private SoftApCapability mLohsSoftApCapability = null;
+
+        public SoftApCapability getSoftApCapability() {
+            if (mLohsSoftApCapability == null) {
+                mLohsSoftApCapability =  ApConfigUtil.updateCapabilityFromResource(mContext);
+            }
+            return mLohsSoftApCapability;
+        }
 
         public void updateInterfaceIpState(String ifaceName, int mode) {
             // update interface IP state related to local-only hotspot
@@ -1302,17 +1433,16 @@ public class WifiServiceImpl extends BaseWifiService {
             boolean is5Ghz = hasAutomotiveFeature(mContext)
                     && mContext.getResources().getBoolean(
                     R.bool.config_wifi_local_only_hotspot_5ghz)
-                    && is5GhzSupported();
+                    && is5GhzBandSupportedInternal();
 
-            int band = is5Ghz ? SoftApConfiguration.BAND_5GHZ
-                    : SoftApConfiguration.BAND_2GHZ;
+            int band = is5Ghz ? SoftApConfiguration.BAND_5GHZ : SoftApConfiguration.BAND_2GHZ;
 
             SoftApConfiguration softApConfig = WifiApConfigStore.generateLocalOnlyHotspotConfig(
                     mContext, band, request.getCustomConfig());
 
             mActiveConfig = new SoftApModeConfiguration(
                     WifiManager.IFACE_IP_MODE_LOCAL_ONLY,
-                    softApConfig);
+                    softApConfig, mLohsSoftApTracker.getSoftApCapability());
             mIsExclusive = (request.getCustomConfig() != null);
 
             startSoftApInternal(mActiveConfig);
@@ -1448,6 +1578,16 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         /**
+         * Called when capability of softap changes.
+         *
+         * @param capability is the softap information. {@link SoftApCapability}
+         */
+        @Override
+        public void onCapabilityChanged(SoftApCapability capability) {
+            // Nothing to do
+        }
+
+        /**
          * Called when station connected to soft AP changes.
          *
          * @param Macaddr Mac Address of connected Stations to soft AP
@@ -1510,6 +1650,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 callback.onStateChanged(mTetheredSoftApTracker.getState(), 0);
                 callback.onConnectedClientsChanged(mTetheredSoftApTracker.getConnectedClients());
                 callback.onInfoChanged(mTetheredSoftApTracker.getSoftApInfo());
+                callback.onCapabilityChanged(mTetheredSoftApTracker.getSoftApCapability());
                 callback.onStaConnected("", mQCSoftApNumClients);
             } catch (RemoteException e) {
                 Log.e(TAG, "registerSoftApCallback: remote exception -- " + e);
@@ -2533,15 +2674,30 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     @Override
-    public boolean isDualBandSupported() {
-        //TODO (b/123227116): pull it from the HAL
+    public boolean is5GHzBandSupported() {
         if (mVerboseLoggingEnabled) {
-            mLog.info("isDualBandSupported uid=%").c(Binder.getCallingUid()).flush();
+            mLog.info("is5GHzBandSupported uid=%").c(Binder.getCallingUid()).flush();
         }
 
-        return (mContext.getResources().getBoolean(
-                R.bool.config_wifi_dual_band_support)
+        return (is5GhzBandSupportedInternal()
                    && mClientModeImpl.is5GhzBandSupported());
+    }
+
+    private boolean is5GhzBandSupportedInternal() {
+        return mContext.getResources().getBoolean(R.bool.config_wifi5ghzSupport);
+    }
+
+    @Override
+    public boolean is6GHzBandSupported() {
+        if (mVerboseLoggingEnabled) {
+            mLog.info("is6GHzBandSupported uid=%").c(Binder.getCallingUid()).flush();
+        }
+
+        return is6GhzBandSupportedInternal();
+    }
+
+    private boolean is6GhzBandSupportedInternal() {
+        return mContext.getResources().getBoolean(R.bool.config_wifi6ghzSupport);
     }
 
     private int getMaxApInterfacesCount() {
@@ -2733,12 +2889,16 @@ public class WifiServiceImpl extends BaseWifiService {
             } else if (action.equals(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)) {
                 int state = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE,
                         BluetoothAdapter.STATE_DISCONNECTED);
+                mClientModeImpl.sendBluetoothAdapterConnectionStateChange(state);
+            } else if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED)) {
+                int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE,
+                        BluetoothAdapter.STATE_OFF);
                 mClientModeImpl.sendBluetoothAdapterStateChange(state);
-            } else if (action.equals(TelephonyIntents.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED)) {
+            } else if (action.equals(TelephonyManager.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED)) {
                 boolean emergencyMode =
                         intent.getBooleanExtra(PhoneConstants.PHONE_IN_ECM_STATE, false);
                 mActiveModeWarden.emergencyCallbackModeChanged(emergencyMode);
-            } else if (action.equals(TelephonyIntents.ACTION_EMERGENCY_CALL_STATE_CHANGED)) {
+            } else if (action.equals(TelephonyManager.ACTION_EMERGENCY_CALL_STATE_CHANGED)) {
                 boolean inCall =
                         intent.getBooleanExtra(PhoneConstants.PHONE_IN_EMERGENCY_CALL, false);
                 mActiveModeWarden.emergencyCallStateChanged(inCall);
@@ -2800,6 +2960,28 @@ public class WifiServiceImpl extends BaseWifiService {
                 }
             }
         }, intentFilter);
+    }
+
+    private void registerForCarrierConfigChange() {
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
+        mContext.registerReceiver(new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                final int subId = SubscriptionManager.getActiveDataSubscriptionId();
+                Log.d(TAG, "ACTION_CARRIER_CONFIG_CHANGED, active subId: " + subId);
+
+                mTetheredSoftApTracker.updateSoftApCapability(subId);
+                mActiveModeWarden.updateSoftApCapability(
+                        mTetheredSoftApTracker.getSoftApCapability());
+            }
+        }, filter);
+
+        WifiPhoneStateListener phoneStateListener = new WifiPhoneStateListener(
+                mWifiInjector.getWifiHandlerThread().getLooper());
+
+        mContext.getSystemService(TelephonyManager.class).listen(
+                phoneStateListener, PhoneStateListener.LISTEN_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGE);
     }
 
     @Override
@@ -3166,7 +3348,7 @@ public class WifiServiceImpl extends BaseWifiService {
         Log.d(TAG, "Restored backup data");
     }
 
-    /*
+    /**
      * Retrieve the soft ap config data to be backed to save current config data.
      *
      * @return  Raw byte stream of the data to be backed up.
@@ -3187,9 +3369,10 @@ public class WifiServiceImpl extends BaseWifiService {
      * Restore soft ap config from the backed up data.
      *
      * @param data Raw byte stream of the backed up data.
+     * @return restored SoftApConfiguration or Null if data is invalid.
      */
     @Override
-    public void restoreSoftApBackupData(byte[] data) {
+    public SoftApConfiguration restoreSoftApBackupData(byte[] data) {
         enforceNetworkSettingsPermission();
         mLog.info("restoreSoftApBackupData uid=%").c(Binder.getCallingUid()).flush();
         SoftApConfiguration softApConfig =
@@ -3198,6 +3381,7 @@ public class WifiServiceImpl extends BaseWifiService {
             mWifiThreadRunner.post(() -> mWifiApConfigStore.setApConfiguration(softApConfig));
             Log.d(TAG, "Restored soft ap backup data");
         }
+        return softApConfig;
     }
 
 
@@ -3300,10 +3484,6 @@ public class WifiServiceImpl extends BaseWifiService {
         // Post operation to handler thread
         mWifiThreadRunner.post(() ->
                 mWifiTrafficPoller.removeCallback(callbackIdentifier));
-    }
-
-    private boolean is5GhzSupported() {
-        return (getSupportedFeaturesInternal() & WIFI_FEATURE_INFRA_5G) == WIFI_FEATURE_INFRA_5G;
     }
 
     private long getSupportedFeaturesInternal() {

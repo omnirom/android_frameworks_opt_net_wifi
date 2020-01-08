@@ -25,8 +25,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.location.LocationManager;
+import android.net.wifi.SoftApCapability;
 import android.net.wifi.WifiManager;
-import android.os.BatteryStats;
 import android.os.BatteryStatsManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -175,6 +175,11 @@ public class ActiveModeWarden {
         mWifiController.sendMessage(WifiController.CMD_SET_AP, 0, mode);
     }
 
+    /** Update SoftAp Capability. */
+    public void updateSoftApCapability(SoftApCapability capability) {
+        mWifiController.sendMessage(WifiController.CMD_UPDATE_AP_CAPABILITY, capability);
+    }
+
     /** Emergency Callback Mode has changed. */
     public void emergencyCallbackModeChanged(boolean isInEmergencyCallbackMode) {
         mWifiController.sendMessage(
@@ -296,6 +301,14 @@ public class ActiveModeWarden {
                     || getRoleForSoftApIpMode(ipMode) == softApManager.getRole()) {
                 softApManager.stop();
             }
+        }
+    }
+
+    private void updateCapabilityToSoftApModeManager(SoftApCapability capability) {
+        for (ActiveModeManager manager : mActiveModeManagers) {
+            if (!(manager instanceof SoftApManager)) continue;
+            SoftApManager softApManager = (SoftApManager) manager;
+            softApManager.updateCapability(capability);
         }
     }
 
@@ -502,7 +515,7 @@ public class ActiveModeWarden {
     }
 
     private void updateBatteryStatsScanModeActive() {
-        mBatteryStatsManager.noteWifiState(BatteryStats.WIFI_STATE_OFF_SCANNING, null);
+        mBatteryStatsManager.noteWifiState(BatteryStatsManager.WIFI_STATE_OFF_SCANNING, null);
     }
 
     private boolean checkScanOnlyModeAvailable() {
@@ -541,6 +554,7 @@ public class ActiveModeWarden {
         static final int CMD_STA_STOPPED                            = BASE + 20;
         static final int CMD_DEFERRED_RECOVERY_RESTART_WIFI         = BASE + 22;
         static final int CMD_AP_START_FAILURE                       = BASE + 23;
+        static final int CMD_UPDATE_AP_CAPABILITY                   = BASE + 24;
 
         // Vendor specific message. start from Base + 30
         static final int CMD_DELAY_DISCONNECT                       = BASE + 30;
@@ -709,6 +723,9 @@ public class ActiveModeWarden {
                             }
                             // wifi should remain disabled, do not need to transition
                         }
+                        break;
+                    case CMD_UPDATE_AP_CAPABILITY:
+                        updateCapabilityToSoftApModeManager((SoftApCapability) msg.obj);
                         break;
                     default:
                         throw new RuntimeException("WifiController.handleMessage " + msg.what);
