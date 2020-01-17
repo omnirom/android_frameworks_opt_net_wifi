@@ -1026,7 +1026,7 @@ public class HostapdHal {
             vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
             vendorIfaceParams.bridgeIfaceName = "";
             try {
-                ifaceParams.channelParams.band = getBand(config);
+                ifaceParams.channelParams.band = config.getBand();
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Unrecognized apBand " + config.getBand());
                 return false;

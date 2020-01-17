@@ -590,12 +590,14 @@ public class SoftApManager implements ActiveModeManager {
 
             mApInterfaceName = mdualApInterfaces[0];
             localConfig = configBuilder.setBand(SoftApConfiguration.BAND_2GHZ).build();
-            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig);
+            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig,
+                    mCurrentSoftApCapability);
             int result = startSoftAp();
             if (result == SUCCESS) {
                 localConfig = configBuilder.setBand(SoftApConfiguration.BAND_5GHZ).build();
                 mApInterfaceName = mdualApInterfaces[1];
-                mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig);
+                mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig,
+                        mCurrentSoftApCapability);
                 result = startSoftAp();
             }
 
@@ -625,14 +627,16 @@ public class SoftApManager implements ActiveModeManager {
             oweConfigBuilder.setHiddenSsid(true);
             SoftApConfiguration oweConfig = oweConfigBuilder.build();
             Log.i(TAG, "Generated OWE SSID: " + oweConfig.getSsid());
-            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), oweConfig);
+            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), oweConfig,
+                    mCurrentSoftApCapability);
             int result = startSoftAp();
             if (result == SUCCESS) {
                 mApInterfaceName = mdualApInterfaces[1];
                 openConfigBuilder.setOweTransIfaceName(mdualApInterfaces[0]);
                 openConfigBuilder.setWpa2Passphrase(null);
                 SoftApConfiguration openConfig = openConfigBuilder.build();
-                mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), openConfig);
+                mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), openConfig,
+                        mCurrentSoftApCapability);
                 result = startSoftAp();
             }
 

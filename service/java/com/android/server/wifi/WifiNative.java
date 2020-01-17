@@ -916,7 +916,7 @@ public class WifiNative {
             // For dynamically added interface(s), stop processing scan queries/commands
             // before deleting interface. This internally triggers stopPnoScan() which
             // otherwise won't be served on deleted interface.
-            if (!mWificondControl.unsubscribeScan(iface.name))
+            if (!mWifiCondManager.unsubscribeScan(iface.name))
                 Log.i(TAG, "Unsubscribe scan failed.");
 
             if (mWifiVendorHal.isVendorHalSupported()) {
@@ -1637,7 +1637,7 @@ public class WifiNative {
 
     private ArrayList<ScanDetail> convertNativeScanResults(List<NativeScanResult> nativeResults) {
         ArrayList<ScanDetail> results = new ArrayList<>();
-        WifiGenerationCapabilities wifiGenerationCapa = mWificondControl.getWifiGenerationCapabilities();
+        WifiCondManager.WifiGenerationCapabilities wifiGenerationCapa = mWifiCondManager.getWifiGenerationCapabilities();
         for (NativeScanResult result : nativeResults) {
             WifiSsid wifiSsid = WifiSsid.createFromByteArray(result.getSsid());
             String bssid;
@@ -1924,7 +1924,7 @@ public class WifiNative {
             return false;
         }
 
-        WifiGenerationCapabilities wifiGenerationCapabilities = mWificondControl.getWifiGenerationCapabilities();
+        WifiCondManager.WifiGenerationCapabilities wifiGenerationCapabilities = mWifiCondManager.getWifiGenerationCapabilities();
         int wifiGeneration = WIFI_GENERATION_DEFAULT;
 
         if (wifiGenerationCapabilities != null) {
@@ -2186,7 +2186,7 @@ public class WifiNative {
          if (mIs5GhzBandSupportedInitialized)
              return mIs5GhzBandSupported;
 
-         int[] ChannelsFor5GhzBand = mWificondControl.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
+         int[] ChannelsFor5GhzBand = getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
 
          // Channels list is null means failed to fetch channel info.
          // Continue with default assumtion i.e. 5Ghz supported.
@@ -2966,19 +2966,19 @@ public class WifiNative {
                     android.net.wifi.wificond.PnoNetwork nativeNetwork =
                             network.toNativePnoNetwork();
                     if (nativeNetwork != null) {
-                        if (nativeNetwork.ssid.length <= WifiGbk.MAX_SSID_LENGTH) { //wifigbk++
+                        if (nativeNetwork.getSsid().length <= WifiGbk.MAX_SSID_LENGTH) { //wifigbk++
                             pnoNetworks.add(nativeNetwork);
                         }
                         //wifigbk++
-                        if (!WifiGbk.isAllAscii(nativeNetwork.ssid)) {
-                            com.android.server.wifi.wificond.PnoNetwork nativeNetwork2 =
-                                new com.android.server.wifi.wificond.PnoNetwork();
-                            nativeNetwork2.isHidden = nativeNetwork.isHidden;
-                            nativeNetwork2.ssid = WifiGbk.toGbk(nativeNetwork.ssid);
-                            nativeNetwork2.frequencies = nativeNetwork.frequencies;
-                            if (nativeNetwork2.ssid != null) {
+                        if (!WifiGbk.isAllAscii(nativeNetwork.getSsid())) {
+                            android.net.wifi.wificond.PnoNetwork nativeNetwork2 =
+                                new android.net.wifi.wificond.PnoNetwork();
+                            nativeNetwork2.setHidden(nativeNetwork.isHidden());
+                            nativeNetwork2.setSsid(WifiGbk.toGbk(nativeNetwork.getSsid()));
+                            nativeNetwork2.setFrequenciesMhz(nativeNetwork.getFrequenciesMhz());
+                            if (nativeNetwork2.getSsid() != null) {
                                 pnoNetworks.add(nativeNetwork2);
-                                Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for " + nativeNetwork.ssid);
+                                Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for " + nativeNetwork.getSsid());
                             }
                         }
                         //wifigbk--

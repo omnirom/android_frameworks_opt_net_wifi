@@ -3938,7 +3938,8 @@ public class WifiServiceImpl extends BaseWifiService {
 
         SoftApConfiguration softApConfig = softApConfigBuilder.build();
         Log.d(TAG,"Repeater mode config - " + softApConfig);
-        SoftApModeConfiguration softApModeConfig = new SoftApModeConfiguration(mode, softApConfig);
+        SoftApModeConfiguration softApModeConfig = new SoftApModeConfiguration(mode, softApConfig,
+                mTetheredSoftApTracker.getSoftApCapability());
         mActiveModeWarden.startSoftAp(softApModeConfig);
 
     }
