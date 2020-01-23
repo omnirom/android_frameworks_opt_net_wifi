@@ -26,8 +26,10 @@ import static java.util.stream.Collectors.toList;
 import android.content.Context;
 import android.content.Intent;
 import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.net.NetworkScoreManager;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.text.TextUtils;
@@ -63,6 +65,12 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
         super(lifecycle, context, wifiManager, connectivityManager, networkScoreManager,
                 mainHandler, workerHandler, clock, maxScanAgeMillis, scanIntervalMillis, TAG);
         mChosenEntry = new StandardWifiEntry(mMainHandler, key, mWifiManager);
+        cacheNewScanResults();
+        conditionallyUpdateScanResults(true /* lastScanSucceeded */);
+        conditionallyUpdateConfig();
+        final WifiInfo wifiInfo = mWifiManager.getConnectionInfo();
+        final NetworkInfo networkInfo = mConnectivityManager.getActiveNetworkInfo();
+        mChosenEntry.updateConnectionInfo(wifiInfo, networkInfo);
     }
 
     @AnyThread
@@ -70,13 +78,6 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
     @NonNull
     public WifiEntry getWifiEntry() {
         return mChosenEntry;
-    }
-
-    @Override
-    protected void handleOnStart() {
-        cacheNewScanResults();
-        conditionallyUpdateScanResults(true /* lastScanSucceeded */);
-        conditionallyUpdateConfig();
     }
 
     @WorkerThread
@@ -117,8 +118,9 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
     @WorkerThread
     @Override
     protected void handleNetworkStateChangedAction(@NonNull Intent intent) {
-        // Do nothing.
-        return;
+        checkNotNull(intent, "Intent cannot be null!");
+        mChosenEntry.updateConnectionInfo(mWifiManager.getConnectionInfo(),
+                (NetworkInfo) intent.getExtra(WifiManager.EXTRA_NETWORK_INFO));
     }
 
     /**

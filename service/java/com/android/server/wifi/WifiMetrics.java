@@ -32,6 +32,7 @@ import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiUsabilityStatsEntry.ProbeStatus;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
+import android.net.wifi.wificond.WifiCondManager;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -197,6 +198,7 @@ public class WifiMetrics {
     private Handler mHandler;
     private ScoringParams mScoringParams;
     private WifiConfigManager mWifiConfigManager;
+    private BssidBlocklistMonitor mBssidBlocklistMonitor;
     private WifiNetworkSelector mWifiNetworkSelector;
     private PasspointManager mPasspointManager;
     private Context mContext;
@@ -690,6 +692,7 @@ public class WifiMetrics {
                 sb.append(mRouterFingerPrint.toString());
                 sb.append(", useRandomizedMac=");
                 sb.append(mConnectionEvent.useRandomizedMac);
+                sb.append(", useAggressiveMac=" + mConnectionEvent.useAggressiveMac);
                 sb.append(", connectionNominator=");
                 switch (mConnectionEvent.connectionNominator) {
                     case WifiMetricsProto.ConnectionEvent.NOMINATOR_UNKNOWN:
@@ -728,6 +731,7 @@ public class WifiMetrics {
                 }
                 sb.append(", networkSelectorExperimentId=");
                 sb.append(mConnectionEvent.networkSelectorExperimentId);
+                sb.append(", numBssidInBlocklist=" + mConnectionEvent.numBssidInBlocklist);
                 sb.append(", level2FailureReason=");
                 switch(mConnectionEvent.level2FailureReason) {
                     case WifiMetricsProto.ConnectionEvent.AUTH_FAILURE_NONE:
@@ -829,6 +833,11 @@ public class WifiMetrics {
     /** Sets internal WifiDataStall member */
     public void setWifiDataStall(WifiDataStall wifiDataStall) {
         mWifiDataStall = wifiDataStall;
+    }
+
+    /** Sets internal BssidBlocklistMonitor member */
+    public void setBssidBlocklistMonitor(BssidBlocklistMonitor bssidBlocklistMonitor) {
+        mBssidBlocklistMonitor = bssidBlocklistMonitor;
     }
 
     /**
@@ -1037,6 +1046,8 @@ public class WifiMetrics {
                 mCurrentConnectionEvent.mConnectionEvent.useRandomizedMac =
                         config.macRandomizationSetting
                         == WifiConfiguration.RANDOMIZATION_PERSISTENT;
+                mCurrentConnectionEvent.mConnectionEvent.useAggressiveMac =
+                        mWifiConfigManager.shouldUseAggressiveRandomization(config);
                 mCurrentConnectionEvent.mConnectionEvent.connectionNominator =
                         mNetworkIdToNominatorId.get(config.networkId,
                                 WifiMetricsProto.ConnectionEvent.NOMINATOR_UNKNOWN);
@@ -1048,6 +1059,8 @@ public class WifiMetrics {
                     mScanResultRssi = candidate.level;
                     mScanResultRssiTimestampMillis = mClock.getElapsedSinceBootMillis();
                 }
+                mCurrentConnectionEvent.mConnectionEvent.numBssidInBlocklist =
+                        mBssidBlocklistMonitor.getNumBlockedBssidsForSsid(config.SSID);
             }
         }
     }
@@ -3391,15 +3404,15 @@ public class WifiMetrics {
     }
 
     private static int linkProbeFailureReasonToProto(
-            @WificondControl.SendMgmtFrameError int reason) {
+            @WifiCondManager.SendMgmtFrameError int reason) {
         switch (reason) {
-            case WificondControl.SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED:
+            case WifiCondManager.SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_MCS_UNSUPPORTED;
-            case WificondControl.SEND_MGMT_FRAME_ERROR_NO_ACK:
+            case WifiCondManager.SEND_MGMT_FRAME_ERROR_NO_ACK:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_NO_ACK;
-            case WificondControl.SEND_MGMT_FRAME_ERROR_TIMEOUT:
+            case WifiCondManager.SEND_MGMT_FRAME_ERROR_TIMEOUT:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_TIMEOUT;
-            case WificondControl.SEND_MGMT_FRAME_ERROR_ALREADY_STARTED:
+            case WifiCondManager.SEND_MGMT_FRAME_ERROR_ALREADY_STARTED:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_ALREADY_STARTED;
             default:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_UNKNOWN;
@@ -4732,10 +4745,10 @@ public class WifiMetrics {
      *                                 {@link WifiInfo#txSuccess}).
      * @param rssi The Rx RSSI at {@code startTimestampMs}.
      * @param linkSpeed The Tx link speed in Mbps at {@code startTimestampMs}.
-     * @param reason The error code for the failure. See {@link WificondControl.SendMgmtFrameError}.
+     * @param reason The error code for the failure. See {@link WifiCondManager.SendMgmtFrameError}.
      */
     public void logLinkProbeFailure(long timeSinceLastTxSuccessMs,
-            int rssi, int linkSpeed, @WificondControl.SendMgmtFrameError int reason) {
+            int rssi, int linkSpeed, @WifiCondManager.SendMgmtFrameError int reason) {
         synchronized (mLock) {
             mProbeStatusSinceLastUpdate =
                     android.net.wifi.WifiUsabilityStatsEntry.PROBE_STATUS_FAILURE;

@@ -27,9 +27,9 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkKey;
 import android.net.NetworkScoreManager;
 import android.net.wifi.IWifiScanner;
-import android.net.wifi.IWificond;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
+import android.net.wifi.wificond.WifiCondManager;
 import android.os.BatteryStatsManager;
 import android.os.Handler;
 import android.os.HandlerExecutor;
@@ -48,7 +48,7 @@ import android.util.Log;
 
 import com.android.server.wifi.aware.WifiAwareMetrics;
 import com.android.server.wifi.hotspot2.PasspointManager;
-import com.android.server.wifi.hotspot2.PasspointNetworkNominator;
+import com.android.server.wifi.hotspot2.PasspointNetworkNominateHelper;
 import com.android.server.wifi.hotspot2.PasspointObjectFactory;
 import com.android.server.wifi.p2p.SupplicantP2pIfaceHal;
 import com.android.server.wifi.p2p.WifiP2pMetrics;
@@ -76,7 +76,6 @@ import java.util.Random;
 public class WifiInjector {
     private static final String TAG = "WifiInjector";
     private static final String BOOT_DEFAULT_WIFI_COUNTRY_CODE = "ro.boot.wificountrycode";
-    private static final String WIFICOND_SERVICE_NAME = "wificond";
 
     static WifiInjector sWifiInjector = null;
 
@@ -107,7 +106,7 @@ public class WifiInjector {
     private final WifiSettingsStore mSettingsStore;
     private OpenNetworkNotifier mOpenNetworkNotifier;
     private final WifiLockManager mLockManager;
-    private final WificondControl mWificondControl;
+    private final WifiCondManager mWifiCondManager;
     private final Clock mClock = new Clock();
     private final WifiMetrics mWifiMetrics;
     private final WifiP2pMetrics mWifiP2pMetrics;
@@ -125,7 +124,6 @@ public class WifiInjector {
     private final WifiNetworkSelector mWifiNetworkSelector;
     private final SavedNetworkNominator mSavedNetworkNominator;
     private final NetworkSuggestionNominator mNetworkSuggestionNominator;
-    private final PasspointNetworkNominator mPasspointNetworkNominator;
     private final ScoredNetworkNominator mScoredNetworkNominator;
     private final WifiNetworkScoreCache mWifiNetworkScoreCache;
     private final NetworkScoreManager mNetworkScoreManager;
@@ -223,16 +221,14 @@ public class WifiInjector {
         mSupplicantStaIfaceHal = new SupplicantStaIfaceHal(
                 mContext, mWifiMonitor, mFrameworkFacade, wifiHandler, mClock);
         mHostapdHal = new HostapdHal(mContext, wifiHandler);
-        mWificondControl = new WificondControl(this,
-                (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE),
-                wifiHandler, mClock);
+        mWifiCondManager = (WifiCondManager) mContext.getSystemService(Context.WIFI_COND_SERVICE);
         mWifiNative = new WifiNative(
-                mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWificondControl,
+                mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWifiCondManager,
                 mWifiMonitor, mPropertyService, mWifiMetrics,
                 wifiHandler, new Random(), this);
         mWifiP2pMonitor = new WifiP2pMonitor(this);
         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
-        mWifiP2pNative = new WifiP2pNative(
+        mWifiP2pNative = new WifiP2pNative(this,
                 mWifiVendorHal, mSupplicantP2pIfaceHal, mHalDeviceManager,
                 mPropertyService);
 
@@ -288,23 +284,24 @@ public class WifiInjector {
         ThroughputScorer throughputScorer = new ThroughputScorer(mScoringParams);
         mWifiNetworkSelector.registerCandidateScorer(throughputScorer);
         mWifiMetrics.setWifiNetworkSelector(mWifiNetworkSelector);
-        mSavedNetworkNominator = new SavedNetworkNominator(
-                mWifiConfigManager, mConnectivityLocalLog, mTelephonyUtil);
         mWifiNetworkSuggestionsManager = new WifiNetworkSuggestionsManager(mContext, wifiHandler,
                 this, mWifiPermissionsUtil, mWifiConfigManager, mWifiConfigStore, mWifiMetrics,
                 mTelephonyUtil);
+        mPasspointManager = new PasspointManager(mContext, this,
+                wifiHandler, mWifiNative, mWifiKeyStore, mClock, new PasspointObjectFactory(),
+                mWifiConfigManager, mWifiConfigStore, mWifiMetrics, mTelephonyUtil);
+        PasspointNetworkNominateHelper nominateHelper =
+                new PasspointNetworkNominateHelper(mPasspointManager, mWifiConfigManager,
+                        mConnectivityLocalLog);
+        mSavedNetworkNominator = new SavedNetworkNominator(
+                mWifiConfigManager, nominateHelper, mConnectivityLocalLog, mTelephonyUtil);
         mNetworkSuggestionNominator = new NetworkSuggestionNominator(mWifiNetworkSuggestionsManager,
-                mWifiConfigManager, mConnectivityLocalLog);
+                mWifiConfigManager, nominateHelper, mConnectivityLocalLog);
         mScoredNetworkNominator = new ScoredNetworkNominator(mContext, wifiHandler,
                 mFrameworkFacade, mNetworkScoreManager, mContext.getPackageManager(),
                 mWifiConfigManager, mConnectivityLocalLog,
                 mWifiNetworkScoreCache, mWifiPermissionsUtil);
-        mPasspointManager = new PasspointManager(mContext, this,
-                wifiHandler, mWifiNative, mWifiKeyStore, mClock, new PasspointObjectFactory(),
-                mWifiConfigManager, mWifiConfigStore, mWifiMetrics, mTelephonyUtil);
-        mPasspointNetworkNominator = new PasspointNetworkNominator(
-                mPasspointManager, mWifiConfigManager, mConnectivityLocalLog,
-                this, subscriptionManager);
+
         mWifiMetrics.setPasspointManager(mPasspointManager);
         mScanRequestProxy = new ScanRequestProxy(mContext,
                 (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE),
@@ -355,7 +352,6 @@ public class WifiInjector {
         // Register the various network Nominators with the network selector.
         mWifiNetworkSelector.registerNetworkNominator(mSavedNetworkNominator);
         mWifiNetworkSelector.registerNetworkNominator(mNetworkSuggestionNominator);
-        mWifiNetworkSelector.registerNetworkNominator(mPasspointNetworkNominator);
         mWifiNetworkSelector.registerNetworkNominator(mScoredNetworkNominator);
 
         mClientModeImpl.start();
@@ -527,13 +523,6 @@ public class WifiInjector {
         return mDppManager;
     }
 
-    /** Gets IWificond without caching. */
-    public IWificond makeWificond() {
-        // We depend on being able to refresh our binder in ClientModeImpl, so don't cache it.
-        IBinder binder = mFrameworkFacade.getService(WIFICOND_SERVICE_NAME);
-        return IWificond.Stub.asInterface(binder);
-    }
-
     /**
      * Create a SoftApManager.
      * @param config SoftApModeConfiguration object holding the config and mode
@@ -602,6 +591,7 @@ public class WifiInjector {
                 mWifiThreadRunner);
         mBssidBlocklistMonitor = new BssidBlocklistMonitor(mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mClock, mConnectivityLocalLog, mWifiScoreCard);
+        mWifiMetrics.setBssidBlocklistMonitor(mBssidBlocklistMonitor);
         mWifiChannelUtilization = new WifiChannelUtilization(mClock);
         return new WifiConnectivityManager(mContext, getScoringParams(),
                 clientModeImpl, this,
@@ -797,5 +787,9 @@ public class WifiInjector {
             mNetdWrapper = new NetdWrapper(mContext, new Handler(mWifiHandlerThread.getLooper()));
         }
         return mNetdWrapper;
+    }
+
+    public WifiCondManager getWifiCondManager() {
+        return mWifiCondManager;
     }
 }

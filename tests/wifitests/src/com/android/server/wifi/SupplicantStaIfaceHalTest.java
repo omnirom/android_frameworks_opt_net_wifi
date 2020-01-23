@@ -19,6 +19,7 @@ import static android.net.wifi.WifiManager.WIFI_FEATURE_DPP;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_MBO;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OCE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OWE;
+import static android.net.wifi.WifiManager.WIFI_FEATURE_WAPI;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SAE;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_WPA3_SUITE_B;
 
@@ -61,6 +62,7 @@ import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
 import android.hardware.wifi.supplicant.V1_0.WpsConfigMethods;
 import android.hardware.wifi.supplicant.V1_3.ConnectionCapabilities;
+import android.hardware.wifi.supplicant.V1_3.ISupplicantStaIfaceCallback.BssTmData;
 import android.hardware.wifi.supplicant.V1_3.WifiTechnology;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
@@ -77,6 +79,7 @@ import android.text.TextUtils;
 
 import androidx.test.filters.SmallTest;
 
+import com.android.server.wifi.MboOceController.BtmFrameData;
 import com.android.server.wifi.SupplicantStaIfaceHal.PmkCacheStoreData;
 import com.android.server.wifi.hotspot2.AnqpEvent;
 import com.android.server.wifi.hotspot2.IconEvent;
@@ -1517,6 +1520,19 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
         }
     }
 
+    private class GetKeyMgmtCapabilities_1_3Answer extends MockAnswerUtil.AnswerWithArguments {
+        private int mKeyMgmtCapabilities;
+
+        GetKeyMgmtCapabilities_1_3Answer(int keyMgmtCapabilities) {
+            mKeyMgmtCapabilities = keyMgmtCapabilities;
+        }
+
+        public void answer(android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface
+                .getKeyMgmtCapabilities_1_3Callback cb) {
+            cb.onValues(mStatusSuccess, mKeyMgmtCapabilities);
+        }
+    }
+
     /**
      * Test get key management capabilities API on old HAL, should return 0 (not supported)
      */
@@ -1620,6 +1636,24 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
                         .getKeyMgmtCapabilitiesCallback.class));
 
         assertEquals(WIFI_FEATURE_DPP, mDut.getAdvancedKeyMgmtCapabilities(WLAN0_IFACE_NAME));
+    }
+
+    /**
+     * Test WAPI key may management support
+     */
+    @Test
+    public void testGetKeyMgmtCapabilitiesWapi() throws Exception {
+        setupMocksForHalV1_3();
+
+        executeAndValidateInitializationSequenceV1_3();
+
+        doAnswer(new GetKeyMgmtCapabilities_1_3Answer(android.hardware.wifi.supplicant.V1_3
+                .ISupplicantStaNetwork.KeyMgmtMask.WAPI_PSK))
+                .when(mISupplicantStaIfaceMockV13).getKeyMgmtCapabilities_1_3(any(
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaIface
+                        .getKeyMgmtCapabilities_1_3Callback.class));
+
+        assertEquals(WIFI_FEATURE_WAPI, mDut.getAdvancedKeyMgmtCapabilities(WLAN0_IFACE_NAME));
     }
 
     /**
@@ -2454,6 +2488,22 @@ public class SupplicantStaIfaceHalTest extends WifiBaseTest {
 
         assertEquals(WIFI_FEATURE_MBO | WIFI_FEATURE_OCE,
                 mDut.getWpaDriverFeatureSet(WLAN0_IFACE_NAME));
+    }
+
+    /**
+     * Test the handling of BSS transition request callback.
+     */
+    @Test
+    public void testBssTmHandlingDoneCallback() throws Exception {
+        setupMocksForHalV1_3();
+        executeAndValidateInitializationSequenceV1_3();
+        assertNotNull(mISupplicantStaIfaceCallbackV13);
+        mISupplicantStaIfaceCallbackV13.onBssTmHandlingDone(new BssTmData());
+
+        ArgumentCaptor<BtmFrameData> btmFrameDataCaptor =
+                ArgumentCaptor.forClass(BtmFrameData.class);
+        verify(mWifiMonitor).broadcastBssTmHandlingDoneEvent(
+                eq(WLAN0_IFACE_NAME), btmFrameDataCaptor.capture());
     }
 
 }

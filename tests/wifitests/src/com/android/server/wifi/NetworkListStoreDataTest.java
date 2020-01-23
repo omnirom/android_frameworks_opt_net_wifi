@@ -189,6 +189,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"PLMN\"></string>\n"
                     + "<string name=\"Realm\"></string>\n"
                     + "<int name=\"Ocsp\" value=\"0\" />\n"
+                    + "<string name=\"WapiCertSuite\"></string>\n"
                     + "</WifiEnterpriseConfiguration>\n"
                     + "</Network>\n";
 
@@ -356,6 +357,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
     /**
      * Verify that we ignore any unknown tags when parsing a <Network> block.
      */
+    @Test
     public void parseNetworkWithUnknownTag() throws Exception {
         String configFormat =
                 "<Network>\n"

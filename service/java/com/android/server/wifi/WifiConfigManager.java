@@ -53,7 +53,6 @@ import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
-import com.android.server.wifi.hotspot2.PasspointNetworkNominator;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -281,9 +280,6 @@ public class WifiConfigManager {
      */
     private final Map<String, String> mRandomizedMacAddressMapping;
 
-    private final Set<String> mAggressiveMacRandomizationWhitelist;
-    private final Set<String> mAggressiveMacRandomizationBlacklist;
-
     /**
      * Store the network update listeners.
      */
@@ -410,8 +406,6 @@ public class WifiConfigManager {
                 });
         updatePnoRecencySortingSetting();
         mDeviceConfigFacade = deviceConfigFacade;
-        mAggressiveMacRandomizationWhitelist = new ArraySet<>();
-        mAggressiveMacRandomizationBlacklist = new ArraySet<>();
 
         mLocalLog = new LocalLog(
                 context.getSystemService(ActivityManager.class).isLowRamDevice() ? 128 : 256);
@@ -485,41 +479,28 @@ public class WifiConfigManager {
      * @param config
      * @return
      */
-    private boolean shouldUseAggressiveRandomization(WifiConfiguration config) {
+    public boolean shouldUseAggressiveRandomization(WifiConfiguration config) {
+        if (!isMacRandomizationSupported()
+                || config.macRandomizationSetting != WifiConfiguration.RANDOMIZATION_PERSISTENT) {
+            return false;
+        }
         if (config.getIpConfiguration().getIpAssignment() == IpConfiguration.IpAssignment.STATIC) {
             return false;
         }
-        if (mDeviceConfigFacade.isAggressiveMacRandomizationSsidWhitelistEnabled()) {
-            return isSsidOptInForAggressiveRandomization(config.SSID);
-        }
-        return false;
+        return isSsidOptInForAggressiveRandomization(config.SSID);
     }
 
     private boolean isSsidOptInForAggressiveRandomization(String ssid) {
-        if (mAggressiveMacRandomizationBlacklist.contains(ssid)) {
+        Set<String> perDeviceSsidBlocklist = new ArraySet<>(mContext.getResources().getStringArray(
+                R.array.config_wifi_aggressive_randomization_ssid_blocklist));
+        if (mDeviceConfigFacade.getAggressiveMacRandomizationSsidBlocklist().contains(ssid)
+                || perDeviceSsidBlocklist.contains(ssid)) {
             return false;
         }
-        return mAggressiveMacRandomizationWhitelist.contains(ssid);
-    }
-
-    /**
-     * Sets the list of SSIDs that the framework should perform aggressive MAC randomization on.
-     * @param whitelist
-     */
-    public void setAggressiveMacRandomizationWhitelist(Set<String> whitelist) {
-        // TODO: b/137795359 persist this with WifiConfigStore
-        mAggressiveMacRandomizationWhitelist.clear();
-        mAggressiveMacRandomizationWhitelist.addAll(whitelist);
-    }
-
-    /**
-     * Sets the list of SSIDs that the framework will never perform aggressive MAC randomization
-     * on.
-     * @param blacklist
-     */
-    public void setAggressiveMacRandomizationBlacklist(Set<String> blacklist) {
-        mAggressiveMacRandomizationBlacklist.clear();
-        mAggressiveMacRandomizationBlacklist.addAll(blacklist);
+        Set<String> perDeviceSsidAllowlist = new ArraySet<>(mContext.getResources().getStringArray(
+                R.array.config_wifi_aggressive_randomization_ssid_allowlist));
+        return mDeviceConfigFacade.getAggressiveMacRandomizationSsidAllowlist().contains(ssid)
+                || perDeviceSsidAllowlist.contains(ssid);
     }
 
     @VisibleForTesting
@@ -702,11 +683,20 @@ public class WifiConfigManager {
                 && targetUid != configuration.creatorUid) {
             maskRandomizedMacAddressInWifiConfiguration(network);
         }
-        if (!mContext.getResources().getBoolean(
-                R.bool.config_wifi_connected_mac_randomization_supported)) {
+        if (!isMacRandomizationSupported()) {
             network.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         }
         return network;
+    }
+
+    /**
+     * Returns whether MAC randomization is supported on this device.
+     * @param config
+     * @return
+     */
+    private boolean isMacRandomizationSupported() {
+        return mContext.getResources().getBoolean(
+                R.bool.config_wifi_connected_mac_randomization_supported);
     }
 
     /**

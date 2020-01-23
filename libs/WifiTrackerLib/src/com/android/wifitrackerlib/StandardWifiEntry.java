@@ -56,6 +56,12 @@ class StandardWifiEntry extends WifiEntry {
     private final @Security int mSecurity;
     @Nullable private WifiConfiguration mWifiConfig;
     @Nullable private NetworkInfo mNetworkInfo;
+    @Nullable private WifiInfo mWifiInfo;
+    @Nullable private ConnectCallback mConnectCallback;
+    @Nullable private DisconnectCallback mDisconnectCallback;
+    @Nullable private ForgetCallback mForgetCallback;
+    private boolean mCalledConnect = false;
+    private boolean mCalledDisconnect = false;
 
     private int mLevel = WIFI_LEVEL_UNREACHABLE;
 
@@ -154,10 +160,29 @@ class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
+    public String getSsid() {
+        return mSsid;
+    }
+
+    @Override
     @Security
     public int getSecurity() {
         // TODO(b/70983952): Fill this method in
         return mSecurity;
+    }
+
+    @Override
+    public String getMacAddress() {
+        if (mWifiConfig == null || getPrivacy() != PRIVACY_RANDOMIZED_MAC) {
+            final String[] factoryMacs = mWifiManager.getFactoryMacAddresses();
+            if (factoryMacs.length > 0) {
+                return factoryMacs[0];
+            } else {
+                return null;
+            }
+        } else {
+            return mWifiConfig.getRandomizedMacAddress().toString();
+        }
     }
 
     @Override
@@ -172,6 +197,16 @@ class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
+    public boolean isSubscription() {
+        return false;
+    }
+
+    @Override
+    public WifiConfiguration getWifiConfiguration() {
+        return mWifiConfig;
+    }
+
+    @Override
     public ConnectedInfo getConnectedInfo() {
         // TODO(b/70983952): Fill this method in
         return null;
@@ -179,51 +214,139 @@ class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canConnect() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return mLevel != WIFI_LEVEL_UNREACHABLE
+                && getConnectedState() == CONNECTED_STATE_DISCONNECTED;
     }
 
     @Override
-    public void connect() {
+    public void connect(@Nullable ConnectCallback callback) {
+        mConnectCallback = callback;
         if (mWifiConfig == null) {
             // Unsaved network
             if (mSecurity == SECURITY_NONE
                     || mSecurity == SECURITY_OWE
                     || mSecurity == SECURITY_OWE_TRANSITION) {
                 // Open network
-                // TODO(b/70983952): Add support for unsaved open networks
-                // Generate open config and connect with it.
+                final WifiConfiguration connectConfig = new WifiConfiguration();
+                connectConfig.SSID = "\"" + mSsid + "\"";
+
+                if (mSecurity == SECURITY_OWE
+                        || (mSecurity == SECURITY_OWE_TRANSITION
+                        && mWifiManager.isEnhancedOpenSupported())) {
+                    // Use OWE if possible
+                    connectConfig.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.OWE);
+                    connectConfig.requirePMF = true;
+                } else {
+                    connectConfig.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                }
+                mWifiManager.connect(connectConfig, new ConnectActionListener());
             } else {
                 // Secure network
-                // TODO(b/70983952): Add support for unsaved secure networks
-                // Return bad password failure to prompt user to enter password.
+                if (callback != null) {
+                    mCallbackHandler.post(() ->
+                            callback.onConnectResult(
+                                    ConnectCallback.CONNECT_STATUS_FAILURE_NO_CONFIG));
+                }
             }
         } else {
             // Saved network
-            mWifiManager.connect(mWifiConfig.networkId, null);
+            mWifiManager.connect(mWifiConfig.networkId, new ConnectActionListener());
         }
     }
 
     @Override
     public boolean canDisconnect() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return getConnectedState() == CONNECTED_STATE_CONNECTED;
     }
 
     @Override
-    public void disconnect() {
-        // TODO(b/70983952): Fill this method in
+    public void disconnect(@Nullable DisconnectCallback callback) {
+        if (canDisconnect()) {
+            mCalledDisconnect = true;
+            mDisconnectCallback = callback;
+            mCallbackHandler.postDelayed(() -> {
+                if (callback != null && mCalledDisconnect) {
+                    callback.onDisconnectResult(
+                            DisconnectCallback.DISCONNECT_STATUS_FAILURE_UNKNOWN);
+                }
+            }, 10_000 /* delayMillis */);
+            mWifiManager.disconnect();
+        }
     }
 
     @Override
     public boolean canForget() {
+        return isSaved();
+    }
+
+    @Override
+    public void forget(@Nullable ForgetCallback callback) {
+        if (mWifiConfig != null) {
+            mForgetCallback = callback;
+            mWifiManager.forget(mWifiConfig.networkId, new ForgetActionListener());
+        }
+    }
+
+    public boolean canSignIn() {
         // TODO(b/70983952): Fill this method in
         return false;
     }
 
     @Override
-    public void forget() {
+    public void signIn(@Nullable SignInCallback callback) {
         // TODO(b/70983952): Fill this method in
+    }
+
+    /**
+     * Returns whether the network can be shared via QR code.
+     * See https://github.com/zxing/zxing/wiki/Barcode-Contents#wi-fi-network-config-android-ios-11
+     */
+    @Override
+    public boolean canShare() {
+        if (!isSaved()) {
+            return false;
+        }
+
+        switch (mSecurity) {
+            case SECURITY_PSK:
+            case SECURITY_WEP:
+            case SECURITY_NONE:
+            case SECURITY_SAE:
+            case SECURITY_OWE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Returns whether the user can use Easy Connect to onboard a device to the network.
+     * See https://www.wi-fi.org/discover-wi-fi/wi-fi-easy-connect
+     */
+    @Override
+    public boolean canEasyConnect() {
+        if (!isSaved()) {
+            return false;
+        }
+
+        if (!mWifiManager.isEasyConnectSupported()) {
+            return false;
+        }
+
+        // DPP 1.0 only supports SAE and PSK.
+        switch (mSecurity) {
+            case SECURITY_SAE:
+            case SECURITY_PSK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    @Override
+    public String getQrCodeString() {
+        // TODO(b/70983952): Fill this method in
+        return null;
     }
 
     @Override
@@ -240,19 +363,39 @@ class StandardWifiEntry extends WifiEntry {
     @Override
     @MeteredChoice
     public int getMeteredChoice() {
-        // TODO(b/70983952): Fill this method in
-        return METERED_CHOICE_UNMETERED;
+        if (mWifiConfig != null) {
+            final int meteredOverride = mWifiConfig.meteredOverride;
+            if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_NONE) {
+                return METERED_CHOICE_AUTO;
+            } else if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_METERED) {
+                return METERED_CHOICE_METERED;
+            } else if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_NOT_METERED) {
+                return METERED_CHOICE_UNMETERED;
+            }
+        }
+        return METERED_CHOICE_UNKNOWN;
     }
 
     @Override
     public boolean canSetMeteredChoice() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return isSaved();
     }
 
     @Override
     public void setMeteredChoice(int meteredChoice) {
-        // TODO(b/70983952): Fill this method in
+        if (mWifiConfig == null) {
+            return;
+        }
+
+        final WifiConfiguration saveConfig = new WifiConfiguration(mWifiConfig);
+        if (meteredChoice == METERED_CHOICE_AUTO) {
+            saveConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NONE;
+        } else if (meteredChoice == METERED_CHOICE_METERED) {
+            saveConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_METERED;
+        } else if (meteredChoice == METERED_CHOICE_UNMETERED) {
+            saveConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NOT_METERED;
+        }
+        mWifiManager.save(saveConfig, null /* listener */);
     }
 
     @Override
@@ -264,8 +407,15 @@ class StandardWifiEntry extends WifiEntry {
     @Override
     @Privacy
     public int getPrivacy() {
-        // TODO(b/70983952): Fill this method in
-        return PRIVACY_RANDOMIZED_MAC;
+        if (mWifiConfig == null) {
+            return PRIVACY_UNKNOWN;
+        }
+
+        if (mWifiConfig.macRandomizationSetting == WifiConfiguration.RANDOMIZATION_NONE) {
+            return PRIVACY_DEVICE_MAC;
+        } else {
+            return PRIVACY_RANDOMIZED_MAC;
+        }
     }
 
     @Override
@@ -275,53 +425,21 @@ class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean isAutoJoinEnabled() {
-        // TODO(b/70983952): Fill this method in
-        return true;
+        if (mWifiConfig == null) {
+            return false;
+        }
+
+        return mWifiConfig.allowAutojoin;
     }
 
     @Override
     public boolean canSetAutoJoinEnabled() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return isSaved();
     }
 
     @Override
     public void setAutoJoinEnabled(boolean enabled) {
-        // TODO(b/70983952): Fill this method in
-    }
-
-    @Override
-    public ProxySettings getProxySettings() {
-        // TODO(b/70983952): Fill this method in
-        return null;
-    }
-
-    @Override
-    public boolean canSetProxySettings() {
-        // TODO(b/70983952): Fill this method in
-        return false;
-    }
-
-    @Override
-    public void setProxySettings(@NonNull ProxySettings proxySettings) {
-        // TODO(b/70983952): Fill this method in
-    }
-
-    @Override
-    public IpSettings getIpSettings() {
-        // TODO(b/70983952): Fill this method in
-        return null;
-    }
-
-    @Override
-    public boolean canSetIpSettings() {
-        // TODO(b/70983952): Fill this method in
-        return false;
-    }
-
-    @Override
-    public void setIpSettings(@NonNull IpSettings ipSettings) {
-        // TODO(b/70983952): Fill this method in
+        mWifiManager.allowAutojoin(mWifiConfig.networkId, enabled);
     }
 
     @WorkerThread
@@ -389,12 +507,30 @@ class StandardWifiEntry extends WifiEntry {
         if (mWifiConfig != null && wifiInfo != null
                 && mWifiConfig.networkId == wifiInfo.getNetworkId()) {
             mNetworkInfo = networkInfo;
+            mWifiInfo = wifiInfo;
             final int wifiInfoRssi = wifiInfo.getRssi();
             if (wifiInfoRssi != INVALID_RSSI) {
-                mLevel = mWifiManager.calculateSignalLevel(wifiInfoRssi, WifiManager.RSSI_LEVELS);
+                mLevel = mWifiManager.calculateSignalLevel(wifiInfoRssi);
+            }
+            if (mCalledConnect && getConnectedState() == CONNECTED_STATE_CONNECTED) {
+                mCalledConnect = false;
+                mCallbackHandler.post(() -> {
+                    if (mConnectCallback != null) {
+                        mConnectCallback.onConnectResult(ConnectCallback.CONNECT_STATUS_SUCCESS);
+                    }
+                });
             }
         } else {
             mNetworkInfo = null;
+        }
+        if (mCalledDisconnect && getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
+            mCalledDisconnect = false;
+            mCallbackHandler.post(() -> {
+                if (mDisconnectCallback != null) {
+                    mDisconnectCallback.onDisconnectResult(
+                            DisconnectCallback.DISCONNECT_STATUS_SUCCESS);
+                }
+            });
         }
         notifyOnUpdated();
     }
@@ -411,5 +547,51 @@ class StandardWifiEntry extends WifiEntry {
         checkNotNull(config.SSID, "Cannot create key with null SSID in config!");
         return KEY_PREFIX + removeDoubleQuotes(config.SSID) + ","
                 + getSecurityFromWifiConfiguration(config);
+    }
+
+    private class ConnectActionListener implements WifiManager.ActionListener {
+        @Override
+        public void onSuccess() {
+            mCalledConnect = true;
+            // If we aren't connected to the network after 10 seconds, trigger the failure callback
+            mCallbackHandler.postDelayed(() -> {
+                if (mConnectCallback != null && mCalledConnect
+                        && getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
+                    mConnectCallback.onConnectResult(
+                            ConnectCallback.CONNECT_STATUS_FAILURE_UNKNOWN);
+                    mCalledConnect = false;
+                }
+            }, 10_000 /* delayMillis */);
+        }
+
+        @Override
+        public void onFailure(int i) {
+            mCallbackHandler.post(() -> {
+                if (mConnectCallback != null) {
+                    mConnectCallback.onConnectResult(
+                            mConnectCallback.CONNECT_STATUS_FAILURE_UNKNOWN);
+                }
+            });
+        }
+    }
+
+    class ForgetActionListener implements WifiManager.ActionListener {
+        @Override
+        public void onSuccess() {
+            mCallbackHandler.post(() -> {
+                if (mForgetCallback != null) {
+                    mForgetCallback.onForgetResult(ForgetCallback.FORGET_STATUS_SUCCESS);
+                }
+            });
+        }
+
+        @Override
+        public void onFailure(int i) {
+            mCallbackHandler.post(() -> {
+                if (mForgetCallback != null) {
+                    mForgetCallback.onForgetResult(ForgetCallback.FORGET_STATUS_FAILURE_UNKNOWN);
+                }
+            });
+        }
     }
 }
