@@ -21,8 +21,11 @@ import android.content.Context;
 import android.hardware.wifi.hostapd.V1_0.HostapdStatus;
 import android.hardware.wifi.hostapd.V1_0.HostapdStatusCode;
 import android.hardware.wifi.hostapd.V1_0.IHostapd;
+import android.hardware.wifi.hostapd.V1_2.DebugLevel;
+import android.hardware.wifi.hostapd.V1_2.Ieee80211ReasonCode;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
+import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
 import android.os.Handler;
 import android.os.HwRemoteBinder;
@@ -69,6 +72,7 @@ public class HostapdHal {
             mVendorAcsChannelRanges;
     private String mCountryCode = null;
     private boolean mForceApChannel = false;
+    private int mForcedApBand;
     private int mForcedApChannel;
 
     // Hostapd HAL interface objects
@@ -156,7 +160,8 @@ public class HostapdHal {
     void enableVerboseLogging(boolean enable) {
         synchronized (mLock) {
             mVerboseLoggingEnabled = enable;
-            setLogLevel(enable);
+            setLogLevel();
+            setVendorLogLevel(enable);
         }
     }
 
@@ -166,14 +171,32 @@ public class HostapdHal {
      * @return true if supported, false otherwise.
      */
     private boolean isV1_1() {
+        return checkHalVersionByInterfaceName(
+                android.hardware.wifi.hostapd.V1_1.IHostapd.kInterfaceName);
+    }
+
+    /**
+     * Uses the IServiceManager to check if the device is running V1_2 of the HAL from the VINTF for
+     * the device.
+     * @return true if supported, false otherwise.
+     */
+    private boolean isV1_2() {
+        return checkHalVersionByInterfaceName(
+                android.hardware.wifi.hostapd.V1_2.IHostapd.kInterfaceName);
+    }
+
+    private boolean checkHalVersionByInterfaceName(String interfaceName) {
+        if (interfaceName == null) {
+            return false;
+        }
         synchronized (mLock) {
             if (mIServiceManager == null) {
-                Log.e(TAG, "isV1_1: called but mServiceManager is null!?");
+                Log.e(TAG, "checkHalVersionByInterfaceName called but mServiceManager is null!?");
                 return false;
             }
             try {
                 return (mIServiceManager.getTransport(
-                        android.hardware.wifi.hostapd.V1_1.IHostapd.kInterfaceName,
+                        interfaceName,
                         HAL_INSTANCE_NAME)
                         != IServiceManager.Transport.EMPTY);
             } catch (RemoteException e) {
@@ -310,14 +333,19 @@ public class HostapdHal {
                 return false;
             }
             if (!linkToHostapdDeath(mHostapdDeathRecipient, ++mDeathRecipientCookie)) {
+                Log.e(TAG, "Fail to link to Hostapd Death, Stopping hostapd HIDL startup");
                 mIHostapd = null;
                 return false;
             }
             // Register for callbacks for 1.1 hostapd.
             if (isV1_1() && !registerCallback(new HostapdCallback())) {
+                Log.e(TAG, "Fail to regiester Callback, Stopping hostapd HIDL startup");
                 mIHostapd = null;
                 return false;
             }
+
+            // Setup log level
+            setLogLevel();
         }
 
         if (!initHostapdVendorService())
@@ -331,9 +359,10 @@ public class HostapdHal {
      * Enable force-soft-AP-channel mode which takes effect when soft AP starts next time
      * @param forcedApChannel The forced IEEE channel number
      */
-    void enableForceSoftApChannel(int forcedApChannel) {
+    void enableForceSoftApChannel(int forcedApChannel, int forcedApBand) {
         mForceApChannel = true;
         mForcedApChannel = forcedApChannel;
+        mForcedApBand = forcedApBand;
     }
 
     /**
@@ -361,37 +390,22 @@ public class HostapdHal {
             ifaceParams.hwModeParams.enable80211AC =
                     mContext.getResources().getBoolean(
                             R.bool.config_wifi_softap_ieee80211ac_supported);
-            try {
-                ifaceParams.channelParams.band = getBand(config);
-            } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Unrecognized apBand " + config.getBand());
-                return false;
-            }
+            int band;
             if (mForceApChannel) {
                 ifaceParams.channelParams.enableAcs = false;
                 ifaceParams.channelParams.channel = mForcedApChannel;
-                if (mForcedApChannel <= ApConfigUtil.HIGHEST_2G_AP_CHANNEL) {
-                    ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
-                } else {
-                    ifaceParams.channelParams.band = IHostapd.Band.BAND_5_GHZ;
-                }
+                band = mForcedApBand;
             } else if (mContext.getResources().getBoolean(
                     R.bool.config_wifi_softap_acs_supported)) {
                 ifaceParams.channelParams.enableAcs = true;
                 if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
                 }
+                band = config.getBand();
             } else {
-                // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
-                // is not supported.
-                // We should remove this workaround once channel selection is moved from
-                // ApConfigUtil to here.
-                if (ifaceParams.channelParams.band == IHostapd.Band.BAND_ANY) {
-                    Log.d(TAG, "ACS is not supported on this device, using 2.4 GHz band.");
-                    ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
-                }
                 ifaceParams.channelParams.enableAcs = false;
                 ifaceParams.channelParams.channel = config.getChannel();
+                band = config.getBand();
             }
 
             IHostapd.NetworkParams nwParams = new IHostapd.NetworkParams();
@@ -407,28 +421,61 @@ public class HostapdHal {
             if (!checkHostapdAndLogFailure(methodStr)) return false;
             try {
                 HostapdStatus status;
-                if (isV1_1()) {
+                if (!isV1_1() && !isV1_2()) {
+                    ifaceParams.channelParams.band = getHalBand(band);
+                    status = mIHostapd.addAccessPoint(ifaceParams, nwParams);
+                    if (!checkStatusAndLogFailure(status, methodStr)) {
+                        return false;
+                    }
+                } else {
                     android.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams ifaceParams1_1 =
                             new android.hardware.wifi.hostapd.V1_1.IHostapd.IfaceParams();
                     ifaceParams1_1.V1_0 = ifaceParams;
-                    if (mContext.getResources().getBoolean(
-                            R.bool.config_wifi_softap_acs_supported)) {
+                    if (ifaceParams.channelParams.enableAcs) {
                         ifaceParams1_1.channelParams.acsChannelRanges.addAll(
                                 toAcsChannelRanges(mContext.getResources().getString(
                                         R.string.config_wifi_softap_acs_supported_channel_list)));
                     }
-                    android.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
-                            getHostapdMockableV1_1();
-                    if (iHostapdV1_1 == null) return false;
-                    status = iHostapdV1_1.addAccessPoint_1_1(ifaceParams1_1, nwParams);
-                } else {
-                    status = mIHostapd.addAccessPoint(ifaceParams, nwParams);
+
+                    if (!isV1_2()) {
+                        android.hardware.wifi.hostapd.V1_1.IHostapd iHostapdV1_1 =
+                                getHostapdMockableV1_1();
+                        if (iHostapdV1_1 == null) return false;
+
+                        ifaceParams.channelParams.band = getHalBand(band);
+                        status = iHostapdV1_1.addAccessPoint_1_1(ifaceParams1_1, nwParams);
+                        if (!checkStatusAndLogFailure(status, methodStr)) {
+                            return false;
+                        }
+                    } else {
+                        android.hardware.wifi.hostapd.V1_2.HostapdStatus status12;
+                        android.hardware.wifi.hostapd.V1_2.IHostapd.IfaceParams ifaceParams1_2 =
+                                new android.hardware.wifi.hostapd.V1_2.IHostapd.IfaceParams();
+                        ifaceParams1_2.V1_1 = ifaceParams1_1;
+
+                        ifaceParams1_2.hwModeParams.enable80211AX =
+                                mContext.getResources().getBoolean(
+                                    R.bool.config_wifiSoftapIeee80211axSupported);
+                        ifaceParams1_2.hwModeParams.enable6GhzBand =
+                                mContext.getResources().getBoolean(
+                                    R.bool.config_wifiSoftap6ghzSupported);
+                        ifaceParams1_2.channelParams.bandMask = getHalBandMask(band);
+
+                        android.hardware.wifi.hostapd.V1_2.IHostapd iHostapdV1_2 =
+                                getHostapdMockableV1_2();
+                        if (iHostapdV1_2 == null) return false;
+                        status12 = iHostapdV1_2.addAccessPoint_1_2(ifaceParams1_2, nwParams);
+                        if (!checkStatusAndLogFailure12(status12, methodStr)) {
+                            return false;
+                        }
+                    }
                 }
-                if (!checkStatusAndLogFailure(status, methodStr)) {
-                    return false;
-                }
+
                 mSoftApFailureListeners.put(ifaceName, onFailureListener);
                 return true;
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Unrecognized apBand: " + band);
+                return false;
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;
@@ -460,6 +507,51 @@ public class HostapdHal {
         }
     }
 
+
+    /**
+     * Remove a previously connected client.
+     *
+     * @param ifaceName Name of the interface.
+     * @param client Mac Address of the client.
+     * @param reasonCode One of disconnect reason code which defined in {@link ApConfigUtil}.
+     * @return true on success, false otherwise.
+     */
+    public boolean forceClientDisconnect(@NonNull String ifaceName,
+            @NonNull MacAddress client, int reasonCode) {
+        final String methodStr = "forceClientDisconnect";
+        if (isV1_2()) {
+            try {
+                android.hardware.wifi.hostapd.V1_2.IHostapd iHostapdV1_2 =
+                        getHostapdMockableV1_2();
+                if (iHostapdV1_2 == null) return false;
+                byte[] clientMacByteArray = client.toByteArray();
+                short disconnectReason;
+                switch (reasonCode) {
+                    case ApConfigUtil.DISCONNECT_REASON_CODE_INVALID_AUTHENTICATION:
+                        disconnectReason = Ieee80211ReasonCode.WLAN_REASON_PREV_AUTH_NOT_VALID;
+                        break;
+                    case ApConfigUtil.DISCONNECT_REASON_CODE_NO_MORE_STAS:
+                        disconnectReason = Ieee80211ReasonCode.WLAN_REASON_DISASSOC_AP_BUSY;
+                        break;
+                    default:
+                        disconnectReason = Ieee80211ReasonCode.WLAN_REASON_UNSPECIFIED;
+                        break;
+                }
+                android.hardware.wifi.hostapd.V1_2.HostapdStatus status =
+                        iHostapdV1_2.forceClientDisconnect(ifaceName,
+                        clientMacByteArray, disconnectReason);
+                if (status.code == HostapdStatusCode.SUCCESS) {
+                    return true;
+                }
+                Log.d(TAG, "Error when call forceClientDisconnect, status.code = " + status.code);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+        } else {
+            Log.d(TAG, "HIDL doesn't support forceClientDisconnect");
+        }
+        return false;
+    }
 
     /**
      * Registers a death notification for hostapd.
@@ -637,6 +729,19 @@ public class HostapdHal {
         }
     }
 
+    @VisibleForTesting
+    protected android.hardware.wifi.hostapd.V1_2.IHostapd getHostapdMockableV1_2()
+            throws RemoteException {
+        synchronized (mLock) {
+            try {
+                return android.hardware.wifi.hostapd.V1_2.IHostapd.castFrom(mIHostapd);
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "Failed to get IHostapd", e);
+                return null;
+            }
+        }
+    }
+
     private static int getEncryptionType(SoftApConfiguration localConfig) {
         int encryptionType;
         switch (localConfig.getSecurityType()) {
@@ -679,22 +784,39 @@ public class HostapdHal {
         return encryptionType;
     }
 
-    private static int getBand(SoftApConfiguration localConfig) {
-        int bandType;
-        switch (localConfig.getBand()) {
-            case SoftApConfiguration.BAND_2GHZ:
-                bandType = IHostapd.Band.BAND_2_4_GHZ;
-                break;
-            case SoftApConfiguration.BAND_5GHZ:
-                bandType = IHostapd.Band.BAND_5_GHZ;
-                break;
-            case SoftApConfiguration.BAND_ANY:
-                bandType = IHostapd.Band.BAND_ANY;
-                break;
-            default:
-                throw new IllegalArgumentException();
+    private static int getHalBandMask(int apBand) {
+        int bandMask = 0;
+
+        if (!ApConfigUtil.isBandValid(apBand)) {
+            throw new IllegalArgumentException();
         }
-        return bandType;
+
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_2GHZ)) {
+            bandMask |= android.hardware.wifi.hostapd.V1_2.IHostapd.BandMask.BAND_2_GHZ;
+        }
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_5GHZ)) {
+            bandMask |= android.hardware.wifi.hostapd.V1_2.IHostapd.BandMask.BAND_5_GHZ;
+        }
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_6GHZ)) {
+            bandMask |= android.hardware.wifi.hostapd.V1_2.IHostapd.BandMask.BAND_6_GHZ;
+        }
+
+        return bandMask;
+    }
+
+    private static int getHalBand(int apBand) {
+        if (!ApConfigUtil.isBandValid(apBand)) {
+            throw new IllegalArgumentException();
+        }
+
+        switch (apBand) {
+            case SoftApConfiguration.BAND_2GHZ:
+                return IHostapd.Band.BAND_2_4_GHZ;
+            case SoftApConfiguration.BAND_5GHZ:
+                return IHostapd.Band.BAND_5_GHZ;
+            default:
+                return IHostapd.Band.BAND_ANY;
+        }
     }
 
     /**
@@ -770,6 +892,25 @@ public class HostapdHal {
         }
     }
 
+    /**
+     * Returns true if provided status code is SUCCESS, logs debug message and returns false
+     * otherwise
+     */
+    private boolean checkStatusAndLogFailure12(
+            android.hardware.wifi.hostapd.V1_2.HostapdStatus status, String methodStr) {
+        synchronized (mLock) {
+            if (status.code != HostapdStatusCode.SUCCESS) {
+                Log.e(TAG, "IHostapd." + methodStr + " failed: " + status.code
+                        + ", " + status.debugMessage);
+                return false;
+            } else {
+                if (mVerboseLoggingEnabled) {
+                    Log.d(TAG, "IHostapd." + methodStr + " succeeded");
+                }
+                return true;
+            }
+        }
+    }
 
     private void handleRemoteException(RemoteException e, String methodStr) {
         synchronized (mLock) {
@@ -885,7 +1026,7 @@ public class HostapdHal {
             vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
             vendorIfaceParams.bridgeIfaceName = "";
             try {
-                ifaceParams.channelParams.band = getBand(config);
+                ifaceParams.channelParams.band = config.getBand();
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Unrecognized apBand " + config.getBand());
                 return false;
@@ -928,7 +1069,7 @@ public class HostapdHal {
                         Log.e(TAG, "Failed to get V1_1.IHostapdVendor");
                         return false;
                     }
-                    setLogLevel(mVerboseLoggingEnabled);
+                    setVendorLogLevel(mVerboseLoggingEnabled);
                     vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams
                          vendorIfaceParams1_1 =
                             new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams();
@@ -1210,24 +1351,53 @@ public class HostapdHal {
         }
     }
 
+
     /**
-     * Set the debug log level for hostapd
+     * Set the debug log level for hostapd.
+     *
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean setLogLevel() {
+        synchronized (mLock) {
+            final String methodStr = "setDebugParams";
+            if (!checkHostapdAndLogFailure(methodStr)) return false;
+            if (isV1_2()) {
+                try {
+                    android.hardware.wifi.hostapd.V1_2.IHostapd iHostapdV1_2 =
+                            getHostapdMockableV1_2();
+                    if (iHostapdV1_2 == null) return false;
+                    android.hardware.wifi.hostapd.V1_2.HostapdStatus status =
+                            iHostapdV1_2.setDebugParams(mVerboseLoggingEnabled
+                                    ? DebugLevel.DEBUG
+                                    : DebugLevel.INFO);
+                    return checkStatusAndLogFailure12(status, methodStr);
+                } catch (RemoteException e) {
+                    handleRemoteException(e, methodStr);
+                }
+            } else {
+                Log.d(TAG, "HIDL doesn't support setDebugParams");
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Set the debug log level for hostapd-vendor
      *
      * @param turnOnVerbose Whether to turn on verbose logging or not.
      * @return true if request is sent successfully, false otherwise.
      */
-    public boolean setLogLevel(boolean turnOnVerbose) {
+    public boolean setVendorLogLevel(boolean turnOnVerbose) {
         synchronized (mLock) {
             if (!isVendorV1_1()) return false;
             int logLevel = turnOnVerbose
                     ? vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.DebugLevel.DEBUG
                     : vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.DebugLevel.INFO;
-            return setDebugParams(logLevel, false, false);
+            return setVendorDebugParams(logLevel, false, false);
         }
     }
-
     /** See IHostapdVendor.hal for documentation */
-    private boolean setDebugParams(int level, boolean showTimestamp, boolean showKeys) {
+    private boolean setVendorDebugParams(int level, boolean showTimestamp, boolean showKeys) {
         synchronized (mLock) {
             final String methodStr = "setDebugParams";
             try {

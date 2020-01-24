@@ -1141,6 +1141,7 @@ public class XmlUtil {
         public static final String XML_TAG_PLMN = "PLMN";
         public static final String XML_TAG_REALM = "Realm";
         public static final String XML_TAG_OCSP = "Ocsp";
+        public static final String XML_TAG_WAPI_CERT_SUITE = "WapiCertSuite";
         public static final String XML_TAG_SIMNUM = "SimNum";
 
         /**
@@ -1213,6 +1214,8 @@ public class XmlUtil {
             XmlUtil.writeNextValue(out, XML_TAG_PLMN, enterpriseConfig.getPlmn());
             XmlUtil.writeNextValue(out, XML_TAG_REALM, enterpriseConfig.getRealm());
             XmlUtil.writeNextValue(out, XML_TAG_OCSP, enterpriseConfig.getOcsp());
+            XmlUtil.writeNextValue(out,
+                    XML_TAG_WAPI_CERT_SUITE, enterpriseConfig.getWapiCertSuite());
             XmlUtil.writeNextValue(out, XML_TAG_SIMNUM, enterpriseConfig.getSimNum());
         }
 
@@ -1310,6 +1313,9 @@ public class XmlUtil {
                             break;
                         case XML_TAG_REALM:
                             enterpriseConfig.setRealm((String) value);
+                            break;
+                        case XML_TAG_WAPI_CERT_SUITE:
+                            enterpriseConfig.setWapiCertSuite((String) value);
                             break;
                         case XML_TAG_SIMNUM:
                             int sim_num;

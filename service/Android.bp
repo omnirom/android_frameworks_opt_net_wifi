@@ -72,9 +72,7 @@ filegroup {
 filegroup {
     name: "wifi-service-srcs",
     srcs: [
-        ":libwificond_ipc_aidl",
         "java/**/*.java",
-        "java/**/I*.aidl",
         "java/**/*.logtags",
         ":framework-wifi-service-shared-srcs",
         ":statslog-wifi-java-gen",
@@ -87,18 +85,22 @@ java_library {
     name: "wifi-service",
     installable: true,
     defaults: ["wifi-service-common"],
-    aidl: {
-        include_dirs: ["system/connectivity/wificond/aidl"],
-        local_include_dirs: ["java"],
-    },
     srcs: [ ":wifi-service-srcs" ],
 
+    // TODO(b/140299412) should be "core_current" since Wifi module is not allowed to use
+    // @CorePlatformApi's
+    sdk_version: "core_platform",
     libs: [
         "error_prone_annotations",
         "jsr305",
         "services",
-	// load the resources from the resources APK.
-	"wifi-service-resources"
+        // load the resources from the resources APK.
+        "wifi-service-resources",
+        "framework-wifi",
+
+        // TODO(b/135994092): Replace with framework-system-stubs once all @hide dependencies are
+        // resolved.
+        "framework-minus-apex",
     ],
 
     static_libs: [
@@ -122,24 +124,24 @@ java_library {
         "androidx.annotation_annotation",
         "bouncycastle-unbundled",
         "ksoap2",
-	// Note: libprotobuf-java-lite uses a few core platform APIs which
-	// does show up as @hide API usage. But, this can be safely ignored
-	// since the library uses reflection to ensure that the OS does provide
-	// the necessary core platform APIs.
+        // Note: libprotobuf-java-lite uses a few core platform APIs which
+        // does show up as @hide API usage. But, this can be safely ignored
+        // since the library uses reflection to ensure that the OS does provide
+        // the necessary core platform APIs.
         "libprotobuf-java-lite",
         "libnanohttpd",
         "netd_aidl_interface-V2-java",
         "services.net",
         "wifi_proto_scorecard",
         "wifi_proto_metrics",
-	"PlatformProperties"
+        "PlatformProperties",
     ],
 
     required: [
         "cacerts_wfa",
         "libwifi-jni",
         "services",
-	"wifi-service-resources",
+        "wifi-service-resources",
     ],
 
     jarjar_rules: ":wifi-service-jarjar-rules",
@@ -153,10 +155,9 @@ java_library {
         app_image: false,
     },
 
-    // TODO: Remove this once all @hide dependencies are resolved.
-    platform_apis: true,
-
     init_rc: ["wifi.rc"],
+
+    plugins: ["java_api_finder"],
 }
 
 // Westworld auto-generated code

@@ -32,9 +32,9 @@ import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_FAILED;
-import static android.net.wifi.WifiManager.WIFI_FEATURE_INFRA_5G;
 import static android.net.wifi.WifiManager.WIFI_STATE_DISABLED;
 
+import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.server.wifi.LocalOnlyHotspotRequestInfo.HOTSPOT_NO_ERROR;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -64,6 +64,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.ignoreStubs;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -133,6 +134,9 @@ import android.os.RemoteException;
 import android.os.UserManager;
 import android.os.connectivity.WifiActivityEnergyInfo;
 import android.os.test.TestLooper;
+import android.telephony.CarrierConfigManager;
+import android.telephony.PhoneStateListener;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
 import androidx.test.filters.SmallTest;
@@ -158,6 +162,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
+import org.mockito.MockitoSession;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -217,6 +222,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     private WifiServiceImpl mWifiServiceImpl;
     private TestLooper mLooper;
     private PowerManager mPowerManager;
+    private PhoneStateListener mPhoneStateListener;
     private int mPid;
     private int mPid2 = Process.myPid();
     private OsuProvider mOsuProvider;
@@ -296,7 +302,9 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mAsyncChannel = spy(new AsyncChannel());
         mApplicationInfo = new ApplicationInfo();
         mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.CUR_DEVELOPMENT;
-
+        when(mResources.getInteger(
+                eq(R.integer.config_wifi_hardware_soft_ap_max_client_count)))
+                .thenReturn(10);
         WifiInjector.sWifiInjector = mWifiInjector;
         when(mRequestInfo.getPid()).thenReturn(mPid);
         when(mRequestInfo2.getPid()).thenReturn(mPid2);
@@ -343,6 +351,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mWifiInjector.getWifiNetworkSuggestionsManager())
                 .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiInjector.makeTelephonyManager()).thenReturn(mTelephonyManager);
+        when(mContext.getSystemService(TelephonyManager.class)).thenReturn(mTelephonyManager);
         when(mWifiInjector.getWifiConfigManager()).thenReturn(mWifiConfigManager);
         when(mWifiInjector.getPasspointManager()).thenReturn(mPasspointManager);
         when(mClientModeImpl.getWifiScoreReport()).thenReturn(mWifiScoreReport);
@@ -382,7 +391,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
             }
 
             @Override
-            public void onFailure(int status) throws RemoteException {
+            public void onFailure(int status, String ssid, String channelList, int[] bandList)
+                    throws RemoteException {
 
             }
 
@@ -1294,6 +1304,112 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
+     * Verify attempt to start softAp with a supported 5GHz band succeeds.
+     */
+    @Test
+    public void testStartTetheredHotspotWithSupported5gBand() {
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi5ghzSupport)))
+                .thenReturn(true);
+        SoftApConfiguration config = new SoftApConfiguration.Builder()
+                .setSsid("TestAp")
+                .setWpa2Passphrase("thisIsABadPassword")
+                .setBand(SoftApConfiguration.BAND_5GHZ)
+                .build();
+
+        boolean result = mWifiServiceImpl.startTetheredHotspot(config);
+        assertTrue(result);
+        verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
+        assertThat(config).isEqualTo(mSoftApModeConfigCaptor.getValue().getSoftApConfiguration());
+    }
+
+    /**
+     * Verify attempt to start softAp with a non-supported 5GHz band fails.
+     */
+    @Test
+    public void testStartTetheredHotspotWithUnSupported5gBand() {
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi5ghzSupport)))
+                .thenReturn(false);
+        SoftApConfiguration config = new SoftApConfiguration.Builder()
+                .setSsid("TestAp")
+                .setWpa2Passphrase("thisIsABadPassword")
+                .setBand(SoftApConfiguration.BAND_5GHZ)
+                .build();
+
+        boolean result = mWifiServiceImpl.startTetheredHotspot(config);
+        assertFalse(result);
+        verifyZeroInteractions(mActiveModeWarden);
+    }
+
+    /**
+     * Verify attempt to start softAp with a supported 6GHz band succeeds.
+     */
+    @Test
+    public void testStartTetheredHotspotWithSupported6gBand() {
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi6ghzSupport)))
+                .thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifiSoftap6ghzSupported)))
+                .thenReturn(true);
+
+        SoftApConfiguration config = new SoftApConfiguration.Builder()
+                .setSsid("TestAp")
+                .setWpa2Passphrase("thisIsABadPassword")
+                .setBand(SoftApConfiguration.BAND_6GHZ)
+                .build();
+
+        boolean result = mWifiServiceImpl.startTetheredHotspot(config);
+        assertTrue(result);
+        verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
+        assertThat(config).isEqualTo(mSoftApModeConfigCaptor.getValue().getSoftApConfiguration());
+    }
+
+    /**
+     * Verify attempt to start softAp with a non-supported 6GHz band fails.
+     */
+    @Test
+    public void testStartTetheredHotspotWithUnSupported6gBand() {
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi6ghzSupport)))
+                .thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifiSoftap6ghzSupported)))
+                .thenReturn(false);
+
+        SoftApConfiguration config = new SoftApConfiguration.Builder()
+                .setSsid("TestAp")
+                .setWpa2Passphrase("thisIsABadPassword")
+                .setBand(SoftApConfiguration.BAND_6GHZ)
+                .build();
+
+        boolean result = mWifiServiceImpl.startTetheredHotspot(config);
+        assertFalse(result);
+        verifyZeroInteractions(mActiveModeWarden);
+    }
+
+    /**
+     * Verify attempt to start softAp with a supported band succeeds.
+     */
+    @Test
+    public void testStartTetheredHotspotWithSupportedBand() {
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi5ghzSupport)))
+                .thenReturn(true);
+        SoftApConfiguration config = new SoftApConfiguration.Builder()
+                .setSsid("TestAp")
+                .setWpa2Passphrase("thisIsABadPassword")
+                .setBand(SoftApConfiguration.BAND_5GHZ)
+                .build();
+
+        boolean result = mWifiServiceImpl.startTetheredHotspot(config);
+        assertTrue(result);
+        verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
+        assertThat(config).isEqualTo(mSoftApModeConfigCaptor.getValue().getSoftApConfiguration());
+    }
+
+    /**
      * Verify a SecurityException is thrown when a caller without the correct permission attempts to
      * start softap.
      */
@@ -1868,9 +1984,10 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mResources.getBoolean(
                 eq(R.bool.config_wifi_local_only_hotspot_5ghz)))
                 .thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi5ghzSupport)))
+                .thenReturn(true);
         when(mPackageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)).thenReturn(true);
-        when(mClientModeImpl.syncGetSupportedFeatures(any(AsyncChannel.class)))
-                .thenReturn((long) WIFI_FEATURE_INFRA_5G);
 
         verify(mAsyncChannel).connect(any(), mHandlerCaptor.capture(), any(Handler.class));
         final Handler handler = mHandlerCaptor.getValue();
@@ -4778,5 +4895,50 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 ArgumentCaptor.forClass(WifiActivityEnergyInfo.class);
         verify(mOnWifiActivityEnergyInfoListener).onWifiActivityEnergyInfo(infoCaptor.capture());
         validateWifiActivityEnergyInfo(infoCaptor.getValue());
+    }
+
+    @Test
+    public void testCarrierConfigChangeUpdateSoftApCapability() throws Exception {
+        MockitoSession staticMockSession = mockitoSession()
+                .mockStatic(SubscriptionManager.class)
+                .startMocking();
+        lenient().when(SubscriptionManager.getActiveDataSubscriptionId())
+                .thenReturn(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID);
+        mWifiServiceImpl.checkAndStartWifi();
+        mLooper.dispatchAll();
+        verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
+                argThat((IntentFilter filter) ->
+                        filter.hasAction(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED)));
+
+        // Send the broadcast
+        Intent intent = new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
+        mBroadcastReceiverCaptor.getValue().onReceive(mContext, intent);
+        mLooper.dispatchAll();
+        verify(mActiveModeWarden).updateSoftApCapability(any());
+        staticMockSession.finishMocking();
+    }
+
+    @Test
+    public void testPhoneActiveDataSubscriptionIdChangedUpdateSoftApCapability() throws Exception {
+        MockitoSession staticMockSession = mockitoSession()
+                .mockStatic(SubscriptionManager.class)
+                .startMocking();
+        lenient().when(SubscriptionManager.getActiveDataSubscriptionId())
+                .thenReturn(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID);
+        mWifiServiceImpl.checkAndStartWifi();
+        mLooper.dispatchAll();
+        verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
+                argThat((IntentFilter filter) ->
+                        filter.hasAction(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED)));
+        ArgumentCaptor<PhoneStateListener> phoneStateListenerCaptor =
+                ArgumentCaptor.forClass(PhoneStateListener.class);
+        verify(mTelephonyManager).listen(phoneStateListenerCaptor.capture(),
+                eq(PhoneStateListener.LISTEN_ACTIVE_DATA_SUBSCRIPTION_ID_CHANGE));
+        mPhoneStateListener = phoneStateListenerCaptor.getValue();
+        assertNotNull(mPhoneStateListener);
+        mPhoneStateListener.onActiveDataSubscriptionIdChanged(2);
+        mLooper.dispatchAll();
+        verify(mActiveModeWarden).updateSoftApCapability(any());
+        staticMockSession.finishMocking();
     }
 }

@@ -25,7 +25,7 @@ import android.util.SparseArray;
 import android.util.Xml;
 
 import com.android.internal.util.FastXmlSerializer;
-import com.android.server.net.IpConfigStore;
+import com.android.server.wifi.util.IpConfigStore;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.XmlUtil;
@@ -619,6 +619,12 @@ public class WifiBackupRestore {
                         } else if (ktype.equals("IEEE8021X")) {
                             configuration.allowedKeyManagement.set(
                                     WifiConfiguration.KeyMgmt.IEEE8021X);
+                        } else if (ktype.equals("WAPI-PSK")) {
+                            configuration.allowedKeyManagement.set(
+                                    WifiConfiguration.KeyMgmt.WAPI_PSK);
+                        } else if (ktype.equals("WAPI-CERT")) {
+                            configuration.allowedKeyManagement.set(
+                                    WifiConfiguration.KeyMgmt.WAPI_CERT);
                         }
                     }
                 }
