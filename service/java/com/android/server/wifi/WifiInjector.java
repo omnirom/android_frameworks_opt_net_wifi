@@ -26,7 +26,6 @@ import android.net.IpMemoryStore;
 import android.net.NetworkCapabilities;
 import android.net.NetworkKey;
 import android.net.NetworkScoreManager;
-import android.net.wifi.IWifiScanner;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.wificond.WifiCondManager;
@@ -34,7 +33,6 @@ import android.os.BatteryStatsManager;
 import android.os.Handler;
 import android.os.HandlerExecutor;
 import android.os.HandlerThread;
-import android.os.IBinder;
 import android.os.Looper;
 import android.os.Process;
 import android.os.SystemProperties;
@@ -157,6 +155,7 @@ public class WifiInjector {
     private final ConnectionFailureNotificationBuilder mConnectionFailureNotificationBuilder;
     private final ThroughputPredictor mThroughputPredictor;
     private NetdWrapper mNetdWrapper;
+    private final WifiHealthMonitor mWifiHealthMonitor;
 
     public WifiInjector(Context context) {
         if (context == null) {
@@ -185,14 +184,12 @@ public class WifiInjector {
         mConnectionFailureNotificationBuilder = new ConnectionFailureNotificationBuilder(
                 mContext, getWifiStackPackageName(), mFrameworkFacade);
         mBatteryStats = context.getSystemService(BatteryStatsManager.class);
-        mWifiScoreCard = new WifiScoreCard(mClock,
-                Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID));
         mSettingsStore = new WifiSettingsStore(mContext);
         mWifiPermissionsWrapper = new WifiPermissionsWrapper(mContext);
         mNetworkScoreManager = mContext.getSystemService(NetworkScoreManager.class);
         mWifiNetworkScoreCache = new WifiNetworkScoreCache(mContext);
         mNetworkScoreManager.registerNetworkScoreCallback(NetworkKey.TYPE_WIFI,
-                NetworkScoreManager.CACHE_FILTER_NONE,
+                NetworkScoreManager.SCORE_FILTER_NONE,
                 new HandlerExecutor(wifiHandler), mWifiNetworkScoreCache);
         mUserManager = mContext.getSystemService(UserManager.class);
         mWifiPermissionsUtil = new WifiPermissionsUtil(mWifiPermissionsWrapper, mContext,
@@ -257,9 +254,10 @@ public class WifiInjector {
                 mUserManager, mTelephonyUtil,
                 mWifiKeyStore, mWifiConfigStore, mWifiPermissionsUtil,
                 mWifiPermissionsWrapper, this, new NetworkListSharedStoreData(mContext),
-                new NetworkListUserStoreData(mContext),
-                new DeletedEphemeralSsidsStoreData(mClock), new RandomizedMacStoreData(),
+                new NetworkListUserStoreData(mContext), new RandomizedMacStoreData(),
                 mFrameworkFacade, wifiHandler, mDeviceConfigFacade);
+        String l2KeySeed = Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID);
+        mWifiScoreCard = new WifiScoreCard(mClock, l2KeySeed);
         mWifiMetrics.setWifiConfigManager(mWifiConfigManager);
 
         mWifiApConfigStore = new WifiApConfigStore(
@@ -269,7 +267,7 @@ public class WifiInjector {
         mWifiConnectivityHelper = new WifiConnectivityHelper(mWifiNative);
         mConnectivityLocalLog = new LocalLog(
                 mContext.getSystemService(ActivityManager.class).isLowRamDevice() ? 256 : 512);
-        mScoringParams = new ScoringParams(mContext, mFrameworkFacade, wifiHandler);
+        mScoringParams = new ScoringParams(mContext);
         mWifiMetrics.setScoringParams(mScoringParams);
         mThroughputPredictor = new ThroughputPredictor(mContext);
         mWifiNetworkSelector = new WifiNetworkSelector(mContext, mWifiScoreCard, mScoringParams,
@@ -321,12 +319,15 @@ public class WifiInjector {
         SupplicantStateTracker supplicantStateTracker = new SupplicantStateTracker(
                 mContext, mWifiConfigManager, mBatteryStats, wifiHandler);
         mMboOceController = new MboOceController(makeTelephonyManager(), mWifiNative);
+        mWifiHealthMonitor = new WifiHealthMonitor(mContext, this, mClock, mWifiConfigManager,
+                mWifiScoreCard, wifiHandler, mWifiNative, l2KeySeed, mDeviceConfigFacade);
         mClientModeImpl = new ClientModeImpl(mContext, mFrameworkFacade,
                 wifiLooper, mUserManager,
                 this, mBackupManagerProxy, mCountryCode, mWifiNative,
                 new WrongPasswordNotifier(mContext, mFrameworkFacade),
                 mSarManager, mWifiTrafficPoller, mLinkProbeManager, mBatteryStats,
-                supplicantStateTracker, mMboOceController, mTelephonyUtil);
+                supplicantStateTracker, mMboOceController, mTelephonyUtil,
+                new EapFailureNotifier(mContext, mFrameworkFacade, mTelephonyUtil));
         mActiveModeWarden = new ActiveModeWarden(this, wifiLooper,
                 mWifiNative, new DefaultModeManager(mContext), mBatteryStats, mWifiDiagnostics,
                 mContext, mClientModeImpl, mSettingsStore, mFrameworkFacade, mWifiPermissionsUtil);
@@ -567,9 +568,7 @@ public class WifiInjector {
      */
     public synchronized WifiScanner getWifiScanner() {
         if (mWifiScanner == null) {
-            IBinder binder = mFrameworkFacade.getService(Context.WIFI_SCANNING_SERVICE);
-            IWifiScanner service = IWifiScanner.Stub.asInterface(binder);
-            mWifiScanner = new WifiScanner(mContext, service, mWifiHandlerThread.getLooper());
+            mWifiScanner = mContext.getSystemService(WifiScanner.class);
         }
         return mWifiScanner;
     }
@@ -792,4 +791,13 @@ public class WifiInjector {
     public WifiCondManager getWifiCondManager() {
         return mWifiCondManager;
     }
+
+    public WifiHealthMonitor getWifiHealthMonitor() {
+        return mWifiHealthMonitor;
+    }
+
+    public ThroughputPredictor getThroughputPredictor() {
+        return mThroughputPredictor;
+    }
+
 }

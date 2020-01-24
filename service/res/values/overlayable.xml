@@ -22,6 +22,7 @@
           <!-- Params from config.xml that can be overlayed -->
           <item type="bool" name="config_wifi5ghzSupport" />
           <item type="bool" name="config_wifi6ghzSupport" />
+          <item type="bool" name="config_wifi11axSupportOverride" />
           <item type="integer" name="config_wifi_max_ap_interfaces" />
           <item type="bool" name="config_wifi_convert_apband_5ghz_to_any" />
           <item type="bool" name="config_wifi_fast_bss_transition_enabled" />
@@ -54,9 +55,11 @@
           <item type="integer" name="config_wifiFrameworkScoreEntryRssiThreshold6ghz" />
           <item type="integer" name="config_wifiFrameworkScoreLowRssiThreshold6ghz" />
           <item type="integer" name="config_wifiFrameworkScoreGoodRssiThreshold6ghz" />
-          <item type="integer" name="config_wifi_framework_soft_ap_timeout_delay" />
+          <item type="integer" name="config_wifiFrameworkSoftApShutDownTimeoutMilliseconds" />
           <item type="string"  name="config_wifi_random_mac_oui" />
-          <item type="string"  name="config_wifi_framework_sap_2G_channel_list" />
+          <item type="string"  name="config_wifiSoftap2gChannelList" />
+          <item type="string"  name="config_wifiSoftap5gChannelList" />
+          <item type="string"  name="config_wifiSoftap6gChannelList" />
           <item type="integer" name="config_wifi_framework_associated_partial_scan_max_num_active_channels" />
           <item type="integer" name="config_wifi_framework_recovery_timeout_delay" />
           <item type="bool" name="config_wifi_framework_enable_associated_network_selection" />
@@ -64,13 +67,17 @@
           <item type="bool" name="config_wifi_only_link_same_credential_configurations" />
           <item type="bool" name="config_wifi_framework_enable_sar_tx_power_limit" />
           <item type="bool" name="config_wifi_framework_enable_soft_ap_sar_tx_power_limit" />
-          <item type="bool" name="config_wifi_sofap_client_force_disconnect_supported" />
+          <item type="bool" name="config_wifiSofapClientForceDisconnectSupported" />
           <item type="bool" name="config_wifi_softap_acs_supported" />
           <item type="bool" name="config_wifi_softap_acs_include_dfs" />
-          <item type="string" name="config_wifi_softap_acs_supported_channel_list" />
+          <item type="bool" name="config_wifi_softap_sae_supported" />
           <item type="bool" name="config_wifi_softap_ieee80211ac_supported" />
           <item type="bool" name="config_wifiSoftapIeee80211axSupported" />
           <item type="bool" name="config_wifiSoftap6ghzSupported" />
+          <item type="bool" name="config_wifiSoftapHeSuBeamformerSupported" />
+          <item type="bool" name="config_wifiSoftapHeSuBeamformeeSupported" />
+          <item type="bool" name="config_wifiSoftapHeMuBeamformerSupported" />
+          <item type="bool" name="config_wifiSoftapHeTwtSupported" />
           <item type="bool" name="config_wifi_local_only_hotspot_5ghz" />
           <item type="bool" name="config_wifi_connected_mac_randomization_supported" />
           <item type="bool" name="config_wifi_p2p_mac_randomization_supported" />
@@ -78,8 +85,7 @@
           <item type="array" name="config_wifi_aggressive_randomization_ssid_allowlist" />
           <item type="array" name="config_wifi_aggressive_randomization_ssid_blocklist" />
           <item type="bool" name="config_wifi_link_probing_supported" />
-          <item type="bool" name="config_wifi_11ax_supported" />
-          <item type="bool" name="config_wifi_contiguous_160mhz_supported" />
+         <item type="bool" name="config_wifi_contiguous_160mhz_supported" />
           <item type="integer" name="config_wifi_max_num_spatial_stream_supported" />
           <item type="string" name="config_wifi_tcp_buffers" />
           <item type="string" name="wifi_tether_configure_ssid_default" />
@@ -90,7 +96,16 @@
           <item type="array" name="config_wifiDisconnectedScanIntervalScheduleSec" />
           <item type="array" name="config_wifiConnectedScanIntervalScheduleSec" />
           <item type="bool" name="config_wifiScanHiddenNetworksScanOnlyMode" />
-          <item type="integer" name="config_wifi_hardware_soft_ap_max_client_count" />
+          <item type="integer" name="config_wifiHardwareSoftapMaxClientCount" />
+          <item type="bool" name="config_wifiIsUnusableEventMetricsEnabled" />
+          <item type="integer" name="config_wifiDataStallMinTxBad" />
+          <item type="integer" name="config_wifiDataStallMinTxSuccessWithoutRx" />
+          <item type="bool" name="config_wifiLinkSpeedMetricsEnabled" />
+          <item type="bool" name="config_wifiPnoFrequencyCullingEnabled" />
+          <item type="bool" name="config_wifiPnoRecencySortingEnabled" />
+          <item type="bool" name="config_wifiSuspendOptimizationsEnabled" />
+          <item type="integer" name="config_wifiRttBackgroundExecGapMs" />
+          <item type="integer" name="config_wifiPollRssiIntervalMilliseconds" />
           <!-- Params from config.xml that can be overlayed -->
 
           <!-- Params from strings.xml that can be overlayed -->
@@ -141,6 +156,16 @@
           <item type="string" name="notification_channel_network_status" />
           <item type="string" name="notification_channel_network_alerts" />
           <item type="string" name="notification_channel_network_available" />
+          <item type="string" name="wifi_eap_error_message_code_32760" />
+          <item type="string" name="wifi_eap_error_message_code_32761" />
+          <item type="string" name="wifi_eap_error_message_code_32762" />
+          <item type="string" name="wifi_eap_error_message_code_32763" />
+          <item type="string" name="wifi_eap_error_message_code_32764" />
+          <item type="string" name="wifi_eap_error_message_code_32765" />
+          <item type="string" name="wifi_eap_error_message_code_32766" />
+          <item type="string" name="wifi_softap_auto_shutdown_timeout_expired_title" />
+          <item type="string" name="wifi_softap_auto_shutdown_timeout_expired_summary" />
+          <item type="string" name="wifi_softap_auto_shutdown_timeout_expired_detail" />
           <!-- Params from strings.xml that can be overlayed -->
 
           <!-- Params from styles.xml that can be overlayed -->
@@ -148,6 +173,11 @@
           <item type="style" name="wifi_item_label" />
           <item type="style" name="wifi_item_content" />
           <item type="style" name="wifi_section" />
+          <!-- Params from styles.xml that can be overlayed -->
+
+          <!-- Params from styles.xml that can be overlayed -->
+          <item type="drawable" name="stat_notify_wifi_in_range" />
+          <item type="drawable" name="ic_wifi_settings" />
           <!-- Params from styles.xml that can be overlayed -->
 
         </policy>

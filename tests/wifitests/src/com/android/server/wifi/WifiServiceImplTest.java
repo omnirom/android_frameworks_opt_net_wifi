@@ -103,6 +103,7 @@ import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ISuggestionConnectionStatusListener;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ITxPacketCountListener;
+import android.net.wifi.IWifiConnectedNetworkScorer;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApInfo;
@@ -131,6 +132,7 @@ import android.os.Message;
 import android.os.PowerManager;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.connectivity.WifiActivityEnergyInfo;
 import android.os.test.TestLooper;
@@ -194,12 +196,14 @@ public class WifiServiceImplTest extends WifiBaseTest {
     private static final int TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER = 17;
     private static final int TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER = 234;
     private static final int TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER = 2;
+    private static final int TEST_WIFI_CONNECTED_NETWORK_SCORER_IDENTIFIER = 1;
     private static final String WIFI_IFACE_NAME = "wlan0";
     private static final String WIFI_IFACE_NAME2 = "wlan1";
     private static final String TEST_COUNTRY_CODE = "US";
     private static final String TEST_FACTORY_MAC = "10:22:34:56:78:92";
     private static final MacAddress TEST_FACTORY_MAC_ADDR = MacAddress.fromString(TEST_FACTORY_MAC);
     private static final String TEST_FQDN = "testfqdn";
+    private static final String TEST_FRIENDLY_NAME = "testfriendlyname";
     private static final List<WifiConfiguration> TEST_WIFI_CONFIGURATION_LIST = Arrays.asList(
             WifiConfigurationTestUtil.generateWifiConfig(
                     0, 1000000, "\"red\"", true, true, null, null),
@@ -286,6 +290,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Mock WifiConfigManager mWifiConfigManager;
     @Mock WifiScoreReport mWifiScoreReport;
     @Mock WifiScoreCard mWifiScoreCard;
+    @Mock WifiHealthMonitor mWifiHealthMonitor;
     @Mock PasspointManager mPasspointManager;
     @Mock IDppCallback mDppCallback;
     @Mock SarManager mSarManager;
@@ -293,6 +298,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Mock IScanResultsCallback mScanResultsCallback;
     @Mock ISuggestionConnectionStatusListener mSuggestionConnectionStatusListener;
     @Mock IOnWifiActivityEnergyInfoListener mOnWifiActivityEnergyInfoListener;
+    @Mock IWifiConnectedNetworkScorer mWifiConnectedNetworkScorer;
 
     WifiLog mLog = new LogcatLog(TAG);
 
@@ -303,7 +309,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mApplicationInfo = new ApplicationInfo();
         mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.CUR_DEVELOPMENT;
         when(mResources.getInteger(
-                eq(R.integer.config_wifi_hardware_soft_ap_max_client_count)))
+                eq(R.integer.config_wifiHardwareSoftapMaxClientCount)))
                 .thenReturn(10);
         WifiInjector.sWifiInjector = mWifiInjector;
         when(mRequestInfo.getPid()).thenReturn(mPid);
@@ -356,6 +362,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mWifiInjector.getPasspointManager()).thenReturn(mPasspointManager);
         when(mClientModeImpl.getWifiScoreReport()).thenReturn(mWifiScoreReport);
         when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
+        when(mWifiInjector.getWifiHealthMonitor()).thenReturn(mWifiHealthMonitor);
         when(mWifiInjector.getSarManager()).thenReturn(mSarManager);
         when(mWifiInjector.getWifiNetworkScoreCache())
                 .thenReturn(mock(WifiNetworkScoreCache.class));
@@ -1040,6 +1047,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertTrue(mWifiServiceImpl.setSoftApConfiguration(apConfig, TEST_PACKAGE_NAME));
         mLooper.dispatchAll();
         verify(mWifiApConfigStore).setApConfiguration(eq(apConfig));
+        verify(mActiveModeWarden).updateSoftApConfiguration(apConfig);
         verify(mContext).enforceCallingOrSelfPermission(
                 eq(android.Manifest.permission.NETWORK_SETTINGS), eq("WifiService"));
     }
@@ -1054,6 +1062,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                         eq("WifiService"));
         assertFalse(mWifiServiceImpl.setSoftApConfiguration(null, TEST_PACKAGE_NAME));
         verify(mWifiApConfigStore, never()).setApConfiguration(isNull(SoftApConfiguration.class));
+        verify(mActiveModeWarden, never()).updateSoftApConfiguration(any());
         verify(mContext).enforceCallingOrSelfPermission(
                 eq(android.Manifest.permission.NETWORK_SETTINGS), eq("WifiService"));
     }
@@ -1127,7 +1136,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         mLooper.startAutoDispatch();
         WifiConfigurationTestUtil.assertConfigurationEqualForSoftAp(
-                ApConfigUtil.convertToWifiConfiguration(apConfig),
+                apConfig.toWifiConfiguration(),
                 mWifiServiceImpl.getWifiApConfiguration());
 
         mLooper.stopAutoDispatchAndIgnoreExceptions();
@@ -1233,8 +1242,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertTrue(result);
         verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
         WifiConfigurationTestUtil.assertConfigurationEqualForSoftAp(
-                config, ApConfigUtil.convertToWifiConfiguration(
-                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration()));
+                config,
+                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration().toWifiConfiguration());
     }
 
     /**
@@ -1263,8 +1272,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertTrue(result);
         verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
         WifiConfigurationTestUtil.assertConfigurationEqualForSoftAp(
-                config, ApConfigUtil.convertToWifiConfiguration(
-                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration()));
+                config,
+                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration().toWifiConfiguration());
         verify(mContext).enforceCallingOrSelfPermission(
                 eq(NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK), any());
     }
@@ -1313,7 +1322,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 .thenReturn(true);
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("TestAp")
-                .setWpa2Passphrase("thisIsABadPassword")
+                .setPassphrase("thisIsABadPassword", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .setBand(SoftApConfiguration.BAND_5GHZ)
                 .build();
 
@@ -1333,7 +1342,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 .thenReturn(false);
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("TestAp")
-                .setWpa2Passphrase("thisIsABadPassword")
+                .setPassphrase("thisIsABadPassword", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .setBand(SoftApConfiguration.BAND_5GHZ)
                 .build();
 
@@ -1356,7 +1365,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("TestAp")
-                .setWpa2Passphrase("thisIsABadPassword")
+                .setPassphrase("thisIsABadPassword", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .setBand(SoftApConfiguration.BAND_6GHZ)
                 .build();
 
@@ -1380,7 +1389,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("TestAp")
-                .setWpa2Passphrase("thisIsABadPassword")
+                .setPassphrase("thisIsABadPassword", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .setBand(SoftApConfiguration.BAND_6GHZ)
                 .build();
 
@@ -1399,7 +1408,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 .thenReturn(true);
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("TestAp")
-                .setWpa2Passphrase("thisIsABadPassword")
+                .setPassphrase("thisIsABadPassword", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .setBand(SoftApConfiguration.BAND_5GHZ)
                 .build();
 
@@ -1526,6 +1535,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         wifiInfo.setSSID(WifiSsid.createFromAsciiEncoded(TEST_SSID));
         wifiInfo.setBSSID(TEST_BSSID);
         wifiInfo.setNetworkId(TEST_NETWORK_ID);
+        wifiInfo.setFQDN(TEST_FQDN);
+        wifiInfo.setProviderFriendlyName(TEST_FRIENDLY_NAME);
         when(mClientModeImpl.syncRequestConnectionInfo()).thenReturn(wifiInfo);
     }
 
@@ -1545,6 +1556,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertEquals(WifiManager.UNKNOWN_SSID, connectionInfo.getSSID());
         assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getBSSID());
         assertEquals(WifiConfiguration.INVALID_NETWORK_ID, connectionInfo.getNetworkId());
+        assertNull(connectionInfo.getPasspointFqdn());
+        assertNull(connectionInfo.getPasspointProviderFriendlyName());
     }
 
     /**
@@ -1563,6 +1576,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertEquals(WifiManager.UNKNOWN_SSID, connectionInfo.getSSID());
         assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getBSSID());
         assertEquals(WifiConfiguration.INVALID_NETWORK_ID, connectionInfo.getNetworkId());
+        assertNull(connectionInfo.getPasspointFqdn());
+        assertNull(connectionInfo.getPasspointProviderFriendlyName());
     }
 
     /**
@@ -1578,6 +1593,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertEquals(TEST_SSID_WITH_QUOTES, connectionInfo.getSSID());
         assertEquals(TEST_BSSID, connectionInfo.getBSSID());
         assertEquals(TEST_NETWORK_ID, connectionInfo.getNetworkId());
+        assertEquals(TEST_FQDN, connectionInfo.getPasspointFqdn());
+        assertEquals(TEST_FRIENDLY_NAME, connectionInfo.getPasspointProviderFriendlyName());
     }
 
     /**
@@ -1835,8 +1852,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertTrue(mWifiServiceImpl.startSoftAp(config));
         verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
         WifiConfigurationTestUtil.assertConfigurationEqualForSoftAp(
-                config, ApConfigUtil.convertToWifiConfiguration(
-                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration()));
+                config,
+                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration().toWifiConfiguration());
         mStateMachineSoftApCallback.onStateChanged(WIFI_AP_STATE_ENABLED, 0);
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_TETHERED);
         mLooper.dispatchAll();
@@ -2000,32 +2017,32 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
     private void verifyLohsBand(int expectedBand) {
         verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
-        final WifiConfiguration configuration = ApConfigUtil.convertToWifiConfiguration(
-                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration());
+        final WifiConfiguration configuration =
+                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration().toWifiConfiguration();
         assertNotNull(configuration);
         assertEquals(expectedBand, configuration.apBand);
     }
 
     private static class FakeLohsCallback extends ILocalOnlyHotspotCallback.Stub {
         boolean mIsStarted = false;
-        WifiConfiguration mWifiConfig = null;
+        SoftApConfiguration mSoftApConfig = null;
 
         @Override
-        public void onHotspotStarted(WifiConfiguration wifiConfig) {
+        public void onHotspotStarted(SoftApConfiguration softApConfig) {
             mIsStarted = true;
-            this.mWifiConfig = wifiConfig;
+            this.mSoftApConfig = softApConfig;
         }
 
         @Override
         public void onHotspotStopped() {
             mIsStarted = false;
-            mWifiConfig = null;
+            mSoftApConfig = null;
         }
 
         @Override
         public void onHotspotFailed(int i) {
             mIsStarted = false;
-            mWifiConfig = null;
+            mSoftApConfig = null;
         }
     }
 
@@ -2101,7 +2118,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testCustomLohs_Wpa2() {
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("customSsid")
-                .setWpa2Passphrase("passphrase")
+                .setPassphrase("passphrase", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .build();
         FakeLohsCallback callback = new FakeLohsCallback();
 
@@ -2112,9 +2129,10 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertThat(callback.mIsStarted).isTrue();
-        assertThat(callback.mWifiConfig.SSID).isEqualTo("customSsid");
-        assertThat(callback.mWifiConfig.getAuthType()).isEqualTo(KeyMgmt.WPA2_PSK);
-        assertThat(callback.mWifiConfig.preSharedKey).isEqualTo("passphrase");
+        assertThat(callback.mSoftApConfig.getSsid()).isEqualTo("customSsid");
+        assertThat(callback.mSoftApConfig.getSecurityType())
+                .isEqualTo(SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+        assertThat(callback.mSoftApConfig.getPassphrase()).isEqualTo("passphrase");
     }
 
     @Test
@@ -2131,15 +2149,16 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertThat(callback.mIsStarted).isTrue();
-        assertThat(callback.mWifiConfig.SSID).isEqualTo("customSsid");
-        assertThat(callback.mWifiConfig.getAuthType()).isEqualTo(KeyMgmt.NONE);
-        assertThat(callback.mWifiConfig.preSharedKey).isNull();
+        assertThat(callback.mSoftApConfig.getSsid()).isEqualTo("customSsid");
+        assertThat(callback.mSoftApConfig.getSecurityType())
+                .isEqualTo(SoftApConfiguration.SECURITY_TYPE_OPEN);
+        assertThat(callback.mSoftApConfig.getPassphrase()).isNull();
     }
 
     @Test
     public void testCustomLohs_GeneratesSsidIfAbsent() {
         SoftApConfiguration config = new SoftApConfiguration.Builder()
-                .setWpa2Passphrase("passphrase")
+                .setPassphrase("passphrase", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .build();
         FakeLohsCallback callback = new FakeLohsCallback();
 
@@ -2150,7 +2169,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertThat(callback.mIsStarted).isTrue();
-        assertThat(callback.mWifiConfig.SSID).isNotEmpty();
+        assertThat(callback.mSoftApConfig.getSsid()).isNotEmpty();
     }
 
     @Test
@@ -2167,7 +2186,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertThat(callback.mIsStarted).isTrue();
-        assertThat(callback.mWifiConfig.BSSID)
+        assertThat(callback.mSoftApConfig.getBssid().toString())
                 .ignoringCase().isEqualTo("aa:bb:cc:dd:ee:ff");
     }
 
@@ -2215,20 +2234,17 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
     /**
      * Verify that a call to registerSoftApCallback throws a SecurityException if the caller does
-     * not have NETWORK_SETTINGS permission.
+     * not have neither NETWORK_SETTINGS nor MAINLINE_NETWORK_STACK permission.
      */
-    @Test
+    @Test(expected = SecurityException.class)
     public void registerSoftApCallbackThrowsSecurityExceptionOnMissingPermissions() {
-        doThrow(new SecurityException()).when(mContext)
-                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
-                                                eq("WifiService"));
-        try {
-            final int callbackIdentifier = 1;
-            mWifiServiceImpl.registerSoftApCallback(mAppBinder, mClientSoftApCallback,
-                    callbackIdentifier);
-            fail("expected SecurityException");
-        } catch (SecurityException expected) {
-        }
+        when(mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS))
+                .thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkCallingOrSelfPermission(NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK))
+                .thenReturn(PackageManager.PERMISSION_DENIED);
+        final int callbackIdentifier = 1;
+        mWifiServiceImpl.registerSoftApCallback(
+                mAppBinder, mClientSoftApCallback, callbackIdentifier);
     }
 
     /**
@@ -2247,19 +2263,16 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
     /**
      * Verify that a call to unregisterSoftApCallback throws a SecurityException if the caller does
-     * not have NETWORK_SETTINGS permission.
+     * not have neither NETWORK_SETTINGS nor MAINLINE_NETWORK_STACK permission.
      */
-    @Test
+    @Test(expected = SecurityException.class)
     public void unregisterSoftApCallbackThrowsSecurityExceptionOnMissingPermissions() {
-        doThrow(new SecurityException()).when(mContext)
-                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
-                                                eq("WifiService"));
-        try {
-            final int callbackIdentifier = 1;
-            mWifiServiceImpl.unregisterSoftApCallback(callbackIdentifier);
-            fail("expected SecurityException");
-        } catch (SecurityException expected) {
-        }
+        when(mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS))
+                .thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkCallingOrSelfPermission(NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK))
+                .thenReturn(PackageManager.PERMISSION_DENIED);
+        final int callbackIdentifier = 1;
+        mWifiServiceImpl.unregisterSoftApCallback(callbackIdentifier);
     }
 
     /**
@@ -2275,6 +2288,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mClientSoftApCallback, never()).onStateChanged(WIFI_AP_STATE_DISABLED, 0);
         verify(mClientSoftApCallback, never()).onConnectedClientsChanged(any());
         verify(mClientSoftApCallback, never()).onInfoChanged(any());
+        verify(mClientSoftApCallback, never()).onCapabilityChanged(any());
     }
 
 
@@ -2298,6 +2312,9 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(callback).onStateChanged(WIFI_AP_STATE_DISABLED, 0);
         verify(callback).onConnectedClientsChanged(Mockito.<WifiClient>anyList());
         verify(callback).onInfoChanged(new SoftApInfo());
+        verify(callback).onCapabilityChanged(ApConfigUtil.updateCapabilityFromResource(mContext));
+        // Don't need to invoke callback when register.
+        verify(callback, never()).onBlockedClientConnecting(any(), anyInt());
     }
 
     /**
@@ -2371,14 +2388,18 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void correctCallbackIsCalledAfterAddingTwoCallbacksAndRemovingOne() throws Exception {
         final int callbackIdentifier = 1;
+        WifiClient testWifiClient = new WifiClient(MacAddress.fromString("22:33:44:55:66:77"));
         mWifiServiceImpl.registerSoftApCallback(mAppBinder, mClientSoftApCallback,
                 callbackIdentifier);
+        mLooper.dispatchAll();
 
         // Change state from default before registering the second callback
         final List<WifiClient> testClients = new ArrayList();
         mStateMachineSoftApCallback.onStateChanged(WIFI_AP_STATE_ENABLED, 0);
         mStateMachineSoftApCallback.onConnectedClientsChanged(testClients);
         mStateMachineSoftApCallback.onInfoChanged(mTestSoftApInfo);
+        mStateMachineSoftApCallback.onBlockedClientConnecting(testWifiClient, 0);
+
 
         // Register another callback and verify the new state is returned in the immediate callback
         final int anotherUid = 2;
@@ -2387,6 +2408,10 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mAnotherSoftApCallback).onStateChanged(WIFI_AP_STATE_ENABLED, 0);
         verify(mAnotherSoftApCallback).onConnectedClientsChanged(testClients);
         verify(mAnotherSoftApCallback).onInfoChanged(mTestSoftApInfo);
+        // Verify only first callback will receive onBlockedClientConnecting since it call after
+        // first callback register but before another callback register.
+        verify(mClientSoftApCallback).onBlockedClientConnecting(testWifiClient, 0);
+        verify(mAnotherSoftApCallback, never()).onBlockedClientConnecting(testWifiClient, 0);
 
         // unregister the fisrt callback
         mWifiServiceImpl.unregisterSoftApCallback(callbackIdentifier);
@@ -2472,9 +2497,11 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void updatesSoftApStateAndConnectedClientsOnSoftApEvents() throws Exception {
         final List<WifiClient> testClients = new ArrayList();
+        WifiClient testWifiClient = new WifiClient(MacAddress.fromString("22:33:44:55:66:77"));
         mStateMachineSoftApCallback.onStateChanged(WIFI_AP_STATE_ENABLED, 0);
         mStateMachineSoftApCallback.onConnectedClientsChanged(testClients);
         mStateMachineSoftApCallback.onInfoChanged(mTestSoftApInfo);
+        mStateMachineSoftApCallback.onBlockedClientConnecting(testWifiClient, 0);
 
         // Register callback after num clients and soft AP are changed.
         final int callbackIdentifier = 1;
@@ -2484,6 +2511,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mClientSoftApCallback).onStateChanged(WIFI_AP_STATE_ENABLED, 0);
         verify(mClientSoftApCallback).onConnectedClientsChanged(testClients);
         verify(mClientSoftApCallback).onInfoChanged(mTestSoftApInfo);
+        // Don't need to invoke callback when register.
+        verify(mClientSoftApCallback, never()).onBlockedClientConnecting(any(), anyInt());
     }
 
     private class IntentFilterMatcher implements ArgumentMatcher<IntentFilter> {
@@ -2946,27 +2975,31 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(pm.getApplicationInfoAsUser(any(), anyInt(), any())).thenReturn(mApplicationInfo);
         when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
                 eq(Build.VERSION_CODES.Q), anyInt())).thenReturn(true);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.R), anyInt())).thenReturn(true);
 
         when(mPasspointManager.addOrUpdateProvider(
-                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), eq(false)))
-                .thenReturn(true);
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), eq(false),
+                eq(true))).thenReturn(true);
         mLooper.startAutoDispatch();
         assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mPasspointManager).addOrUpdateProvider(
-                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), eq(false));
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), eq(false),
+                eq(true));
         reset(mPasspointManager);
 
         when(mPasspointManager.addOrUpdateProvider(
-                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), anyBoolean()))
-                .thenReturn(false);
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), anyBoolean(),
+                anyBoolean())).thenReturn(false);
         mLooper.startAutoDispatch();
         assertEquals(-1, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
         verify(mPasspointManager).addOrUpdateProvider(
-                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), anyBoolean());
+                any(PasspointConfiguration.class), anyInt(), eq(TEST_PACKAGE_NAME), anyBoolean(),
+                anyBoolean());
     }
 
     /**
@@ -3556,14 +3589,14 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_USER_REMOVED)));
 
-        int userHandle = TEST_USER_HANDLE;
+        UserHandle userHandle = UserHandle.of(TEST_USER_HANDLE);
         // Send the broadcast
         Intent intent = new Intent(Intent.ACTION_USER_REMOVED);
-        intent.putExtra(Intent.EXTRA_USER_HANDLE, userHandle);
+        intent.putExtra(Intent.EXTRA_USER, userHandle);
         mBroadcastReceiverCaptor.getValue().onReceive(mContext, intent);
         mLooper.dispatchAll();
 
-        verify(mWifiConfigManager).removeNetworksForUser(userHandle);
+        verify(mWifiConfigManager).removeNetworksForUser(userHandle.getIdentifier());
     }
 
     @Test
@@ -3578,10 +3611,10 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 argThat((IntentFilter filter) ->
                         filter.hasAction(Intent.ACTION_USER_REMOVED)));
 
-        int userHandle = TEST_USER_HANDLE;
+        UserHandle userHandle = UserHandle.of(TEST_USER_HANDLE);
         // Send the broadcast with wrong action
         Intent intent = new Intent(Intent.ACTION_USER_FOREGROUND);
-        intent.putExtra(Intent.EXTRA_USER_HANDLE, userHandle);
+        intent.putExtra(Intent.EXTRA_USER, userHandle);
         mBroadcastReceiverCaptor.getValue().onReceive(mContext, intent);
 
         verify(mWifiConfigManager, never()).removeNetworksForUser(anyInt());
@@ -3626,7 +3659,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testNeeds5GHzToAnyApBandConversionThrowsWithoutProperPermissions() {
         doThrow(new SecurityException()).when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
-                                                eq("WifiService"));
+                        eq("WifiService"));
 
         try {
             mWifiServiceImpl.needs5GHzToAnyApBandConversion();
@@ -3672,7 +3705,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     private SoftApConfiguration createValidSoftApConfiguration() {
         return new SoftApConfiguration.Builder()
                 .setSsid("TestAp")
-                .setWpa2Passphrase("thisIsABadPassword")
+                .setPassphrase("thisIsABadPassword", SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
                 .setBand(SoftApConfiguration.BAND_2GHZ)
                 .build();
     }
@@ -3898,18 +3931,19 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mClientModeImpl).clearNetworkRequestUserApprovedAccessPoints();
         verify(mWifiNetworkSuggestionsManager).clear();
         verify(mWifiScoreCard).clear();
+        verify(mWifiHealthMonitor).clear();
         verify(mPasspointManager).getProviderConfigs(anyInt(), anyBoolean());
     }
 
     /**
      * Verify that a call to factoryReset throws a SecurityException if the caller does not have
-     * the CONNECTIVITY_INTERNAL permission.
+     * the NETWORK_SETTINGS permission.
      */
     @Test
-    public void testFactoryResetWithoutConnectivityInternalPermission() throws Exception {
+    public void testFactoryResetWithoutNetworkSettingsPermission() throws Exception {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingOrSelfPermission(eq(Manifest.permission.CONNECTIVITY_INTERNAL),
-                        eq("ConnectivityService"));
+                .enforceCallingOrSelfPermission(eq(Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
         try {
             mWifiServiceImpl.factoryReset(TEST_PACKAGE_NAME);
             fail();
@@ -4003,30 +4037,6 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.stopAutoDispatchAndIgnoreExceptions();
 
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
-        verify(mWifiConfigManager).addOrUpdateNetwork(any(),  anyInt(), any());
-        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
-    }
-
-    /**
-     * Verify that add or update networks is allowed for apps holding system alert permission.
-     */
-    @Test
-    public void testAddOrUpdateNetworkIsAllowedForAppsWithSystemAlertPermission() throws Exception {
-        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
-                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
-
-        when(mWifiPermissionsUtil.checkSystemAlertWindowPermission(
-                Process.myUid(), TEST_PACKAGE_NAME)).thenReturn(true);
-        when(mWifiConfigManager.addOrUpdateNetwork(any(),  anyInt(), any())).thenReturn(
-                new NetworkUpdateResult(0));
-
-        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
-        mLooper.startAutoDispatch();
-        assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
-        mLooper.stopAutoDispatchAndIgnoreExceptions();
-
-        verifyCheckChangePermission(TEST_PACKAGE_NAME);
-        verify(mWifiPermissionsUtil).checkSystemAlertWindowPermission(anyInt(), anyString());
         verify(mWifiConfigManager).addOrUpdateNetwork(any(),  anyInt(), any());
         verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
     }
@@ -4603,18 +4613,21 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that addOrUpdatePasspointConfig will redirect calls to {@link PasspointManager}
-     * and returning the result that's returned from {@link PasspointManager}.
+     * Verify that addOrUpdatePasspointConfiguration is allowed for apps targeting below R SDK.
      */
     @Test
-    public void addOrUpdatePasspointConfig() throws Exception {
+    public void addOrUpdatePasspointConfigIsAllowedForAppsTargetingBelowRSdk() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.R), anyInt())).thenReturn(true);
         PasspointConfiguration config = new PasspointConfiguration();
         HomeSp homeSp = new HomeSp();
         homeSp.setFqdn("test.com");
         config.setHomeSp(homeSp);
 
         when(mPasspointManager.addOrUpdateProvider(
-                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false))
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
                 .thenReturn(true);
         mLooper.startAutoDispatch();
         assertTrue(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
@@ -4622,12 +4635,137 @@ public class WifiServiceImplTest extends WifiBaseTest {
         reset(mPasspointManager);
 
         when(mPasspointManager.addOrUpdateProvider(
-                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false))
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
                 .thenReturn(false);
         mLooper.startAutoDispatch();
         assertFalse(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
         mLooper.stopAutoDispatchAndIgnoreExceptions();
     }
+
+    /**
+     * Verify that addOrUpdatePasspointConfiguration is not allowed for apps targeting R SDK.
+     */
+    @Test
+    public void addOrUpdatePasspointConfigIsNotAllowedForAppsTargetingRSdk() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        PasspointConfiguration config = new PasspointConfiguration();
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn("test.com");
+        config.setHomeSp(homeSp);
+
+        when(mPasspointManager.addOrUpdateProvider(
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
+                .thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertFalse(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mPasspointManager, never())
+                .addOrUpdateProvider(any(), anyInt(), anyString(), anyBoolean(), anyBoolean());
+
+    }
+
+    /**
+     * Verify that addOrUpdatePasspointConfiguration is allowed for Settings apps.
+     */
+    @Test
+    public void addOrUpdatePasspointConfigIsAllowedSettingsApp() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.R), anyInt())).thenReturn(false);
+        PasspointConfiguration config = new PasspointConfiguration();
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn("test.com");
+        config.setHomeSp(homeSp);
+
+        when(mPasspointManager.addOrUpdateProvider(
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
+                .thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertTrue(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mPasspointManager).addOrUpdateProvider(any(), anyInt(), anyString(), anyBoolean(),
+                anyBoolean());
+    }
+
+    /**
+     * Verify that addOrUpdatePasspointConfiguration is allowed for System apps.
+     */
+    @Test
+    public void addOrUpdatePasspointConfigIsAllowedSystemApp() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.R), anyInt())).thenReturn(false);
+        mApplicationInfo.flags = ApplicationInfo.FLAG_SYSTEM;
+        PasspointConfiguration config = new PasspointConfiguration();
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn("test.com");
+        config.setHomeSp(homeSp);
+
+        when(mPasspointManager.addOrUpdateProvider(
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
+                .thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertTrue(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mPasspointManager).addOrUpdateProvider(any(), anyInt(), anyString(), anyBoolean(),
+                anyBoolean());
+    }
+
+    /**
+     * Verify that addOrUpdatePasspointConfiguration is allowed for DeviceOwner apps.
+     */
+    @Test
+    public void addOrUpdatePasspointConfigIsAllowedSystemAlertDOApp() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.R), anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isDeviceOwner(Binder.getCallingUid(), TEST_PACKAGE_NAME))
+                .thenReturn(true);
+        PasspointConfiguration config = new PasspointConfiguration();
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn("test.com");
+        config.setHomeSp(homeSp);
+
+        when(mPasspointManager.addOrUpdateProvider(
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
+                .thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertTrue(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mPasspointManager).addOrUpdateProvider(any(), anyInt(), anyString(), anyBoolean(),
+                anyBoolean());
+    }
+
+    /**
+     * Verify that addOrUpdatePasspointConfiguration is allowed for ProfileOwner apps.
+     */
+    @Test
+    public void addOrUpdatePasspointConfigIsAllowedSystemAlertPOApp() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isTargetSdkLessThan(anyString(),
+                eq(Build.VERSION_CODES.R), anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isProfileOwner(Binder.getCallingUid(), TEST_PACKAGE_NAME))
+                .thenReturn(true);
+        PasspointConfiguration config = new PasspointConfiguration();
+        HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn("test.com");
+        config.setHomeSp(homeSp);
+
+        when(mPasspointManager.addOrUpdateProvider(
+                config, Binder.getCallingUid(), TEST_PACKAGE_NAME, false, true))
+                .thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertTrue(mWifiServiceImpl.addOrUpdatePasspointConfiguration(config, TEST_PACKAGE_NAME));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mPasspointManager).addOrUpdateProvider(any(), anyInt(), anyString(), anyBoolean(),
+                anyBoolean());
+    }
+
     /**
      * Verify that removePasspointConfiguration will redirect calls to {@link PasspointManager}
      * and returning the result that's returned from {@link PasspointManager}.
@@ -4678,6 +4816,89 @@ public class WifiServiceImplTest extends WifiBaseTest {
         } catch (SecurityException e) {
             // Test succeeded
         }
+    }
+
+    @Test
+    public void testAllowAutojoinOnSuggestionNetwork() {
+        WifiConfiguration config = new WifiConfiguration();
+        config.fromWifiNetworkSuggestion = true;
+        when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
+        when(mWifiNetworkSuggestionsManager.allowNetworkSuggestionAutojoin(any(), anyBoolean()))
+                .thenReturn(true);
+        mWifiServiceImpl.allowAutojoin(0, true);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).getConfiguredNetwork(0);
+        verify(mWifiNetworkSuggestionsManager).allowNetworkSuggestionAutojoin(any(), anyBoolean());
+        verify(mWifiConfigManager).allowAutojoin(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void testAllowAutojoinOnSavedNetwork() {
+        WifiConfiguration config = new WifiConfiguration();
+        config.fromWifiNetworkSuggestion = false;
+        config.fromWifiNetworkSpecifier = false;
+        when(mWifiConfigManager.getConfiguredNetwork(0)).thenReturn(config);
+        mWifiServiceImpl.allowAutojoin(0, true);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).getConfiguredNetwork(0);
+        verify(mWifiNetworkSuggestionsManager, never())
+                .allowNetworkSuggestionAutojoin(any(), anyBoolean());
+        verify(mWifiConfigManager).allowAutojoin(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void testAllowAutojoinOnWifiNetworkSpecifier() {
+        WifiConfiguration config = new WifiConfiguration();
+        config.fromWifiNetworkSpecifier = true;
+        when(mWifiConfigManager.getConfiguredNetwork(0)).thenReturn(config);
+        mWifiServiceImpl.allowAutojoin(0, true);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).getConfiguredNetwork(0);
+        verify(mWifiNetworkSuggestionsManager, never())
+                .allowNetworkSuggestionAutojoin(config, true);
+        verify(mWifiConfigManager, never()).allowAutojoin(0, true);
+    }
+
+    @Test
+    public void testAllowAutojoinOnSavedPasspointNetwork() {
+        WifiConfiguration config = WifiConfigurationTestUtil.createPasspointNetwork();
+        when(mWifiConfigManager.getConfiguredNetwork(0)).thenReturn(config);
+        when(mWifiNetworkSuggestionsManager.allowNetworkSuggestionAutojoin(any(), anyBoolean()))
+                .thenReturn(true);
+        mWifiServiceImpl.allowAutojoin(0, true);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).getConfiguredNetwork(0);
+        verify(mWifiNetworkSuggestionsManager, never())
+                .allowNetworkSuggestionAutojoin(config, true);
+        verify(mWifiConfigManager, never()).allowAutojoin(0, true);
+    }
+
+    /**
+     * Test that setMacRandomizationSettingPasspointEnabled is protected by NETWORK_SETTINGS
+     * permission.
+     */
+    @Test
+    public void testSetMacRandomizationSettingPasspointEnabledFailureNoNetworkSettingsPermission()
+            throws Exception {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.setMacRandomizationSettingPasspointEnabled("TEST_FQDN", true);
+            fail("Expected SecurityException");
+        } catch (SecurityException e) {
+            // Test succeeded
+        }
+    }
+
+    /**
+     * Test that setMacRandomizationSettingPasspointEnabled makes the appropriate calls.
+     */
+    @Test
+    public void testSetMacRandomizationSettingPasspointEnabled() throws Exception {
+        mWifiServiceImpl.setMacRandomizationSettingPasspointEnabled("TEST_FQDN", true);
+        mLooper.dispatchAll();
+        verify(mPasspointManager).enableMacRandomization("TEST_FQDN", true);
     }
 
     /**
@@ -4940,5 +5161,113 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
         verify(mActiveModeWarden).updateSoftApCapability(any());
         staticMockSession.finishMocking();
+    }
+
+    /**
+     * Verify that the call to getWifiConfigsForMatchedNetworkSuggestions is not redirected to
+     * specific API getWifiConfigForMatchedNetworkSuggestionsSharedWithUser when the caller doesn't
+     * have NETWORK_SETTINGS permissions and NETWORK_SETUP_WIZARD.
+     */
+    @Test(expected = SecurityException.class)
+    public void testGetWifiConfigsForMatchedNetworkSuggestionsWithoutPermissions() {
+        mWifiServiceImpl.getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(new ArrayList<>());
+    }
+
+    /**
+     * Verify that the call to getWifiConfigsForMatchedNetworkSuggestions is redirected to
+     * specific API getWifiConfigForMatchedNetworkSuggestionsSharedWithUser when the caller
+     * have NETWORK_SETTINGS.
+     */
+    @Test
+    public void testGetWifiConfigsForMatchedNetworkSuggestionsWithSettingPermissions() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(new ArrayList<>());
+        mLooper.dispatchAll();
+        verify(mWifiNetworkSuggestionsManager)
+                .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(any());
+    }
+
+    /**
+     * Verify that the call to getWifiConfigsForMatchedNetworkSuggestions is redirected to
+     * specific API getWifiConfigForMatchedNetworkSuggestionsSharedWithUser when the caller
+     * have NETWORK_SETUP_WIZARD.
+     */
+    @Test
+    public void testGetWifiConfigsForMatchedNetworkSuggestionsWithSetupWizardPermissions() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETUP_WIZARD),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(new ArrayList<>());
+        mLooper.dispatchAll();
+        verify(mWifiNetworkSuggestionsManager)
+                .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(any());
+    }
+
+    /**
+     * Verify that a call to setWifiConnectedNetworkScorer throws a SecurityException if
+     * the caller does not have WIFI_UPDATE_USABILITY_STATS_SCORE permission.
+     */
+    @Test
+    public void testSetNetworkScorerThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingPermission(
+                        eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.setWifiConnectedNetworkScorer(mAppBinder, mWifiConnectedNetworkScorer);
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verify that a call to setWifiConnectedNetworkScorer throws an IllegalArgumentException
+     * if the parameters are not provided.
+     */
+    @Test
+    public void testSetScorerThrowsIllegalArgumentExceptionOnInvalidArguments() {
+        try {
+            mWifiServiceImpl.setWifiConnectedNetworkScorer(mAppBinder, null);
+            fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+        }
+    }
+
+    /**
+     * Verify that a call to clearWifiConnectedNetworkScorer throws a SecurityException if
+     * the caller does not have WIFI_UPDATE_USABILITY_STATS_SCORE permission.
+     */
+    @Test
+    public void testClearNetworkScorerThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingPermission(
+                        eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
+                                eq("WifiService"));
+        try {
+            mWifiServiceImpl.clearWifiConnectedNetworkScorer();
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verify that setWifiConnectedNetworkScorer sets scorer to {@link WifiScoreReport}.
+     */
+    @Test
+    public void testSetWifiConnectedNetworkScorerAndVerify() throws Exception {
+        mWifiServiceImpl.setWifiConnectedNetworkScorer(mAppBinder, mWifiConnectedNetworkScorer);
+        mLooper.dispatchAll();
+        verify(mWifiScoreReport).setWifiConnectedNetworkScorer(mAppBinder,
+                mWifiConnectedNetworkScorer);
+    }
+
+    /**
+     * Verify that clearWifiConnectedNetworkScorer clears scorer from {@link WifiScoreReport}.
+     */
+    @Test
+    public void testClearWifiConnectedNetworkScorerAndVerify() throws Exception {
+        mWifiServiceImpl.clearWifiConnectedNetworkScorer();
+        mLooper.dispatchAll();
+        verify(mWifiScoreReport).clearWifiConnectedNetworkScorer();
     }
 }

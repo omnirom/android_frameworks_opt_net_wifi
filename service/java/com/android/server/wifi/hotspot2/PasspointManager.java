@@ -64,7 +64,6 @@ import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.TelephonyUtil;
 
 import java.io.PrintWriter;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -113,7 +112,6 @@ public class PasspointManager {
     private final AnqpCache mAnqpCache;
     private final ANQPRequestManager mAnqpRequestManager;
     private final WifiConfigManager mWifiConfigManager;
-    private final CertificateVerifier mCertVerifier;
     private final WifiMetrics mWifiMetrics;
     private final PasspointProvisioner mPasspointProvisioner;
     private final AppOpsManager mAppOps;
@@ -334,7 +332,6 @@ public class PasspointManager {
         mProviders = new HashMap<>();
         mAnqpCache = objectFactory.makeAnqpCache(clock);
         mAnqpRequestManager = objectFactory.makeANQPRequestManager(mPasspointEventHandler, clock);
-        mCertVerifier = objectFactory.makeCertificateVerifier();
         mWifiConfigManager = wifiConfigManager;
         mWifiMetrics = wifiMetrics;
         mProviderIndex = 0;
@@ -375,11 +372,16 @@ public class PasspointManager {
      * a provider with the new configuration will replace the existing provider.
      *
      * @param config Configuration of the Passpoint provider to be added
+     * @param uid Uid of the app adding/Updating {@code config}
      * @param packageName Package name of the app adding/Updating {@code config}
+     * @param isFromSuggestion Whether this {@code config} is from suggestion API
+     * @param isTrusted Whether this {@code config} an trusted network, default should be true.
+     *                  Only able set to false when {@code isFromSuggestion} is true, otherwise
+     *                  adding {@code config} will be false.
      * @return true if provider is added, false otherwise
      */
     public boolean addOrUpdateProvider(PasspointConfiguration config, int uid,
-            String packageName, boolean isFromSuggestion) {
+            String packageName, boolean isFromSuggestion, boolean isTrusted) {
         mWifiMetrics.incrementNumPasspointProviderInstallation();
         if (config == null) {
             Log.e(TAG, "Configuration not provided");
@@ -389,28 +391,16 @@ public class PasspointManager {
             Log.e(TAG, "Invalid configuration");
             return false;
         }
-
-        // For Hotspot 2.0 Release 1, the CA Certificate must be trusted by one of the pre-loaded
-        // public CAs in the system key store on the device.  Since the provisioning method
-        // for Release 1 is not standardized nor trusted,  this is a reasonable restriction
-        // to improve security.  The presence of UpdateIdentifier is used to differentiate
-        // between R1 and R2 configuration.
-        X509Certificate[] x509Certificates = config.getCredential().getCaCertificates();
-        if (config.getUpdateIdentifier() == Integer.MIN_VALUE && x509Certificates != null) {
-            try {
-                for (X509Certificate certificate : x509Certificates) {
-                    mCertVerifier.verifyCaCert(certificate);
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to verify CA certificate: " + e.getMessage());
-                return false;
-            }
+        if (!(isFromSuggestion || isTrusted)) {
+            Log.e(TAG, "Set isTrusted to false on a non suggestion passpoint is not allowed");
+            return false;
         }
 
         mTelephonyUtil.tryUpdateCarrierIdForPasspoint(config);
         // Create a provider and install the necessary certificates and keys.
         PasspointProvider newProvider = mObjectFactory.makePasspointProvider(config, mKeyStore,
                 mTelephonyUtil, mProviderIndex++, uid, packageName, isFromSuggestion);
+        newProvider.setTrusted(isTrusted);
 
         if (!newProvider.installCertsAndKeys()) {
             Log.e(TAG, "Failed to install certificates and keys to keystore");
@@ -486,6 +476,43 @@ public class PasspointManager {
     }
 
     /**
+     * Enable or disable the auto-join configuration. Auto-join controls whether or not the
+     * passpoint configuration is used for auto connection (network selection). Note that even
+     * when auto-join is disabled the configuration can still be used for manual connection.
+     *
+     * @param fqdn The FQDN of the configuration.
+     * @param enableAutojoin true to enable auto-join, false to disable.
+     * @return true on success, false otherwise (e.g. if no such provider exists).
+     */
+    public boolean enableAutojoin(@NonNull String fqdn, boolean enableAutojoin) {
+        PasspointProvider provider = mProviders.get(fqdn);
+        if (provider == null) {
+            Log.e(TAG, "Config doesn't exist");
+            return false;
+        }
+        provider.setAutoJoinEnabled(enableAutojoin);
+        mWifiConfigManager.saveToStore(true);
+        return true;
+    }
+
+    /**
+     * Enable or disable MAC randomization for this passpoint profile.
+     * @param fqdn The FQDN of the configuration
+     * @param enable true to enable MAC randomization, false to disable
+     * @return true on success, false otherwise (e.g. if no such provider exists).
+     */
+    public boolean enableMacRandomization(@NonNull String fqdn, boolean enable) {
+        PasspointProvider provider = mProviders.get(fqdn);
+        if (provider == null) {
+            Log.e(TAG, "Config fqdn=\"" + fqdn + "\" doesn't exist");
+            return false;
+        }
+        provider.setMacRandomizationEnabled(enable);
+        mWifiConfigManager.saveToStore(true);
+        return true;
+    }
+
+    /**
      * Return the installed Passpoint provider configurations.
      * An empty list will be returned when no provider is installed.
      *
@@ -545,9 +572,10 @@ public class PasspointManager {
                     homeProviders.size(), "Home Provider"));
             return homeProviders;
         }
+
         if (!roamingProviders.isEmpty()) {
             Log.d(TAG, String.format("Matched %s to %s providers as %s", scanResult.SSID,
-                    allMatches.size(), "Roaming Provider"));
+                    roamingProviders.size(), "Roaming Provider"));
             return roamingProviders;
         }
 
@@ -858,9 +886,17 @@ public class PasspointManager {
         List<WifiConfiguration> configs = new ArrayList<>();
         for (String fqdn : fqdnSet) {
             PasspointProvider provider = mProviders.get(fqdn);
-            if (provider != null) {
-                configs.add(provider.getWifiConfig());
+            if (provider == null) {
+                continue;
             }
+            WifiConfiguration config = provider.getWifiConfig();
+            // If passpoint is from suggestion, check if app share this suggestion with user.
+            if (provider.isFromSuggestion()
+                    && !mWifiInjector.getWifiNetworkSuggestionsManager()
+                    .isPasspointSuggestionSharedWithUser(config)) {
+                continue;
+            }
+            configs.add(config);
         }
         return configs;
     }

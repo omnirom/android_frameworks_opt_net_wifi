@@ -93,7 +93,8 @@ public class TelephonyUtilTest extends WifiBaseTest {
     private static final String DATA_OPERATOR_NUMERIC = "123456";
     private static final String NON_DATA_OPERATOR_NUMERIC = "123456";
     private static final String NO_MATCH_OPERATOR_NUMERIC = "654321";
-    private static final String TEST_SSID = "Test SSID";
+    private static final String TEST_PACKAGE = "com.test12345";
+    private static final String ANONYMOUS_IDENTITY = "anonymous@wlan.mnc456.mcc123.3gppnetwork.org";
 
     @Mock
     CarrierConfigManager mCarrierConfigManager;
@@ -188,6 +189,15 @@ public class TelephonyUtilTest extends WifiBaseTest {
         if (requiresImsiEncryption) {
             bundle.putInt(CarrierConfigManager.IMSI_KEY_AVAILABILITY_INT,
                     TelephonyManager.KEY_TYPE_WLAN);
+        }
+        return bundle;
+    }
+
+    private PersistableBundle generateTestCarrierConfig(boolean requiresImsiEncryption,
+            boolean requiresEapMethodPrefix) {
+        PersistableBundle bundle = generateTestCarrierConfig(requiresImsiEncryption);
+        if (requiresEapMethodPrefix) {
+            bundle.putBoolean(CarrierConfigManager.ENABLE_EAP_METHOD_PREFIX_BOOL, true);
         }
         return bundle;
     }
@@ -818,7 +828,7 @@ public class TelephonyUtilTest extends WifiBaseTest {
     @Test
     public void getAnonymousIdentityWithSim() {
         String mccmnc = "123456";
-        String expectedIdentity = "anonymous@wlan.mnc456.mcc123.3gppnetwork.org";
+        String expectedIdentity = ANONYMOUS_IDENTITY;
         when(mDataTelephonyManager.getSimState()).thenReturn(TelephonyManager.SIM_STATE_READY);
         when(mDataTelephonyManager.getSimOperator()).thenReturn(mccmnc);
         WifiConfiguration config = WifiConfigurationTestUtil.createEapNetwork(
@@ -1254,5 +1264,117 @@ public class TelephonyUtilTest extends WifiBaseTest {
         when(simCredential.getImsi()).thenReturn(NO_MATCH_PREFIX_IMSI);
 
         assertFalse(mTelephonyUtil.tryUpdateCarrierIdForPasspoint(spyConfig));
+    }
+
+    private void testIdentityWithSimAndEapAkaMethodPrefix(int method, String methodStr)
+            throws Exception {
+        when(mCarrierConfigManager.getConfigForSubId(DATA_SUBID))
+                .thenReturn(generateTestCarrierConfig(true, true));
+        when(mCarrierConfigManager.getConfigForSubId(NON_DATA_SUBID))
+                .thenReturn(generateTestCarrierConfig(false));
+        ArgumentCaptor<BroadcastReceiver> receiver =
+                ArgumentCaptor.forClass(BroadcastReceiver.class);
+        verify(mContext).registerReceiver(receiver.capture(), any(IntentFilter.class));
+
+        receiver.getValue().onReceive(mContext,
+                new Intent(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED));
+
+        assertTrue(mTelephonyUtil.requiresImsiEncryption(DATA_SUBID));
+
+        String mccmnc = "123456";
+        String expectedIdentity = methodStr + ANONYMOUS_IDENTITY;
+        when(mDataTelephonyManager.getSimState()).thenReturn(TelephonyManager.SIM_STATE_READY);
+        when(mDataTelephonyManager.getSimOperator()).thenReturn(mccmnc);
+        WifiConfiguration config = WifiConfigurationTestUtil.createEapNetwork(
+                method, WifiEnterpriseConfig.Phase2.NONE);
+
+        assertEquals(expectedIdentity,
+                mTelephonyUtil.getAnonymousIdentityWith3GppRealm(config));
+    }
+
+    /**
+     * Verify that EAP Method prefix is added to the anonymous identity when required
+     */
+    @Test
+    public void getAnonymousIdentityWithSimAndEapAkaMethodPrefix() throws Exception {
+        testIdentityWithSimAndEapAkaMethodPrefix(WifiEnterpriseConfig.Eap.AKA, "0");
+    }
+
+    /**
+     * Verify that EAP Method prefix is added to the anonymous identity when required
+     */
+    @Test
+    public void getAnonymousIdentityWithSimAndEapSimMethodPrefix() throws Exception {
+        testIdentityWithSimAndEapAkaMethodPrefix(WifiEnterpriseConfig.Eap.SIM, "1");
+    }
+
+    /**
+     * Verify that EAP Method prefix is added to the anonymous identity when required
+     */
+    @Test
+    public void getAnonymousIdentityWithSimAndEapAkaPrimeMethodPrefix() throws Exception {
+        testIdentityWithSimAndEapAkaMethodPrefix(WifiEnterpriseConfig.Eap.AKA_PRIME, "6");
+    }
+
+    /**
+     * Verify that isAnonymousAtRealmIdentity works as expected for anonymous identities with and
+     * without a prefix.
+     */
+    @Test
+    public void testIsAnonymousAtRealmIdentity() throws Exception {
+        assertTrue(mTelephonyUtil.isAnonymousAtRealmIdentity(ANONYMOUS_IDENTITY));
+        assertTrue(mTelephonyUtil.isAnonymousAtRealmIdentity("0" + ANONYMOUS_IDENTITY));
+        assertTrue(mTelephonyUtil.isAnonymousAtRealmIdentity("1" + ANONYMOUS_IDENTITY));
+        assertTrue(mTelephonyUtil.isAnonymousAtRealmIdentity("6" + ANONYMOUS_IDENTITY));
+        assertFalse(mTelephonyUtil.isAnonymousAtRealmIdentity("AKA" + ANONYMOUS_IDENTITY));
+    }
+
+    /**
+     * Verify when no subscription available, get carrier id for target package will return
+     * UNKNOWN_CARRIER_ID.
+     */
+    @Test
+    public void getCarrierPrivilegeWithNoActiveSubscription() {
+        when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(null);
+        assertEquals(TelephonyManager.UNKNOWN_CARRIER_ID,
+                mTelephonyUtil.getCarrierIdForPackageWithCarrierPrivileges(TEST_PACKAGE));
+
+        when(mSubscriptionManager.getActiveSubscriptionInfoList())
+                .thenReturn(Collections.emptyList());
+        assertEquals(TelephonyManager.UNKNOWN_CARRIER_ID,
+                mTelephonyUtil.getCarrierIdForPackageWithCarrierPrivileges(TEST_PACKAGE));
+    }
+
+    /**
+     * Verify when package has no carrier privileges, get carrier id for that package will return
+     * UNKNOWN_CARRIER_ID.
+     */
+    @Test
+    public void getCarrierPrivilegeWithPackageHasNoPrivilege() {
+        SubscriptionInfo subInfo = mock(SubscriptionInfo.class);
+        when(subInfo.getSubscriptionId()).thenReturn(DATA_SUBID);
+        when(mSubscriptionManager.getActiveSubscriptionInfoList())
+                .thenReturn(Arrays.asList(subInfo));
+        when(mDataTelephonyManager.checkCarrierPrivilegesForPackage(TEST_PACKAGE))
+                .thenReturn(TelephonyManager.CARRIER_PRIVILEGE_STATUS_NO_ACCESS);
+        assertEquals(TelephonyManager.UNKNOWN_CARRIER_ID,
+                mTelephonyUtil.getCarrierIdForPackageWithCarrierPrivileges(TEST_PACKAGE));
+    }
+
+    /**
+     * Verify when package get carrier privileges from carrier, get carrier id for that package will
+     * return the carrier id for that carrier.
+     */
+    @Test
+    public void getCarrierPrivilegeWithPackageHasPrivilege() {
+        SubscriptionInfo subInfo = mock(SubscriptionInfo.class);
+        when(subInfo.getSubscriptionId()).thenReturn(DATA_SUBID);
+        when(subInfo.getCarrierId()).thenReturn(DATA_CARRIER_ID);
+        when(mSubscriptionManager.getActiveSubscriptionInfoList())
+                .thenReturn(Arrays.asList(subInfo));
+        when(mDataTelephonyManager.checkCarrierPrivilegesForPackage(TEST_PACKAGE))
+                .thenReturn(TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS);
+        assertEquals(DATA_CARRIER_ID,
+                mTelephonyUtil.getCarrierIdForPackageWithCarrierPrivileges(TEST_PACKAGE));
     }
 }

@@ -33,6 +33,7 @@ import android.net.wifi.WifiAnnotations;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
+import android.net.wifi.wificond.DeviceWiphyCapabilities;
 import android.net.wifi.wificond.NativeScanResult;
 import android.net.wifi.wificond.RadioChainInfo;
 import android.net.wifi.wificond.WifiCondManager;
@@ -192,6 +193,7 @@ public class WifiNative {
         public NetworkObserverInternal networkObserver;
         /** Interface feature set / capabilities */
         public long featureSet;
+        public DeviceWiphyCapabilities phyCapabilities;
 
         Iface(int id, @Iface.IfaceType int type) {
             this.id = id;
@@ -1175,6 +1177,7 @@ public class WifiNative {
             Log.i(TAG, "Successfully setup " + iface);
 
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
+            iface.phyCapabilities = getPhyCapabilities(iface.name);
             return iface.name;
         }
     }
@@ -1367,6 +1370,7 @@ public class WifiNative {
             iface.type = Iface.IFACE_TYPE_STA_FOR_SCAN;
             stopSupplicantIfNecessary();
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
+            iface.phyCapabilities = null;
             Log.i(TAG, "Successfully switched to scan mode on iface=" + iface);
             return true;
         }
@@ -1407,6 +1411,7 @@ public class WifiNative {
             }
             iface.type = Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY;
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
+            iface.phyCapabilities = getPhyCapabilities(iface.name);
             Log.i(TAG, "Successfully switched to connectivity mode on iface=" + iface);
             return true;
         }
@@ -1652,10 +1657,10 @@ public class WifiNative {
                 continue;
             }
             ScanResult.InformationElement[] ies =
-                    InformationElementUtil.parseInformationElements(result.infoElement);
+                    InformationElementUtil.parseInformationElements(result.getInformationElements());
             InformationElementUtil.Capabilities capabilities =
                     new InformationElementUtil.Capabilities();
-            if (wifiGenerationCapa != null && result.frequency < 3000) {
+            if (wifiGenerationCapa != null && result.getFrequencyMhz() < 3000) {
                 capabilities.reportHt = wifiGenerationCapa.htSupport2g;
                 capabilities.reportVht = wifiGenerationCapa.vhtSupport2g;
                 capabilities.reportHe = wifiGenerationCapa.staHeSupport2g;
@@ -3117,13 +3122,29 @@ public class WifiNative {
     }
 
     /**
-     * Get the connection Wifi standard
+     * Class to retrieve connection capability parameters after association
+     */
+    public static class ConnectionCapabilities {
+        public @ScanResult.WifiStandard int wifiStandard;
+        public int channelBandwidth;
+        public int maxNumberTxSpatialStreams;
+        public int maxNumberRxSpatialStreams;
+        ConnectionCapabilities() {
+            wifiStandard = ScanResult.WIFI_STANDARD_UNKNOWN;
+            channelBandwidth = ScanResult.CHANNEL_WIDTH_20MHZ;
+            maxNumberTxSpatialStreams = 1;
+            maxNumberRxSpatialStreams = 1;
+        }
+    }
+
+    /**
+     * Returns connection capabilities of the current network
      *
      * @param ifaceName Name of the interface.
-     * @return Wifi standard for connection on this interface
+     * @return connection capabilities of the current network
      */
-    public @ScanResult.WifiStandard int getWifiStandard(@NonNull String ifaceName) {
-        return mSupplicantStaIfaceHal.getWifiStandard(ifaceName);
+    public ConnectionCapabilities getConnectionCapabilities(@NonNull String ifaceName) {
+        return mSupplicantStaIfaceHal.getConnectionCapabilities(ifaceName);
     }
 
     /**
@@ -3757,6 +3778,31 @@ public class WifiNative {
     public void setMboCellularDataStatus(@NonNull String ifaceName, boolean available) {
         mSupplicantStaIfaceHal.setMboCellularDataStatus(ifaceName, available);
         return;
+    }
+
+    /**
+     * Get device phy capabilities
+     */
+    public DeviceWiphyCapabilities getPhyCapabilities(@NonNull String ifaceName) {
+        return mWifiCondManager.getDeviceWiphyCapabilities(ifaceName);
+    }
+
+    /**
+     * Query of support of Wi-Fi standard
+     *
+     * @param ifaceName name of the interface to check support on
+     * @param standard the wifi standard to check on
+     * @return true if the wifi standard is supported on this interface, false otherwise.
+     */
+    public boolean isWifiStandardSupported(@NonNull String ifaceName,
+            @ScanResult.WifiStandard int standard) {
+        synchronized (mLock) {
+            Iface iface = mIfaceMgr.getIface(ifaceName);
+            if (iface == null || iface.phyCapabilities == null) {
+                return false;
+            }
+            return iface.phyCapabilities.isWifiStandardSupported(standard);
+        }
     }
 
     /********************************************************

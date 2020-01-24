@@ -38,8 +38,8 @@ import android.net.wifi.aware.ConfigRequest;
 import android.net.wifi.aware.PublishConfig;
 import android.net.wifi.aware.SubscribeConfig;
 import android.net.wifi.util.HexEncoding;
+import android.os.BasicShellCommandHandler;
 import android.os.RemoteException;
-import android.os.ShellCommand;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.SparseIntArray;
@@ -171,7 +171,7 @@ public class WifiAwareNativeApi implements WifiAwareShellCommand.DelegatedShellC
      * @return -1 if parameter not recognized or invalid value, 0 otherwise.
      */
     @Override
-    public int onCommand(ShellCommand parentShell) {
+    public int onCommand(BasicShellCommandHandler parentShell) {
         final PrintWriter pw = parentShell.getErrPrintWriter();
 
         String subCmd = parentShell.getNextArgRequired();
@@ -299,7 +299,7 @@ public class WifiAwareNativeApi implements WifiAwareShellCommand.DelegatedShellC
     }
 
     @Override
-    public void onHelp(String command, ShellCommand parentShell) {
+    public void onHelp(String command, BasicShellCommandHandler parentShell) {
         final PrintWriter pw = parentShell.getOutPrintWriter();
 
         pw.println("  " + command);

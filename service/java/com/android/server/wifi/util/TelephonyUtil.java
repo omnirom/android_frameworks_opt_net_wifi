@@ -102,6 +102,7 @@ public class TelephonyUtil {
     private boolean mVerboseLogEnabled = false;
     private SparseBooleanArray mImsiEncryptionRequired = new SparseBooleanArray();
     private SparseBooleanArray mImsiEncryptionInfoAvailable = new SparseBooleanArray();
+    private SparseBooleanArray mEapMethodPrefixEnable = new SparseBooleanArray();
 
     /**
      * Gets the instance of TelephonyUtil.
@@ -160,6 +161,7 @@ public class TelephonyUtil {
 
         mImsiEncryptionRequired.clear();
         mImsiEncryptionInfoAvailable.clear();
+        mEapMethodPrefixEnable.clear();
         List<SubscriptionInfo> activeSubInfos =
                 mSubscriptionManager.getActiveSubscriptionInfoList();
         if (activeSubInfos == null) {
@@ -172,6 +174,12 @@ public class TelephonyUtil {
                                     & TelephonyManager.KEY_TYPE_WLAN) != 0) {
                 vlogd("IMSI encryption is required for " + subId);
                 mImsiEncryptionRequired.put(subId, true);
+            }
+
+            if ((carrierConfigManager.getConfigForSubId(subId)
+                    .getBoolean(CarrierConfigManager.ENABLE_EAP_METHOD_PREFIX_BOOL))) {
+                vlogd("EAP Prefix is required for " + subId);
+                mEapMethodPrefixEnable.put(subId, true);
             }
 
             try {
@@ -209,6 +217,7 @@ public class TelephonyUtil {
 
     /**
      * Gets the SubscriptionId of SIM card which is from the carrier specified in config.
+     *
      * @param config the instance of {@link WifiConfiguration}
      * @return the best match SubscriptionId
      */
@@ -220,7 +229,13 @@ public class TelephonyUtil {
         }
     }
 
-    private int getMatchingSubId(int carrierId) {
+    /**
+     * Gets the SubscriptionId of SIM card for given carrier Id
+     *
+     * @param carrierId carrier id for target carrier
+     * @return the matched SubscriptionId
+     */
+    public int getMatchingSubId(int carrierId) {
         List<SubscriptionInfo> subInfoList = mSubscriptionManager.getActiveSubscriptionInfoList();
         if (subInfoList == null || subInfoList.isEmpty()) {
             return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
@@ -247,7 +262,7 @@ public class TelephonyUtil {
         }
         // Legacy WifiConfiguration without carrier ID
         if (config.enterpriseConfig == null
-                 || !config.enterpriseConfig.requireSimCredential()) {
+                 || !config.enterpriseConfig.isAuthenticationSimBased()) {
             Log.w(TAG, "The legacy config is not using EAP-SIM.");
             return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         }
@@ -352,7 +367,15 @@ public class TelephonyUtil {
         }
 
         String realm = String.format(THREE_GPP_NAI_REALM_FORMAT, mnc, mcc);
-        return ANONYMOUS_IDENTITY + "@" + realm;
+        StringBuilder sb = new StringBuilder();
+        if (mEapMethodPrefixEnable.get(subId)) {
+            // Set the EAP method as a prefix
+            String eapMethod = EAP_METHOD_PREFIX.get(config.enterpriseConfig.getEapMethod());
+            if (!TextUtils.isEmpty(eapMethod)) {
+                sb.append(eapMethod);
+            }
+        }
+        return sb.append(ANONYMOUS_IDENTITY).append("@").append(realm).toString();
     }
 
     /**
@@ -486,7 +509,7 @@ public class TelephonyUtil {
      */
     private static int getSimMethodForConfig(WifiConfiguration config) {
         if (config == null || config.enterpriseConfig == null
-                || !config.enterpriseConfig.requireSimCredential()) {
+                || !config.enterpriseConfig.isAuthenticationSimBased()) {
             return WifiEnterpriseConfig.Eap.NONE;
         }
         int eapMethod = config.enterpriseConfig.getEapMethod();
@@ -512,8 +535,10 @@ public class TelephonyUtil {
      * Returns true if {@code identity} contains an anonymous@realm identity, false otherwise.
      */
     public static boolean isAnonymousAtRealmIdentity(String identity) {
-        if (identity == null) return false;
-        return identity.startsWith(TelephonyUtil.ANONYMOUS_IDENTITY + "@");
+        if (TextUtils.isEmpty(identity)) return false;
+        final String anonymousId = TelephonyUtil.ANONYMOUS_IDENTITY + "@";
+        return identity.startsWith(anonymousId)
+                || identity.substring(1).startsWith(anonymousId);
     }
 
     // TODO replace some of this code with Byte.parseByte
@@ -1089,5 +1114,29 @@ public class TelephonyUtil {
         pw.println(TAG + ": ");
         pw.println("mImsiEncryptionRequired=" + mImsiEncryptionRequired);
         pw.println("mImsiEncryptionInfoAvailable=" + mImsiEncryptionInfoAvailable);
+    }
+
+    /**
+     * Get the carrier ID {@link TelephonyManager#getSimCarrierId()} of the carrier which give
+     * target package carrier privileges.
+     *
+     * @param packageName target package to check if grant privileges by any carrier.
+     * @return Carrier ID who give privilege to this package. If package isn't granted privilege
+     *         by any available carrier, will return UNKNOWN_CARRIER_ID.
+     */
+    public int getCarrierIdForPackageWithCarrierPrivileges(String packageName) {
+        List<SubscriptionInfo> subInfoList = mSubscriptionManager.getActiveSubscriptionInfoList();
+        if (subInfoList == null || subInfoList.isEmpty()) {
+            return TelephonyManager.UNKNOWN_CARRIER_ID;
+        }
+        for (SubscriptionInfo info : subInfoList) {
+            TelephonyManager specifiedTm =
+                    mTelephonyManager.createForSubscriptionId(info.getSubscriptionId());
+            if (specifiedTm.checkCarrierPrivilegesForPackage(packageName)
+                    == TelephonyManager.CARRIER_PRIVILEGE_STATUS_HAS_ACCESS) {
+                return info.getCarrierId();
+            }
+        }
+        return TelephonyManager.UNKNOWN_CARRIER_ID;
     }
 }

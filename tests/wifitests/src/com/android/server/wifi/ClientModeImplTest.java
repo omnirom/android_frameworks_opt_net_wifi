@@ -38,14 +38,18 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.net.ConnectivityManager;
-import android.net.DhcpResults;
+import android.net.DhcpResultsParcelable;
+import android.net.InetAddresses;
+import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.MacAddress;
+import android.net.Network;
 import android.net.NetworkAgent;
+import android.net.NetworkAgentConfig;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
-import android.net.NetworkMisc;
 import android.net.NetworkSpecifier;
+import android.net.StaticIpConfiguration;
 import android.net.ip.IIpClient;
 import android.net.ip.IpClientCallbacks;
 import android.net.wifi.IActionListener;
@@ -295,13 +299,13 @@ public class ClientModeImplTest extends WifiBaseTest {
         return list;
     }
 
-    private void injectDhcpSuccess(DhcpResults dhcpResults) {
+    private void injectDhcpSuccess(DhcpResultsParcelable dhcpResults) {
         mIpClientCallback.onNewDhcpResults(dhcpResults);
         mIpClientCallback.onProvisioningSuccess(new LinkProperties());
     }
 
     private void injectDhcpFailure() {
-        mIpClientCallback.onNewDhcpResults(null);
+        mIpClientCallback.onNewDhcpResults((DhcpResultsParcelable) null);
         mIpClientCallback.onProvisioningFailure(new LinkProperties());
     }
 
@@ -347,6 +351,7 @@ public class ClientModeImplTest extends WifiBaseTest {
     @Mock WifiConfigManager mWifiConfigManager;
     @Mock WifiNative mWifiNative;
     @Mock WifiScoreCard mWifiScoreCard;
+    @Mock WifiHealthMonitor mWifiHealthMonitor;
     @Mock WifiTrafficPoller mWifiTrafficPoller;
     @Mock WifiConnectivityManager mWifiConnectivityManager;
     @Mock WifiStateTracker mWifiStateTracker;
@@ -378,6 +383,8 @@ public class ClientModeImplTest extends WifiBaseTest {
     @Mock MboOceController mMboOceController;
     @Mock SubscriptionManager mSubscriptionManager;
     @Mock ConnectionFailureNotifier mConnectionFailureNotifier;
+    @Mock EapFailureNotifier mEapFailureNotifier;
+    @Mock ThroughputPredictor mThroughputPredictor;
 
     final ArgumentCaptor<WifiConfigManager.OnNetworkUpdateListener> mConfigUpdateListenerCaptor =
             ArgumentCaptor.forClass(WifiConfigManager.OnNetworkUpdateListener.class);
@@ -430,12 +437,14 @@ public class ClientModeImplTest extends WifiBaseTest {
         when(mWifiInjector.getWifiNetworkSuggestionsManager())
                 .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
+        when(mWifiInjector.getWifiHealthMonitor()).thenReturn(mWifiHealthMonitor);
         when(mWifiInjector.getWifiLockManager()).thenReturn(mWifiLockManager);
         when(mWifiInjector.getWifiThreadRunner())
                 .thenReturn(new WifiThreadRunner(new Handler(mLooper.getLooper())));
         when(mWifiInjector.makeConnectionFailureNotifier(any()))
                 .thenReturn(mConnectionFailureNotifier);
         when(mWifiInjector.getBssidBlocklistMonitor()).thenReturn(mBssidBlocklistMonitor);
+        when(mWifiInjector.getThroughputPredictor()).thenReturn(mThroughputPredictor);
         when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
                 .thenReturn(Pair.create(Process.INVALID_UID, ""));
         when(mWifiNative.initialize()).thenReturn(true);
@@ -443,6 +452,8 @@ public class ClientModeImplTest extends WifiBaseTest {
                 TEST_GLOBAL_MAC_ADDRESS);
         when(mWifiNative.getMacAddress(WIFI_IFACE_NAME))
                 .thenReturn(TEST_GLOBAL_MAC_ADDRESS.toString());
+        when(mWifiNative.getConnectionCapabilities(WIFI_IFACE_NAME)).thenReturn(
+                new WifiNative.ConnectionCapabilities());
         when(mWifiNative.setMacAddress(eq(WIFI_IFACE_NAME), anyObject()))
                 .then(new AnswerWithArguments() {
                     public boolean answer(String iface, MacAddress mac) {
@@ -468,6 +479,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         mResources.setBoolean(R.bool.config_wifi_connected_mac_randomization_supported, true);
         mResources.setIntArray(R.array.config_wifiRssiLevelThresholds,
                 RssiUtilTest.RSSI_THRESHOLDS);
+        mResources.setInteger(R.integer.config_wifiPollRssiIntervalMilliseconds, 3000);
         when(mContext.getResources()).thenReturn(mResources);
 
         when(mFrameworkFacade.getIntegerSetting(mContext,
@@ -481,6 +493,8 @@ public class ClientModeImplTest extends WifiBaseTest {
             mIpClientCallback.onQuit();
             return null;
         }).when(mIpClient).shutdown();
+        when(mConnectivityManager.registerNetworkAgent(any(), any(), any(), any(), anyInt(), any(),
+                anyInt())).thenReturn(mock(Network.class));
         List<SubscriptionInfo> subList = new ArrayList<>() {{
                 add(mock(SubscriptionInfo.class));
             }};
@@ -545,7 +559,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
                 mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
                 mLinkProbeManager, mBatteryStatsManager, mSupplicantStateTracker,
-                mMboOceController, mTelephonyUtil);
+                mMboOceController, mTelephonyUtil, mEapFailureNotifier);
         mCmi.start();
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
@@ -951,11 +965,13 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         assertEquals("ObtainingIpState", getCurrentState().getName());
 
-        DhcpResults dhcpResults = new DhcpResults();
-        dhcpResults.setGateway("1.2.3.4");
-        dhcpResults.setIpAddress("192.168.1.100", 0);
-        dhcpResults.addDns("8.8.8.8");
-        dhcpResults.setLeaseDuration(3600);
+        DhcpResultsParcelable dhcpResults = new DhcpResultsParcelable();
+        dhcpResults.baseConfiguration = new StaticIpConfiguration();
+        dhcpResults.baseConfiguration.gateway = InetAddresses.parseNumericAddress("1.2.3.4");
+        dhcpResults.baseConfiguration.ipAddress =
+                new LinkAddress(InetAddresses.parseNumericAddress("192.168.1.100"), 0);
+        dhcpResults.baseConfiguration.dnsServers.add(InetAddresses.parseNumericAddress("8.8.8.8"));
+        dhcpResults.leaseDuration = 3600;
 
         injectDhcpSuccess(dhcpResults);
         mLooper.dispatchAll();
@@ -975,6 +991,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiStateTracker).updateState(eq(WifiStateTracker.CONNECTED));
         assertEquals("ConnectedState", getCurrentState().getName());
         verify(mWifiLockManager).updateWifiClientConnected(true);
+        verify(mWifiNative).getConnectionCapabilities(any());
+        verify(mThroughputPredictor).predictMaxTxThroughput(any());
     }
 
     /**
@@ -1551,6 +1569,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertEquals("DisconnectingState", getCurrentState().getName());
+        // Verify this is not counted as a IP renewal failure
+        verify(mWifiMetrics, never()).incrementIpRenewalFailure();
         // Verifies that WifiLastResortWatchdog be notified
         // by DHCP failure
         verify(mWifiLastResortWatchdog, times(2)).noteConnectionFailureAndTriggerIfNeeded(
@@ -1561,6 +1581,19 @@ public class ClientModeImplTest extends WifiBaseTest {
                 BssidBlocklistMonitor.REASON_DHCP_FAILURE);
         verify(mBssidBlocklistMonitor, never()).handleDhcpProvisioningSuccess(sBSSID, sSSID);
         verify(mBssidBlocklistMonitor, never()).handleNetworkValidationSuccess(sBSSID, sSSID);
+    }
+
+    /**
+     * Verify that a IP renewal failure is logged when IP provisioning fail in the
+     * ConnectedState.
+     */
+    @Test
+    public void testDhcpRenewalMetrics() throws Exception {
+        connect();
+        injectDhcpFailure();
+        mLooper.dispatchAll();
+
+        verify(mWifiMetrics).incrementIpRenewalFailure();
     }
 
     /**
@@ -1671,6 +1704,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt(), any());
 
         WifiConfiguration config = new WifiConfiguration();
+        config.SSID = sSSID;
         config.getNetworkSelectionStatus().setHasEverConnected(true);
         config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.SIM);
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
@@ -1685,6 +1719,8 @@ public class ClientModeImplTest extends WifiBaseTest {
                 WifiNative.EAP_SIM_VENDOR_SPECIFIC_CERT_EXPIRED);
         mLooper.dispatchAll();
 
+        verify(mEapFailureNotifier).onEapFailure(
+                WifiNative.EAP_SIM_VENDOR_SPECIFIC_CERT_EXPIRED, config);
         verify(mDataTelephonyManager).resetCarrierKeysForImsiEncryption();
         mockSession.finishMocking();
     }
@@ -2091,11 +2127,13 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         when(mWifiConfigManager.getConfiguredNetwork(FRAMEWORK_NETWORK_ID)).thenReturn(null);
 
-        DhcpResults dhcpResults = new DhcpResults();
-        dhcpResults.setGateway("1.2.3.4");
-        dhcpResults.setIpAddress("192.168.1.100", 0);
-        dhcpResults.addDns("8.8.8.8");
-        dhcpResults.setLeaseDuration(3600);
+        DhcpResultsParcelable dhcpResults = new DhcpResultsParcelable();
+        dhcpResults.baseConfiguration = new StaticIpConfiguration();
+        dhcpResults.baseConfiguration.gateway = InetAddresses.parseNumericAddress("1.2.3.4");
+        dhcpResults.baseConfiguration.ipAddress =
+                new LinkAddress(InetAddresses.parseNumericAddress("192.168.1.100"), 0);
+        dhcpResults.baseConfiguration.dnsServers.add(InetAddresses.parseNumericAddress("8.8.8.8"));
+        dhcpResults.leaseDuration = 3600;
 
         injectDhcpSuccess(dhcpResults);
         mLooper.dispatchAll();
@@ -2417,18 +2455,25 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     private void expectRegisterNetworkAgent() {
+        expectRegisterNetworkAgent((config) -> { });
+    }
+
+    private void expectRegisterNetworkAgent(Consumer<NetworkAgentConfig> configChecker) {
         // Expects that the code calls registerNetworkAgent and provides a way for the test to
         // verify the messages sent through the NetworkAgent to ConnectivityService.
         // We cannot just use a mock object here because mWifiNetworkAgent is private to CMI.
         // TODO (b/134538181): consider exposing WifiNetworkAgent and using mocks.
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
+        ArgumentCaptor<NetworkAgentConfig> configCaptor =
+                ArgumentCaptor.forClass(NetworkAgentConfig.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), configCaptor.capture(), anyInt());
 
         registerAsyncChannel((x) -> {
             mNetworkAgentAsyncChannel = x;
         }, messengerCaptor.getValue(), mNetworkAgentHandler);
+        configChecker.accept(configCaptor.getValue());
 
         mNetworkAgentAsyncChannel.sendMessage(AsyncChannel.CMD_CHANNEL_FULL_CONNECTION);
         mLooper.dispatchAll();
@@ -2442,8 +2487,8 @@ public class ClientModeImplTest extends WifiBaseTest {
 
     /**
      * Verify that when a network is explicitly selected, but noInternetAccessExpected is false,
-     * {@link NetworkAgent#explicitlySelected} is called with explicitlySelected=false and
-     * acceptUnvalidated=false.
+     * the {@link NetworkAgentConfig} contains the right values of explicitlySelected,
+     * acceptUnvalidated and acceptPartialConnectivity.
      */
     @Test
     public void testExplicitlySelected_ExplicitInternetExpected() throws Exception {
@@ -2453,15 +2498,17 @@ public class ClientModeImplTest extends WifiBaseTest {
         mConnectedNetwork.noInternetAccessExpected = false;
 
         connect();
-        expectRegisterNetworkAgent();
-        expectNetworkAgentMessage(NetworkAgent.EVENT_SET_EXPLICITLY_SELECTED,
-                1 /* explicitlySelected */, 0 /* acceptUnvalidated */, null);
+        expectRegisterNetworkAgent((agentConfig) -> {
+            assertTrue(agentConfig.explicitlySelected);
+            assertFalse(agentConfig.acceptUnvalidated);
+            assertFalse(agentConfig.acceptPartialConnectivity);
+        });
     }
 
     /**
      * Verify that when a network is not explicitly selected, but noInternetAccessExpected is true,
-     * {@link NetworkAgent#explicitlySelected} is called with explicitlySelected=false and
-     * acceptUnvalidated=true.
+     * the {@link NetworkAgentConfig} contains the right values of explicitlySelected,
+     * acceptUnvalidated and acceptPartialConnectivity.
      */
     @Test
     public void testExplicitlySelected_NotExplicitNoInternetExpected() throws Exception {
@@ -2471,15 +2518,17 @@ public class ClientModeImplTest extends WifiBaseTest {
         mConnectedNetwork.noInternetAccessExpected = true;
 
         connect();
-        expectRegisterNetworkAgent();
-        expectNetworkAgentMessage(NetworkAgent.EVENT_SET_EXPLICITLY_SELECTED,
-                0 /* explicitlySelected */, 1 /* acceptUnvalidated */, null);
+        expectRegisterNetworkAgent((agentConfig) -> {
+            assertFalse(agentConfig.explicitlySelected);
+            assertFalse(agentConfig.acceptUnvalidated);
+            assertTrue(agentConfig.acceptPartialConnectivity);
+        });
     }
 
     /**
      * Verify that when a network is explicitly selected, and noInternetAccessExpected is true,
-     * {@link NetworkAgent#explicitlySelected} is called with explicitlySelected=true and
-     * acceptUnvalidated=true.
+     * the {@link NetworkAgentConfig} contains the right values of explicitlySelected,
+     * acceptUnvalidated and acceptPartialConnectivity.
      */
     @Test
     public void testExplicitlySelected_ExplicitNoInternetExpected() throws Exception {
@@ -2489,9 +2538,11 @@ public class ClientModeImplTest extends WifiBaseTest {
         mConnectedNetwork.noInternetAccessExpected = true;
 
         connect();
-        expectRegisterNetworkAgent();
-        expectNetworkAgentMessage(NetworkAgent.EVENT_SET_EXPLICITLY_SELECTED,
-                1 /* explicitlySelected */, 1 /* acceptUnvalidated */, null);
+        expectRegisterNetworkAgent((agentConfig) -> {
+            assertTrue(agentConfig.explicitlySelected);
+            assertTrue(agentConfig.acceptUnvalidated);
+            assertTrue(agentConfig.acceptPartialConnectivity);
+        });
     }
 
     /**
@@ -2521,7 +2572,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), any(NetworkAgentConfig.class), anyInt());
 
         ArrayList<Integer> thresholdsArray = new ArrayList<>();
         thresholdsArray.add(RSSI_THRESHOLD_MAX);
@@ -3115,7 +3166,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), any(NetworkAgentConfig.class), anyInt());
 
         Message message = new Message();
         message.what = NetworkAgent.CMD_REPORT_NETWORK_STATUS;
@@ -3143,9 +3194,10 @@ public class ClientModeImplTest extends WifiBaseTest {
     public void testScoreCardNoteConnectionAttemptAfterCmdStartConnect() throws Exception {
         initializeAndAddNetworkAndVerifySuccess();
         mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
-        verify(mWifiScoreCard, never()).noteConnectionAttempt(any());
+        verify(mWifiScoreCard, never()).noteConnectionAttempt(any(), anyInt(), anyString());
         mLooper.dispatchAll();
-        verify(mWifiScoreCard).noteConnectionAttempt(any());
+        verify(mWifiScoreCard).noteConnectionAttempt(any(), anyInt(), anyString());
+        verify(mWifiConfigManager).findScanRssi(anyInt(), anyInt());
         // But don't expect to see connection success yet
         verify(mWifiScoreCard, never()).noteIpConfiguration(any());
         // And certainly not validation success
@@ -3167,24 +3219,28 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that score card is notified when wifi is disabled while disconnected
+     * Verify that score card/health monitor are notified when wifi is disabled while disconnected
      */
     @Test
     public void testScoreCardNoteWifiDisabledWhileDisconnected() throws Exception {
         // connecting and disconnecting shouldn't note wifi disabled
         disconnect();
         mLooper.dispatchAll();
+
+        verify(mWifiScoreCard).resetConnectionState();
         verify(mWifiScoreCard, never()).noteWifiDisabled(any());
+        verify(mWifiHealthMonitor, never()).setWifiEnabled(false);
 
         // disabling while disconnected should note wifi disabled
         mCmi.setWifiStateForApiCalls(WifiManager.WIFI_STATE_DISABLED);
         mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
         mLooper.dispatchAll();
-        verify(mWifiScoreCard).noteWifiDisabled(any());
+        verify(mWifiScoreCard).resetConnectionState();
+        verify(mWifiHealthMonitor).setWifiEnabled(false);
     }
 
     /**
-     * Verify that score card is notified when wifi is disabled while connected
+     * Verify that score card/health monitor are notified when wifi is disabled while connected
      */
     @Test
     public void testScoreCardNoteWifiDisabledWhileConnected() throws Exception {
@@ -3192,6 +3248,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         connect();
         mLooper.dispatchAll();
         verify(mWifiScoreCard, never()).noteWifiDisabled(any());
+        verify(mWifiHealthMonitor, never()).setWifiEnabled(false);
 
         // disabling while connected should note wifi disabled
         mCmi.setWifiStateForApiCalls(WifiManager.WIFI_STATE_DISABLED);
@@ -3199,6 +3256,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         verify(mWifiScoreCard).noteWifiDisabled(any());
+        verify(mWifiScoreCard).resetConnectionState();
+        verify(mWifiHealthMonitor).setWifiEnabled(false);
     }
 
     /**
@@ -3324,7 +3383,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), any(NetworkAgentConfig.class), anyInt());
 
         WifiConfiguration currentNetwork = new WifiConfiguration();
         currentNetwork.networkId = FRAMEWORK_NETWORK_ID;
@@ -3348,6 +3407,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 FRAMEWORK_NETWORK_ID, DISABLED_NO_INTERNET_TEMPORARY);
         verify(mBssidBlocklistMonitor).handleBssidConnectionFailure(sBSSID, sSSID,
                 BssidBlocklistMonitor.REASON_NETWORK_VALIDATION_FAILURE);
+        verify(mWifiScoreCard).noteValidationFailure(any());
     }
 
     /**
@@ -3361,7 +3421,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), any(NetworkAgentConfig.class), anyInt());
 
         WifiConfiguration currentNetwork = new WifiConfiguration();
         currentNetwork.networkId = FRAMEWORK_NETWORK_ID;
@@ -3396,7 +3456,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), any(NetworkAgentConfig.class), anyInt());
 
         WifiConfiguration currentNetwork = new WifiConfiguration();
         currentNetwork.networkId = FRAMEWORK_NETWORK_ID;
@@ -3433,7 +3493,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
-                anyInt(), any(NetworkMisc.class), anyInt());
+                anyInt(), any(NetworkAgentConfig.class), anyInt());
 
         when(mWifiConfigManager.getLastSelectedNetwork()).thenReturn(FRAMEWORK_NETWORK_ID + 1);
 
@@ -3466,7 +3526,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 ArgumentCaptor.forClass(NetworkCapabilities.class);
         verify(mConnectivityManager).registerNetworkAgent(any(Messenger.class),
                 any(NetworkInfo.class), any(LinkProperties.class),
-                networkCapabilitiesCaptor.capture(), anyInt(), any(NetworkMisc.class),
+                networkCapabilitiesCaptor.capture(), anyInt(), any(NetworkAgentConfig.class),
                 anyInt());
 
         NetworkCapabilities networkCapabilities = networkCapabilitiesCaptor.getValue();
@@ -3499,7 +3559,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 ArgumentCaptor.forClass(NetworkCapabilities.class);
         verify(mConnectivityManager).registerNetworkAgent(any(Messenger.class),
                 any(NetworkInfo.class), any(LinkProperties.class),
-                networkCapabilitiesCaptor.capture(), anyInt(), any(NetworkMisc.class),
+                networkCapabilitiesCaptor.capture(), anyInt(), any(NetworkAgentConfig.class),
                 anyInt());
 
         NetworkCapabilities networkCapabilities = networkCapabilitiesCaptor.getValue();
@@ -3718,6 +3778,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         mCmi.setDeviceMobilityState(WifiManager.DEVICE_MOBILITY_STATE_STATIONARY);
         verify(mWifiConnectivityManager).setDeviceMobilityState(
                 WifiManager.DEVICE_MOBILITY_STATE_STATIONARY);
+        verify(mWifiHealthMonitor).setDeviceMobilityState(
+                WifiManager.DEVICE_MOBILITY_STATE_STATIONARY);
     }
 
     /**
@@ -3734,7 +3796,8 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify removing sim will also remove an ephemeral Passpoint Provider.
+     * Verify removing sim will also remove an ephemeral Passpoint Provider. And reset carrier
+     * privileged suggestor apps.
      */
     @Test
     public void testResetSimNetworkWhenRemovingSim() throws Exception {
@@ -3746,6 +3809,22 @@ public class ClientModeImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         verify(mWifiConfigManager).resetSimNetworks();
+        verify(mWifiNetworkSuggestionsManager).resetCarrierPrivilegedApps();
+    }
+
+    /**
+     * Verify inserting sim will rest carrier privileged suggestor apps.
+     */
+    @Test
+    public void testResetCarrierPrivilegedAppsWhenInsertingSim() throws Exception {
+        // Switch to connect mode and verify wifi is reported as enabled
+        startSupplicantAndDispatchMessages();
+
+        // Indicate that sim is removed.
+        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, true);
+        mLooper.dispatchAll();
+
+        verify(mWifiNetworkSuggestionsManager).resetCarrierPrivilegedApps();
     }
 
     /**
@@ -4074,5 +4153,17 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         verify(mWifiConnectivityManager, never())
                 .forceConnectivityScan(ClientModeImpl.WIFI_WORK_SOURCE);
+    }
+
+    /**
+     * Test that the interval for poll RSSI is read from config overlay correctly.
+     */
+    @Test
+    public void testPollRssiIntervalIsSetCorrectly() throws Exception {
+        assertEquals(3000, mCmi.getPollRssiIntervalMsecs());
+        mResources.setInteger(R.integer.config_wifiPollRssiIntervalMilliseconds, 6000);
+        assertEquals(6000, mCmi.getPollRssiIntervalMsecs());
+        mResources.setInteger(R.integer.config_wifiPollRssiIntervalMilliseconds, 7000);
+        assertEquals(6000, mCmi.getPollRssiIntervalMsecs());
     }
 }

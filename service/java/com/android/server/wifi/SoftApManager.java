@@ -59,9 +59,11 @@ import java.io.PrintWriter;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Manage WiFi in AP mode.
@@ -70,9 +72,6 @@ import java.util.Locale;
 public class SoftApManager implements ActiveModeManager {
     private static final String TAG = "SoftApManager";
 
-    // Minimum limit to use for timeout delay if the value from overlay setting is too small.
-    private static final int MIN_SOFT_AP_TIMEOUT_DELAY_MS = 600_000;  // 10 minutes
-
     @VisibleForTesting
     public static final String SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG = TAG
             + " Soft AP Send Message Timeout";
@@ -80,6 +79,9 @@ public class SoftApManager implements ActiveModeManager {
     private final Context mContext;
     private final FrameworkFacade mFrameworkFacade;
     private final WifiNative mWifiNative;
+
+    @VisibleForTesting
+    SoftApNotifier mSoftApNotifier;
 
     private final String mCountryCode;
 
@@ -96,6 +98,8 @@ public class SoftApManager implements ActiveModeManager {
     private final WifiApConfigStore mWifiApConfigStore;
 
     private final WifiMetrics mWifiMetrics;
+
+    private boolean mIsRandomizeBssid;
 
     @NonNull
     private SoftApModeConfiguration mApConfig;
@@ -122,6 +126,12 @@ public class SoftApManager implements ActiveModeManager {
     private BaseWifiDiagnostics mWifiDiagnostics;
 
     private @Role int mRole = ROLE_UNSPECIFIED;
+
+    @NonNull
+    private Set<MacAddress> mBlockedClientList = new HashSet<>();
+
+    @NonNull
+    private Set<MacAddress> mAllowedClientList = new HashSet<>();
 
     /**
      * Listener for soft AP events.
@@ -177,6 +187,7 @@ public class SoftApManager implements ActiveModeManager {
                          @NonNull BaseWifiDiagnostics wifiDiagnostics) {
         mContext = context;
         mFrameworkFacade = framework;
+        mSoftApNotifier = new SoftApNotifier(mContext, mFrameworkFacade);
         mWifiNative = wifiNative;
         mCountryCode = countryCode;
         mModeListener = listener;
@@ -190,6 +201,7 @@ public class SoftApManager implements ActiveModeManager {
             // may still be null if we fail to load the default config
         }
         if (softApConfig != null) {
+            mIsRandomizeBssid = softApConfig.getBssid() == null;
             softApConfig = mWifiApConfigStore.randomizeBssidIfUnset(mContext, softApConfig);
         }
         mApConfig = new SoftApModeConfiguration(apConfig.getTargetMode(),
@@ -199,6 +211,10 @@ public class SoftApManager implements ActiveModeManager {
         mdualApInterfaces = new String[2];
         mWifiDiagnostics = wifiDiagnostics;
         mStateMachine = new SoftApStateMachine(looper);
+        if (softApConfig != null) {
+            mBlockedClientList = new HashSet<>(softApConfig.getBlockedClientList());
+            mAllowedClientList = new HashSet<>(softApConfig.getAllowedClientList());
+        }
     }
 
     /**
@@ -247,6 +263,16 @@ public class SoftApManager implements ActiveModeManager {
      */
     public void updateCapability(@NonNull SoftApCapability capability) {
         mStateMachine.sendMessage(SoftApStateMachine.CMD_UPDATE_CAPABILITY, capability);
+    }
+
+    /**
+     * Update AP configuration. Called when setting update config via
+     * {@link WifiManager#setSoftApConfiguration(SoftApConfiguration)}
+     *
+     * @param config new AP config.
+     */
+    public void updateConfiguration(@NonNull SoftApConfiguration config) {
+        mStateMachine.sendMessage(SoftApStateMachine.CMD_UPDATE_CONFIG, config);
     }
 
     /**
@@ -403,9 +429,8 @@ public class SoftApManager implements ActiveModeManager {
                 SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD);
 
         result = ApConfigUtil.updateApChannelConfig(
-                mWifiNative, mCountryCode,
-                mWifiApConfigStore.getAllowed2GChannel(), localConfigBuilder, config, acsEnabled);
-
+                mWifiNative, mContext.getResources(), mCountryCode, localConfigBuilder, config,
+                acsEnabled);
         if (result != SUCCESS) {
             Log.e(TAG, "Failed to update AP band and channel");
             return result;
@@ -415,10 +440,8 @@ public class SoftApManager implements ActiveModeManager {
             Log.d(TAG, "SoftAP is a hidden network");
         }
 
-        if (config.getMaxNumberOfClients() != 0
-                && !mCurrentSoftApCapability.isFeatureSupported(
-                SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)) {
-            Log.d(TAG, "Error, Max Client control need HAL support");
+        if (!ApConfigUtil.checkSupportAllConfiguration(config, mCurrentSoftApCapability)) {
+            Log.d(TAG, "Unsupported Configuration detect! config = " + config);
             return ERROR_UNSUPPORTED_CONFIGURATION;
         }
 
@@ -449,24 +472,39 @@ public class SoftApManager implements ActiveModeManager {
         Log.d(TAG, "Soft AP is stopped");
     }
 
-    private boolean checkSoftApMaxClient(SoftApConfiguration config, WifiClient newClient) {
-        boolean isAllow = true;
+    private boolean checkSoftApClient(SoftApConfiguration config, WifiClient newClient) {
+        if (!mCurrentSoftApCapability.isFeatureSupported(
+                SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)) {
+            return true;
+        }
+
+        if (config.isClientControlByUserEnabled()
+                && !mAllowedClientList.contains(newClient.getMacAddress())) {
+            if (!mBlockedClientList.contains(newClient.getMacAddress())) {
+                mSoftApCallback.onBlockedClientConnecting(newClient,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+            }
+            Log.d(TAG, "Force disconnect for unauthorized client: " + newClient);
+            mWifiNative.forceClientDisconnect(
+                    mApInterfaceName, newClient.getMacAddress(),
+                    WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+            return false;
+        }
         int maxConfig = mCurrentSoftApCapability.getMaxSupportedClients();
         if (config.getMaxNumberOfClients() > 0) {
             maxConfig = Math.min(maxConfig, config.getMaxNumberOfClients());
         }
-        if (mConnectedClients.size() == maxConfig) {
+
+        if (mConnectedClients.size() >= maxConfig) {
             Log.i(TAG, "No more room for new client:" + newClient);
-            if (mCurrentSoftApCapability.isFeatureSupported(
-                       SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)) {
-                Log.d(TAG, "Force disconnect for client: " + newClient);
-                mWifiNative.forceClientDisconnect(
-                        mApInterfaceName, newClient.getMacAddress(),
-                        ApConfigUtil.DISCONNECT_REASON_CODE_NO_MORE_STAS);
-            }
-            isAllow = false;
+            mWifiNative.forceClientDisconnect(
+                    mApInterfaceName, newClient.getMacAddress(),
+                    WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
+            mSoftApCallback.onBlockedClientConnecting(newClient,
+                    WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
+            return false;
         }
-        return isAllow;
+        return true;
     }
 
     private class SoftApStateMachine extends StateMachine {
@@ -481,8 +519,9 @@ public class SoftApManager implements ActiveModeManager {
         public static final int CMD_INTERFACE_DOWN = 8;
         public static final int CMD_SOFT_AP_CHANNEL_SWITCHED = 9;
         public static final int CMD_UPDATE_CAPABILITY = 10;
-        public static final int CMD_CONNECTED_STATIONS = 11;
-        public static final int CMD_DISCONNECTED_STATIONS = 12;
+        public static final int CMD_UPDATE_CONFIG = 11;
+        public static final int CMD_CONNECTED_STATIONS = 12;
+        public static final int CMD_DISCONNECTED_STATIONS = 13;
         public static final int CMD_DUAL_SAP_INTERFACE_DESTROYED = 50;
 
         private final State mIdleState = new IdleState();
@@ -701,6 +740,8 @@ public class SoftApManager implements ActiveModeManager {
                         if (TextUtils.isEmpty(mDataInterfaceName)) {
                             mDataInterfaceName = mApInterfaceName;
                         }
+
+                        mSoftApNotifier.dismissSoftApShutDownTimeoutExpiredNotification();
                         updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
                                 WifiManager.WIFI_AP_STATE_DISABLED, 0);
                         int result = startSoftAp();
@@ -730,6 +771,14 @@ public class SoftApManager implements ActiveModeManager {
                             mCurrentSoftApCapability = new SoftApCapability(capability);
                         }
                         break;
+                    case CMD_UPDATE_CONFIG:
+                        SoftApConfiguration newConfig = (SoftApConfiguration) message.obj;
+                        Log.d(TAG, "Configuration changed to " + newConfig);
+                        mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(),
+                                newConfig, mCurrentSoftApCapability);
+                        mBlockedClientList = new HashSet<>(newConfig.getBlockedClientList());
+                        mAllowedClientList = new HashSet<>(newConfig.getAllowedClientList());
+                        break;
                     default:
                         // Ignore all other commands.
                         break;
@@ -740,7 +789,6 @@ public class SoftApManager implements ActiveModeManager {
         }
 
         private class StartedState extends State {
-            private int mTimeoutDelay;
             private WakeupMessage mSoftApTimeoutMessage;
             private SoftApTimeoutEnabledSettingObserver mSettingObserver;
 
@@ -777,23 +825,20 @@ public class SoftApManager implements ActiveModeManager {
                 }
             }
 
-            private int getConfigSoftApTimeoutDelay() {
-                int delay = mContext.getResources().getInteger(
-                        R.integer.config_wifi_framework_soft_ap_timeout_delay);
-                if (delay < MIN_SOFT_AP_TIMEOUT_DELAY_MS) {
-                    delay = MIN_SOFT_AP_TIMEOUT_DELAY_MS;
-                    Log.w(TAG, "Overriding timeout delay with minimum limit value");
-                }
-                Log.d(TAG, "Timeout delay: " + delay);
-                return delay;
-            }
-
             private void scheduleTimeoutMessage() {
-                if (!mTimeoutEnabled) {
+                if (!mTimeoutEnabled || mQCNumAssociatedStations != 0) {
+                    cancelTimeoutMessage();
                     return;
                 }
-                mSoftApTimeoutMessage.schedule(SystemClock.elapsedRealtime() + mTimeoutDelay);
-                Log.d(TAG, "Timeout message scheduled");
+                int timeout = mApConfig.getSoftApConfiguration().getShutdownTimeoutMillis();
+                if (timeout == 0) {
+                    timeout =  mContext.getResources().getInteger(
+                            R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds);
+                }
+                mSoftApTimeoutMessage.schedule(SystemClock.elapsedRealtime()
+                        + timeout);
+                Log.d(TAG, "Timeout message scheduled, delay = "
+                        + timeout);
             }
 
             private void cancelTimeoutMessage() {
@@ -806,6 +851,10 @@ public class SoftApManager implements ActiveModeManager {
              * configuration.
              */
             private void updateClientConnection() {
+                if (!mCurrentSoftApCapability.isFeatureSupported(
+                        SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)) {
+                    return;
+                }
                 final int maxAllowedClientsByHardwareAndCarrier =
                         mCurrentSoftApCapability.getMaxSupportedClients();
                 final int userApConfigMaxClientCount =
@@ -815,21 +864,38 @@ public class SoftApManager implements ActiveModeManager {
                     finalMaxClientCount = Math.min(userApConfigMaxClientCount,
                             maxAllowedClientsByHardwareAndCarrier);
                 }
-                if (mConnectedClients.size() > finalMaxClientCount) {
-                    Log.d(TAG, "Capability Changed, update connected client");
+                int targetDisconnectClientNumber = mConnectedClients.size() - finalMaxClientCount;
+                List<WifiClient> allowedConnectedList = new ArrayList<>();
+                if (mApConfig.getSoftApConfiguration().isClientControlByUserEnabled()) {
+                    // Check allow list first
                     Iterator<WifiClient> iterator = mConnectedClients.iterator();
-                    int remove_count = mConnectedClients.size() - finalMaxClientCount;
-                    if (mCurrentSoftApCapability.isFeatureSupported(
-                                SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)) {
-                        while (iterator.hasNext()) {
-                            if (remove_count == 0) break;
-                            WifiClient client = iterator.next();
-                            Log.d(TAG, "Force disconnect for client: " + client);
+                    while (iterator.hasNext()) {
+                        WifiClient client = iterator.next();
+                        if (mAllowedClientList.contains(client.getMacAddress())) {
+                            allowedConnectedList.add(client);
+                        } else {
+                            Log.d(TAG, "Force disconnect for not allowed client: " + client);
                             mWifiNative.forceClientDisconnect(
                                     mApInterfaceName, client.getMacAddress(),
-                                    ApConfigUtil.DISCONNECT_REASON_CODE_NO_MORE_STAS);
-                            remove_count--;
+                                    WifiManager
+                                    .SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+                            targetDisconnectClientNumber--;
                         }
+                    }
+                } else {
+                    allowedConnectedList = new ArrayList<>(mConnectedClients);
+                }
+                if (targetDisconnectClientNumber > 0) {
+                    Iterator<WifiClient> allowedClientIterator = allowedConnectedList.iterator();
+                    while (allowedClientIterator.hasNext()) {
+                        if (targetDisconnectClientNumber == 0) break;
+                        WifiClient allowedClient = allowedClientIterator.next();
+                        Log.d(TAG, "Force disconnect for client due to no more room: "
+                                + allowedClient);
+                        mWifiNative.forceClientDisconnect(
+                                mApInterfaceName, allowedClient.getMacAddress(),
+                                WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
+                        targetDisconnectClientNumber--;
                     }
                 }
             }
@@ -852,7 +918,7 @@ public class SoftApManager implements ActiveModeManager {
                     return;
                 }
                 if (isConnected) {
-                    boolean isAllow = checkSoftApMaxClient(
+                    boolean isAllow = checkSoftApClient(
                             mApConfig.getSoftApConfiguration(), client);
                     if (isAllow) {
                         mConnectedClients.add(client);
@@ -877,11 +943,7 @@ public class SoftApManager implements ActiveModeManager {
                 mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(
                         mConnectedClients.size(), mApConfig.getTargetMode());
 
-                if (mConnectedClients.size() == 0) {
-                    scheduleTimeoutMessage();
-                } else {
-                    cancelTimeoutMessage();
-                }
+                scheduleTimeoutMessage();
             }
 
             /**
@@ -968,7 +1030,6 @@ public class SoftApManager implements ActiveModeManager {
                 onUpChanged(mWifiNative.isInterfaceUp(mApInterfaceName));
                 onUpChanged(mWifiNative.isInterfaceUp(mDataInterfaceName));
 
-                mTimeoutDelay = getConfigSoftApTimeoutDelay();
                 Handler handler = mStateMachine.getHandler();
                 mSoftApTimeoutMessage = new WakeupMessage(mContext, handler,
                         SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG,
@@ -1094,12 +1155,7 @@ public class SoftApManager implements ActiveModeManager {
                             break;
                         }
                         mTimeoutEnabled = isEnabled;
-                        if (!mTimeoutEnabled) {
-                            cancelTimeoutMessage();
-                        }
-                        if (mTimeoutEnabled && mQCNumAssociatedStations == 0) {
-                            scheduleTimeoutMessage();
-                        }
+                        scheduleTimeoutMessage();
                         break;
                     case CMD_INTERFACE_STATUS_CHANGED:
                         boolean isUp = message.arg1 == 1;
@@ -1118,6 +1174,7 @@ public class SoftApManager implements ActiveModeManager {
                             Log.wtf(TAG, "Timeout message received but has clients. Dropping.");
                             break;
                         }
+                        mSoftApNotifier.showSoftApShutDownTimeoutExpiredNotification();
                         Log.i(TAG, "Timeout message received. Stopping soft AP.");
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
@@ -1171,6 +1228,35 @@ public class SoftApManager implements ActiveModeManager {
                             SoftApCapability capability = (SoftApCapability) message.obj;
                             mCurrentSoftApCapability = new SoftApCapability(capability);
                             updateClientConnection();
+                        }
+                        break;
+                    case CMD_UPDATE_CONFIG:
+                        SoftApConfiguration newConfig = (SoftApConfiguration) message.obj;
+                        SoftApConfiguration currentConfig = mApConfig.getSoftApConfiguration();
+                        if (mIsRandomizeBssid) {
+                            // Current bssid is ramdon because unset. Set back to null..
+                            currentConfig = new SoftApConfiguration.Builder(currentConfig)
+                                    .setBssid(null)
+                                    .build();
+                        }
+                        if (!ApConfigUtil.checkConfigurationChangeNeedToRestart(
+                                currentConfig, newConfig)) {
+                            Log.d(TAG, "Configuration changed to " + newConfig);
+                            boolean needRescheduleTimer =
+                                    mApConfig.getSoftApConfiguration().getShutdownTimeoutMillis()
+                                    != newConfig.getShutdownTimeoutMillis();
+                            mBlockedClientList = new HashSet<>(newConfig.getBlockedClientList());
+                            mAllowedClientList = new HashSet<>(newConfig.getAllowedClientList());
+                            mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(),
+                                    newConfig, mCurrentSoftApCapability);
+                            updateClientConnection();
+                            if (needRescheduleTimer) {
+                                cancelTimeoutMessage();
+                                scheduleTimeoutMessage();
+                            }
+                        } else {
+                            Log.d(TAG, "Ignore the config: " + newConfig
+                                    + " update since it requires restart");
                         }
                         break;
                     default:

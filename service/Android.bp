@@ -63,29 +63,25 @@ cc_library_shared {
     },
 }
 
-// These filegroups are created for wifi tests.
-filegroup {
-    name: "wifi-service-jarjar-rules",
-    srcs: [ "jarjar-rules-shared.txt"]
-}
-
 filegroup {
     name: "wifi-service-srcs",
     srcs: [
         "java/**/*.java",
         "java/**/*.logtags",
         ":framework-wifi-service-shared-srcs",
+        ":net-utils-wifi-service-common-srcs",
         ":statslog-wifi-java-gen",
     ],
 }
 
-// wifi-service static library
-// ============================================================
+// pre-jarjar version of wifi-service that builds against pre-jarjar version of framework-wifi
 java_library {
-    name: "wifi-service",
-    installable: true,
+    name: "wifi-service-pre-jarjar",
+    installable: false,
     defaults: ["wifi-service-common"],
     srcs: [ ":wifi-service-srcs" ],
+    // java_api_finder must accompany `srcs`
+    plugins: ["java_api_finder"],
 
     // TODO(b/140299412) should be "core_current" since Wifi module is not allowed to use
     // @CorePlatformApi's
@@ -93,14 +89,15 @@ java_library {
     libs: [
         "error_prone_annotations",
         "jsr305",
-        "services",
+        "framework-annotations-lib",
+        "services-stubs",
         // load the resources from the resources APK.
         "wifi-service-resources",
-        "framework-wifi",
-
-        // TODO(b/135994092): Replace with framework-system-stubs once all @hide dependencies are
-        // resolved.
-        "framework-minus-apex",
+        // need pre-jarjar symbols so that wifi-service can reference the original class names at
+        // compile time
+        "framework-wifi-pre-jarjar",
+        "framework_module_lib_stubs_current",
+        "unsupportedappusage",
     ],
 
     static_libs: [
@@ -132,10 +129,30 @@ java_library {
         "libnanohttpd",
         "netd_aidl_interface-V2-java",
         "services.net",
-        "wifi_proto_scorecard",
-        "wifi_proto_metrics",
+        "wifi-lite-protos",
+        "wifi-nano-protos",
         "PlatformProperties",
     ],
+}
+
+// wifi-service static library
+// ============================================================
+java_library {
+    name: "wifi-service",
+    defaults: ["wifi-service-common"],
+    installable: true,
+    static_libs: ["wifi-service-pre-jarjar"],
+
+    // need to include `libs` so that Soong doesn't complain about missing classes after jarjaring
+    libs: [
+        "framework-wifi",
+        "framework_module_lib_stubs_current",
+        "services-stubs",
+    ],
+
+    // TODO(b/140299412) should be "core_current" since Wifi module is not allowed to use
+    // @CorePlatformApi's
+    sdk_version: "core_platform",
 
     required: [
         "cacerts_wfa",
@@ -144,7 +161,7 @@ java_library {
         "wifi-service-resources",
     ],
 
-    jarjar_rules: ":wifi-service-jarjar-rules",
+    jarjar_rules: ":wifi-jarjar-rules",
     optimize: {
         enabled: true,
         shrink: true,
@@ -155,9 +172,16 @@ java_library {
         app_image: false,
     },
 
-    init_rc: ["wifi.rc"],
+    init_rc: [":wifi-init-rc"],
 
-    plugins: ["java_api_finder"],
+    visibility: [
+        "//frameworks/opt/net/wifi/service/apex",
+        "//frameworks/opt/net/wifi/tests/wifitests/apex",
+    ],
+    apex_available: [
+        "com.android.wifi",
+        "test_com.android.wifi",
+    ],
 }
 
 // Westworld auto-generated code
@@ -183,4 +207,9 @@ android_app {
     sdk_version: "system_current",
     export_package_resources: true,
     manifest: "AndroidManifest_Resources.xml",
+}
+
+filegroup {
+    name: "wifi-init-rc",
+    srcs: ["wifi.rc"],
 }

@@ -30,8 +30,6 @@ import android.net.TrafficStats;
 import android.net.Uri;
 import android.net.ip.IpClientCallbacks;
 import android.net.ip.IpClientUtil;
-import android.os.IBinder;
-import android.os.ServiceManager;
 import android.provider.Settings;
 import android.sysprop.WifiProperties;
 import android.telephony.CarrierConfigManager;
@@ -44,11 +42,6 @@ import com.android.server.wifi.util.WifiAsyncChannel;
  */
 public class FrameworkFacade {
     public static final String TAG = "FrameworkFacade";
-    /**
-     * NIAP global settings flag.
-     * Note: This should be added to {@link android.provider.Settings.Global}.
-     */
-    private static final String NIAP_MODE_SETTINGS_NAME = "niap_mode";
 
     private ContentResolver mContentResolver = null;
     private CarrierConfigManager mCarrierConfigManager = null;
@@ -115,7 +108,7 @@ public class FrameworkFacade {
      * Returns whether the device is in NIAP mode or not.
      */
     public boolean isNiapModeOn(Context context) {
-        return getIntegerSetting(context, NIAP_MODE_SETTINGS_NAME, 0) == 1;
+        return getIntegerSetting(context, Settings.Global.COMMON_CRITERIA_MODE, 0) == 1;
     }
 
     /**
@@ -142,10 +135,6 @@ public class FrameworkFacade {
      */
     public void unregisterContentObserver(Context context, ContentObserver contentObserver) {
         getContentResolver(context).unregisterContentObserver(contentObserver);
-    }
-
-    public IBinder getService(String serviceName) {
-        return ServiceManager.getService(serviceName);
     }
 
     public PendingIntent getBroadcast(Context context, int requestCode, Intent intent, int flags) {

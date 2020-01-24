@@ -52,7 +52,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
-import android.net.NetworkAgent;
 import android.net.wifi.EAPConstants;
 import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
@@ -69,7 +68,6 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.test.TestLooper;
-import android.provider.Settings;
 import android.util.Base64;
 import android.util.Pair;
 import android.util.SparseIntArray;
@@ -410,6 +408,7 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_ONESHOT_SCAN_REQUESTS_WITH_DFS_CHANNELS = 4;
     private static final int NUM_ADD_OR_UPDATE_NETWORK_CALLS = 5;
     private static final int NUM_ENABLE_NETWORK_CALLS = 6;
+    private static final long NUM_IP_RENEWAL_FAILURE = 7;
 
     /** Number of notifications per "Connect to Network" notification type. */
     private static final int[] NUM_CONNECT_TO_NETWORK_NOTIFICATIONS = {0, 10, 20, 30, 40};
@@ -869,6 +868,9 @@ public class WifiMetricsTest extends WifiBaseTest {
         for (int i = 0; i < NUM_ENABLE_NETWORK_CALLS; i++) {
             mWifiMetrics.incrementNumEnableNetworkCalls();
         }
+        for (int i = 0; i < NUM_IP_RENEWAL_FAILURE; i++) {
+            mWifiMetrics.incrementIpRenewalFailure();
+        }
 
         mWifiMetrics.setWatchdogSuccessTimeDurationMs(NUM_WATCHDOG_SUCCESS_DURATION_MS);
         mResources.setBoolean(R.bool.config_wifi_connected_mac_randomization_supported,
@@ -876,10 +878,14 @@ public class WifiMetricsTest extends WifiBaseTest {
 
         addWifiPowerMetrics();
 
-        mWifiMetrics.setWifiIsUnusableLoggingEnabled(WIFI_IS_UNUSABLE_EVENT_LOGGING_SETTING);
-        mWifiMetrics.setLinkSpeedCountsLoggingEnabled(LINK_SPEED_COUNTS_LOGGING_SETTING);
-        mWifiMetrics.setWifiDataStallMinTxBad(DATA_STALL_MIN_TX_BAD_SETTING);
-        mWifiMetrics.setWifiDataStallMinRxWithoutTx(DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX_SETTING);
+        mResources.setBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled,
+                WIFI_IS_UNUSABLE_EVENT_LOGGING_SETTING);
+        mResources.setBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled,
+                LINK_SPEED_COUNTS_LOGGING_SETTING);
+        mResources.setInteger(R.integer.config_wifiDataStallMinTxBad,
+                DATA_STALL_MIN_TX_BAD_SETTING);
+        mResources.setInteger(R.integer.config_wifiDataStallMinTxSuccessWithoutRx,
+                DATA_STALL_MIN_TX_SUCCESS_WITHOUT_RX_SETTING);
     }
 
     private void addWifiPowerMetrics() {
@@ -1082,18 +1088,20 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertTrue(sb_wifi_score.toString(), (mDecodedProto.wifiScoreCount.length
                 <= (WIFI_SCORE_RANGE_MAX - WIFI_SCORE_RANGE_MIN + 1)));
         StringBuilder sb_wifi_limits = new StringBuilder();
-        sb_wifi_limits.append("Wifi Score limit is " +  NetworkAgent.WIFI_BASE_SCORE
+        sb_wifi_limits.append("Wifi Score limit is " +  ConnectedScore.WIFI_MAX_SCORE
                 + ">= " + WIFI_SCORE_RANGE_MAX);
-        assertTrue(sb_wifi_limits.toString(), NetworkAgent.WIFI_BASE_SCORE <= WIFI_SCORE_RANGE_MAX);
+        assertTrue(sb_wifi_limits.toString(),
+                ConnectedScore.WIFI_MAX_SCORE <= WIFI_SCORE_RANGE_MAX);
         StringBuilder sb_wifi_usability_score = new StringBuilder();
         sb_wifi_usability_score.append("Number of wifi_usability_scores = "
                 + mDecodedProto.wifiUsabilityScoreCount.length);
         assertTrue(sb_wifi_usability_score.toString(), (mDecodedProto.wifiUsabilityScoreCount.length
                 <= (WIFI_SCORE_RANGE_MAX - WIFI_SCORE_RANGE_MIN + 1)));
         StringBuilder sb_wifi_usablity_limits = new StringBuilder();
-        sb_wifi_limits.append("Wifi Usability Score limit is " +  NetworkAgent.WIFI_BASE_SCORE
+        sb_wifi_limits.append("Wifi Usability Score limit is " +  ConnectedScore.WIFI_MAX_SCORE
                 + ">= " + WIFI_SCORE_RANGE_MAX);
-        assertTrue(sb_wifi_limits.toString(), NetworkAgent.WIFI_BASE_SCORE <= WIFI_SCORE_RANGE_MAX);
+        assertTrue(sb_wifi_limits.toString(),
+                ConnectedScore.WIFI_MAX_SCORE <= WIFI_SCORE_RANGE_MAX);
         assertEquals(MAX_NUM_SOFTAP_RETURN_CODES, mDecodedProto.softApReturnCode.length);
         assertEquals(WifiMetricsProto.SoftApReturnCodeCount.SOFT_AP_STARTED_SUCCESSFULLY,
                      mDecodedProto.softApReturnCode[0].startResult);
@@ -1208,6 +1216,7 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numOneshotHasDfsChannelScans);
         assertEquals(NUM_ADD_OR_UPDATE_NETWORK_CALLS, mDecodedProto.numAddOrUpdateNetworkCalls);
         assertEquals(NUM_ENABLE_NETWORK_CALLS, mDecodedProto.numEnableNetworkCalls);
+        assertEquals(NUM_IP_RENEWAL_FAILURE, mDecodedProto.numIpRenewalFailure);
     }
 
     /**
@@ -2492,10 +2501,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testNoUnusableEventLogWhenDisabled() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED),
-                anyInt())).thenReturn(0);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled, false);
         generateAllUnusableEvents(mWifiMetrics);
         dumpProtoAndDeserialize();
         assertEquals(0, mDecodedProto.wifiIsUnusableEventList.length);
@@ -2506,10 +2512,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testUnusableEventLogSerializeDeserialize() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED),
-                anyInt())).thenReturn(1);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled, true);
         generateAllUnusableEvents(mWifiMetrics);
         dumpProtoAndDeserialize();
         verifyDeserializedUnusableEvents(mDecodedProto);
@@ -2520,10 +2523,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testUnusableEventBounding() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED),
-                anyInt())).thenReturn(1);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled, true);
         for (int i = 0; i < (WifiMetrics.MAX_UNUSABLE_EVENTS + 2); i++) {
             generateAllUnusableEvents(mWifiMetrics);
         }
@@ -2537,10 +2537,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testUnusableEventTimeThrottleForDataStall() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED),
-                anyInt())).thenReturn(1);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled, true);
         generateUnusableEventAtGivenTime(0, 0);
         // should be time throttled
         generateUnusableEventAtGivenTime(1, 1);
@@ -2560,9 +2557,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testLinkSpeedCounts() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_LINK_SPEED_METRICS_ENABLED), anyInt())).thenReturn(1);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled, true);
         for (int i = 0; i < NUM_LINK_SPEED_LEVELS_TO_INCREMENT; i++) {
             for (int j = 0; j <= i; j++) {
                 mWifiMetrics.incrementLinkSpeedCount(
@@ -2590,9 +2585,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testTxRxLinkSpeedBandCounts() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_LINK_SPEED_METRICS_ENABLED), anyInt())).thenReturn(1);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled, true);
         for (int i = 0; i < NUM_LINK_SPEED_LEVELS_TO_INCREMENT; i++) {
             for (int j = 0; j <= i; j++) {
                 mWifiMetrics.incrementTxLinkSpeedBandCount(
@@ -2629,9 +2622,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testNoLinkSpeedCountsWhenDisabled() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_LINK_SPEED_METRICS_ENABLED), anyInt())).thenReturn(0);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled, false);
         for (int i = 0; i < NUM_LINK_SPEED_LEVELS_TO_INCREMENT; i++) {
             for (int j = 0; j <= i; j++) {
                 mWifiMetrics.incrementLinkSpeedCount(
@@ -2658,9 +2649,7 @@ public class WifiMetricsTest extends WifiBaseTest {
      */
     @Test
     public void testNoLinkSpeedCountsForOutOfBoundValues() throws Exception {
-        when(mFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_LINK_SPEED_METRICS_ENABLED), anyInt())).thenReturn(1);
-        mWifiMetrics.loadSettings();
+        mResources.setBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled, true);
         for (int i = 1; i < NUM_OUT_OF_BOUND_ENTRIES; i++) {
             mWifiMetrics.incrementLinkSpeedCount(
                     WifiMetrics.MIN_LINK_SPEED_MBPS - i, MIN_RSSI_LEVEL);

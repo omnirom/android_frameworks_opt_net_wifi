@@ -39,6 +39,7 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -48,6 +49,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import android.app.NotificationManager;
 import android.app.test.TestAlarmManager;
 import android.content.Context;
 import android.content.Intent;
@@ -70,7 +72,6 @@ import android.provider.Settings;
 import androidx.test.filters.SmallTest;
 
 import com.android.internal.util.WakeupMessage;
-import com.android.server.wifi.util.ApConfigUtil;
 import com.android.wifi.resources.R;
 
 import org.junit.Before;
@@ -109,7 +110,7 @@ public class SoftApManagerTest extends WifiBaseTest {
     private static final int TEST_AP_BANDWIDTH_FROM_IFACE_CALLBACK =
             SoftApInfo.CHANNEL_WIDTH_20MHZ_NOHT;
     private static final int TEST_AP_BANDWIDTH_IN_SOFTAPINFO = SoftApInfo.CHANNEL_WIDTH_20MHZ_NOHT;
-
+    private static final int[] EMPTY_CHANNEL_ARRAY = {};
     private final SoftApConfiguration mDefaultApConfig = createDefaultApConfig();
 
     private ContentObserver mContentObserver;
@@ -128,6 +129,9 @@ public class SoftApManagerTest extends WifiBaseTest {
     @Mock WifiMetrics mWifiMetrics;
     @Mock SarManager mSarManager;
     @Mock BaseWifiDiagnostics mWifiDiagnostics;
+    @Mock NotificationManager mNotificationManager;
+    @Mock SoftApNotifier mFakeSoftApNotifier;
+
     final ArgumentCaptor<WifiNative.InterfaceCallback> mWifiNativeInterfaceCallbackCaptor =
             ArgumentCaptor.forClass(WifiNative.InterfaceCallback.class);
     final ArgumentCaptor<WifiNative.SoftApListener> mSoftApListenerCaptor =
@@ -149,7 +153,10 @@ public class SoftApManagerTest extends WifiBaseTest {
         when(mContext.getSystemService(Context.ALARM_SERVICE))
                 .thenReturn(mAlarmManager.getAlarmManager());
         when(mContext.getResources()).thenReturn(mResources);
-        when(mResources.getInteger(R.integer.config_wifi_framework_soft_ap_timeout_delay))
+        when(mContext.getSystemService(NotificationManager.class))
+                .thenReturn(mNotificationManager);
+
+        when(mResources.getInteger(R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds))
                 .thenReturn(600000);
         when(mWifiNative.setCountryCodeHal(
                 TEST_INTERFACE_NAME, TEST_COUNTRY_CODE.toUpperCase(Locale.ROOT)))
@@ -162,7 +169,8 @@ public class SoftApManagerTest extends WifiBaseTest {
         mTestSoftApInfo.setBandwidth(TEST_AP_BANDWIDTH_IN_SOFTAPINFO);
         // Default set up all features support.
         int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT
-                | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
+                | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD
+                | SoftApCapability.SOFTAP_FEATURE_WPA3_SAE;
         mTestSoftApCapability = new SoftApCapability(testSoftApFeature);
         mTestSoftApCapability.setMaxSupportedClients(10);
     }
@@ -240,7 +248,8 @@ public class SoftApManagerTest extends WifiBaseTest {
         Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
         configBuilder.setSsid(TEST_SSID);
-        configBuilder.setWpa2Passphrase(TEST_PASSWORD);
+        configBuilder.setPassphrase(TEST_PASSWORD,
+                SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
         SoftApModeConfiguration apConfig = new SoftApModeConfiguration(
                 WifiManager.IFACE_IP_MODE_TETHERED, configBuilder.build(),
                 mTestSoftApCapability);
@@ -565,7 +574,8 @@ public class SoftApManagerTest extends WifiBaseTest {
                 WifiManager.IFACE_IP_MODE_TETHERED, configBuilder.build(),
                 noAcsCapability);
 
-        when(mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ)).thenReturn(null);
+        when(mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ))
+                .thenReturn(EMPTY_CHANNEL_ARRAY);
         when(mWifiNative.setupInterfaceForSoftApMode(any())).thenReturn(TEST_INTERFACE_NAME);
         when(mWifiNative.isHalStarted()).thenReturn(true);
 
@@ -1146,11 +1156,242 @@ public class SoftApManagerTest extends WifiBaseTest {
     }
 
     @Test
+    public void testForceClientDisconnectInvokeBecauseClientAuthorizationEnabled()
+            throws Exception {
+        mTestSoftApCapability.setMaxSupportedClients(10);
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.enableClientControlByUser(true);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
+                configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+
+        // Client is not allow verify
+        verify(mWifiNative).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        verify(mCallback, never()).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+
+    }
+
+    @Test
+    public void testClientConnectedAfterUpdateToAllowListwhenClientAuthorizationEnabled()
+            throws Exception {
+        mTestSoftApCapability.setMaxSupportedClients(10);
+        ArrayList<MacAddress> allowedClientList = new ArrayList<>();
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.enableClientControlByUser(true);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
+                configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+
+        // Client is not allow verify
+        verify(mWifiNative).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        verify(mCallback, never()).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+        verify(mCallback).onBlockedClientConnecting(TEST_CONNECTED_CLIENT,
+                WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        reset(mCallback);
+        reset(mWifiNative);
+        // Update configuration
+        allowedClientList.add(TEST_MAC_ADDRESS);
+        configBuilder.setClientList(new ArrayList<MacAddress>(), allowedClientList);
+        mSoftApManager.updateConfiguration(configBuilder.build());
+        mLooper.dispatchAll();
+        // Client connected again
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+        verify(mWifiNative, never()).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        verify(mCallback).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+        verify(mCallback, never()).onBlockedClientConnecting(TEST_CONNECTED_CLIENT,
+                WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+    }
+
+    @Test
+    public void testClientConnectedAfterUpdateToBlockListwhenClientAuthorizationEnabled()
+            throws Exception {
+        mTestSoftApCapability.setMaxSupportedClients(10);
+        ArrayList<MacAddress> blockedClientList = new ArrayList<>();
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.enableClientControlByUser(true);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
+                configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+
+        // Client is not allow verify
+        verify(mWifiNative).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        verify(mCallback, never()).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+        verify(mCallback).onBlockedClientConnecting(TEST_CONNECTED_CLIENT,
+                WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        reset(mCallback);
+        reset(mWifiNative);
+        // Update configuration
+        blockedClientList.add(TEST_MAC_ADDRESS);
+        configBuilder.setClientList(blockedClientList, new ArrayList<MacAddress>());
+        mSoftApManager.updateConfiguration(configBuilder.build());
+        mLooper.dispatchAll();
+        // Client connected again
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+        verify(mWifiNative).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        verify(mCallback, never()).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+        verify(mCallback, never()).onBlockedClientConnecting(TEST_CONNECTED_CLIENT,
+                WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+    }
+
+    @Test
+    public void testConfigChangeToSmallAndClientAddBlockListCauseClientDisconnect()
+            throws Exception {
+        mTestSoftApCapability.setMaxSupportedClients(10);
+        ArrayList<MacAddress> allowedClientList = new ArrayList<>();
+        allowedClientList.add(TEST_MAC_ADDRESS);
+        allowedClientList.add(TEST_MAC_ADDRESS_2);
+        ArrayList<MacAddress> blockedClientList = new ArrayList<>();
+
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.enableClientControlByUser(true);
+        configBuilder.setMaxNumberOfClients(2);
+        configBuilder.setClientList(new ArrayList<MacAddress>(), allowedClientList);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
+                configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+
+        verify(mCallback, times(2)).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        // Verify timer is canceled at this point
+        verify(mAlarmManager.getAlarmManager()).cancel(any(WakeupMessage.class));
+
+        // Second client connect and max client set is 1.
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT_2, true);
+        mLooper.dispatchAll();
+
+        verify(mCallback, times(3)).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT_2))
+        );
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                2, apConfig.getTargetMode());
+        reset(mCallback);
+        reset(mWifiNative);
+        // Update configuration
+        allowedClientList.clear();
+        allowedClientList.add(TEST_MAC_ADDRESS_2);
+
+        blockedClientList.add(TEST_MAC_ADDRESS);
+        configBuilder.setClientList(blockedClientList, allowedClientList);
+        configBuilder.setMaxNumberOfClients(1);
+        mSoftApManager.updateConfiguration(configBuilder.build());
+        mLooper.dispatchAll();
+        verify(mWifiNative).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
+        verify(mWifiNative, never()).forceClientDisconnect(
+                        TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
+    }
+
+
+    @Test
     public void schedulesTimeoutTimerOnStart() throws Exception {
         SoftApModeConfiguration apConfig =
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED, null,
                 mTestSoftApCapability);
         startSoftApAndVerifyEnabled(apConfig);
+        verify(mResources)
+                .getInteger(R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds);
+
+        // Verify timer is scheduled
+        verify(mAlarmManager.getAlarmManager()).setExact(anyInt(), anyLong(),
+                eq(mSoftApManager.SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG), any(), any());
+    }
+
+    @Test
+    public void schedulesTimeoutTimerOnStartWithConfigedValue() throws Exception {
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.setShutdownTimeoutMillis(50000);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
+                configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+        verify(mResources, never())
+                .getInteger(R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds);
 
         // Verify timer is scheduled
         verify(mAlarmManager.getAlarmManager()).setExact(anyInt(), anyLong(),
@@ -1216,11 +1457,13 @@ public class SoftApManagerTest extends WifiBaseTest {
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED, null,
                 mTestSoftApCapability);
         startSoftApAndVerifyEnabled(apConfig);
-
+        doNothing().when(mFakeSoftApNotifier)
+                .showSoftApShutDownTimeoutExpiredNotification();
         mAlarmManager.dispatch(mSoftApManager.SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG);
         mLooper.dispatchAll();
 
         verify(mWifiNative).teardownInterface(TEST_INTERFACE_NAME);
+        verify(mFakeSoftApNotifier).showSoftApShutDownTimeoutExpiredNotification();
     }
 
     @Test
@@ -1387,7 +1630,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         mLooper.dispatchAll();
         verify(mWifiNative).forceClientDisconnect(
                         TEST_INTERFACE_NAME, TEST_MAC_ADDRESS_2,
-                        ApConfigUtil.DISCONNECT_REASON_CODE_NO_MORE_STAS);
+                        WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
         verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(
                 2, apConfig.getTargetMode());
     }
@@ -1495,6 +1738,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         InOrder order = inOrder(mCallback, mWifiNative);
 
         mSoftApManager = createSoftApManager(softApConfig, countryCode);
+        mSoftApManager.mSoftApNotifier = mFakeSoftApNotifier;
         SoftApConfiguration config = softApConfig.getSoftApConfiguration();
         if (config == null) {
             when(mWifiApConfigStore.getApConfiguration()).thenReturn(mDefaultApConfig);
@@ -1517,6 +1761,7 @@ public class SoftApManagerTest extends WifiBaseTest {
 
         mSoftApManager.start();
         mLooper.dispatchAll();
+        verify(mFakeSoftApNotifier).dismissSoftApShutDownTimeoutExpiredNotification();
         order.verify(mWifiNative).setupInterfaceForSoftApMode(
                 mWifiNativeInterfaceCallbackCaptor.capture());
         ArgumentCaptor<SoftApConfiguration> configCaptor =
@@ -1561,9 +1806,12 @@ public class SoftApManagerTest extends WifiBaseTest {
         assertEquals(expectedIfaceName, ifaceName);
         assertEquals(expectedMode, mode);
     }
+
     @Test
     public void testForceClientDisconnectNotInvokeWhenNotSupport() throws Exception {
-        SoftApCapability noClientControlCapability = new SoftApCapability(0);
+        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_WPA3_SAE
+                | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
+        SoftApCapability noClientControlCapability = new SoftApCapability(testSoftApFeature);
         noClientControlCapability.setMaxSupportedClients(1);
         SoftApModeConfiguration apConfig =
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED, null,
@@ -1590,16 +1838,20 @@ public class SoftApManagerTest extends WifiBaseTest {
         mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
                 TEST_NATIVE_CLIENT_2, true);
         mLooper.dispatchAll();
+        // feature not support thus it should not trigger disconnect
         verify(mWifiNative, never()).forceClientDisconnect(
                         any(), any(), anyInt());
-        verify(mWifiMetrics, never()).addSoftApNumAssociatedStationsChangedEvent(
+        // feature not support thus client still allow connected.
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
                 2, apConfig.getTargetMode());
     }
 
     @Test
     public void testSoftApEnableFailureBecauseSetMaxClientWhenNotSupport() throws Exception {
+        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_WPA3_SAE
+                | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
         when(mWifiNative.setupInterfaceForSoftApMode(any())).thenReturn(TEST_INTERFACE_NAME);
-        SoftApCapability noClientControlCapability = new SoftApCapability(0);
+        SoftApCapability noClientControlCapability = new SoftApCapability(testSoftApFeature);
         noClientControlCapability.setMaxSupportedClients(1);
         SoftApConfiguration softApConfig = new SoftApConfiguration.Builder(
                 mDefaultApConfig).setMaxNumberOfClients(1).build();
@@ -1626,5 +1878,142 @@ public class SoftApManagerTest extends WifiBaseTest {
         verify(mCallback).onStateChanged(WifiManager.WIFI_AP_STATE_FAILED,
                 WifiManager.SAP_START_FAILURE_UNSUPPORTED_CONFIGURATION);
         verify(mListener).onStartFailure();
+    }
+
+    @Test
+    public void testSoftApEnableFailureBecauseSecurityTypeSaeSetupButSaeNotSupport()
+            throws Exception {
+        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT
+                | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
+        when(mWifiNative.setupInterfaceForSoftApMode(any())).thenReturn(TEST_INTERFACE_NAME);
+        SoftApCapability noSaeCapability = new SoftApCapability(testSoftApFeature);
+        SoftApConfiguration softApConfig = new SoftApConfiguration.Builder(
+                mDefaultApConfig).setPassphrase(TEST_PASSWORD,
+                SoftApConfiguration.SECURITY_TYPE_WPA3_SAE).build();
+
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED, softApConfig,
+                noSaeCapability);
+        SoftApManager newSoftApManager = new SoftApManager(mContext,
+                                                           mLooper.getLooper(),
+                                                           mFrameworkFacade,
+                                                           mWifiNative,
+                                                           TEST_COUNTRY_CODE,
+                                                           mListener,
+                                                           mCallback,
+                                                           mWifiApConfigStore,
+                                                           apConfig,
+                                                           mWifiMetrics,
+                                                           mSarManager,
+                                                           mWifiDiagnostics);
+        mLooper.dispatchAll();
+        newSoftApManager.start();
+        mLooper.dispatchAll();
+        verify(mCallback).onStateChanged(WifiManager.WIFI_AP_STATE_ENABLING, 0);
+        verify(mCallback).onStateChanged(WifiManager.WIFI_AP_STATE_FAILED,
+                WifiManager.SAP_START_FAILURE_UNSUPPORTED_CONFIGURATION);
+        verify(mListener).onStartFailure();
+    }
+
+    @Test
+    public void testConfigurationChangedApplySinceDoesNotNeedToRestart() throws Exception {
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+
+        SoftApModeConfiguration apConfig = new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        // Verify timer is scheduled
+        verify(mAlarmManager.getAlarmManager()).setExact(anyInt(), anyLong(),
+                eq(mSoftApManager.SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG), any(), any());
+        verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mLooper.dispatchAll();
+
+        // Trigger Configuration Change
+        configBuilder.setShutdownTimeoutMillis(500000);
+        mSoftApManager.updateConfiguration(configBuilder.build());
+        mLooper.dispatchAll();
+        // Verify timer is canceled at this point since timeout changed
+        verify(mAlarmManager.getAlarmManager()).cancel(any(WakeupMessage.class));
+        // Verify timer setup again
+        verify(mAlarmManager.getAlarmManager(), times(2)).setExact(anyInt(), anyLong(),
+                eq(mSoftApManager.SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG), any(), any());
+
+    }
+
+    @Test
+    public void testConfigurationChangedDoesNotApplySinceNeedToRestart() throws Exception {
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+
+        SoftApModeConfiguration apConfig = new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        // Verify timer is scheduled
+        verify(mAlarmManager.getAlarmManager()).setExact(anyInt(), anyLong(),
+                eq(mSoftApManager.SOFT_AP_SEND_MESSAGE_TIMEOUT_TAG), any(), any());
+
+        mLooper.dispatchAll();
+
+        // Trigger Configuration Change
+        configBuilder.setShutdownTimeoutMillis(500000);
+        configBuilder.setSsid(TEST_SSID + "new");
+        mSoftApManager.updateConfiguration(configBuilder.build());
+        mLooper.dispatchAll();
+        // Verify timer cancel will not apply since changed config need to apply via restart.
+        verify(mAlarmManager.getAlarmManager(), never()).cancel(any(WakeupMessage.class));
+    }
+
+    @Test
+    public void testConfigChangeToSmallCauseClientDisconnect() throws Exception {
+        Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.setMaxNumberOfClients(2);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
+                configBuilder.build(), mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+
+        verify(mCallback, times(2)).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+        // Verify timer is canceled at this point
+        verify(mAlarmManager.getAlarmManager()).cancel(any(WakeupMessage.class));
+
+        // Second client connect and max client set is 1.
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT_2, true);
+        mLooper.dispatchAll();
+
+        verify(mCallback, times(3)).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT_2))
+        );
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                2, apConfig.getTargetMode());
+
+        // Trigger Configuration Change
+        configBuilder.setMaxNumberOfClients(1);
+        mSoftApManager.updateConfiguration(configBuilder.build());
+        mLooper.dispatchAll();
+        // Verify Disconnect will trigger
+        verify(mWifiNative).forceClientDisconnect(
+                        any(), any(), anyInt());
     }
 }
