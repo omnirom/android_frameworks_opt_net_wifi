@@ -154,8 +154,14 @@ public class HostapdHal {
         mHostapdDeathRecipient = new HostapdDeathRecipient();
         mHostapdVendorDeathRecipient = new HostapdVendorDeathRecipient();
 
-        mVendorAcsChannelRanges = toVendorAcsChannelRanges(context.getResources().getString(
-                R.string.config_wifi_softap_acs_supported_channel_list));
+        // TODO(b/148559350): Update based on configured bands
+        mVendorAcsChannelRanges = new ArrayList<>();
+        mVendorAcsChannelRanges.addAll(
+                toVendorAcsChannelRanges(mContext.getResources().getString(
+                    R.string.config_wifiSoftap2gChannelList)));
+        mVendorAcsChannelRanges.addAll(
+                toVendorAcsChannelRanges(mContext.getResources().getString(
+                    R.string.config_wifiSoftap5gChannelList)));
     }
 
     /**
@@ -1379,8 +1385,8 @@ public class HostapdHal {
             toVendorAcsChannelRanges(String channelListStr) {
         ArrayList<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange> acsChannelRanges =
                 new ArrayList<>();
-        String[] channelRanges = channelListStr.split(",");
-        for (String channelRange : channelRanges) {
+
+        for (String channelRange : channelListStr.split(",")) {
             vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange acsChannelRange =
                     new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange();
             try {
@@ -1390,8 +1396,8 @@ public class HostapdHal {
                         Log.e(TAG, "Unrecognized channel range, length is " + channels.length);
                         continue;
                     }
-                    int start = Integer.parseInt(channels[0]);
-                    int end = Integer.parseInt(channels[1]);
+                    int start = Integer.parseInt(channels[0].trim());
+                    int end = Integer.parseInt(channels[1].trim());
                     if (start > end) {
                         Log.e(TAG, "Invalid channel range, from " + start + " to " + end);
                         continue;
@@ -1399,7 +1405,7 @@ public class HostapdHal {
                     acsChannelRange.start = start;
                     acsChannelRange.end = end;
                 } else {
-                    acsChannelRange.start = Integer.parseInt(channelRange);
+                    acsChannelRange.start = Integer.parseInt(channelRange.trim());
                     acsChannelRange.end = acsChannelRange.start;
                 }
             } catch (NumberFormatException e) {
