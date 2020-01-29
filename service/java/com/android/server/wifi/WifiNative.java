@@ -3841,4 +3841,15 @@ public class WifiNative {
                     HashMap<String, WifiConfiguration> linkedNetworks) {
         return mSupplicantStaIfaceHal.updateLinkedNetworksIfCurrent(ifaceName, networkId, linkedNetworks);
     }
+    /**
+     * Run driver command
+     *
+     * @param ifaceName String representing iface name
+     * @param command to pass to driver
+     * returns String of command reply.
+     */
+    String doDriverCmd(String ifaceName, String command)
+    {
+        return mSupplicantStaIfaceHal.doDriverCmd(ifaceName, command);
+    }
 }
