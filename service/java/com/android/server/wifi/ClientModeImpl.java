@@ -634,6 +634,14 @@ public class ClientModeImpl extends StateMachine {
     static final int CMD_PRE_DHCP_ACTION                                = BASE + 255;
     private static final int CMD_PRE_DHCP_ACTION_COMPLETE               = BASE + 256;
     private static final int CMD_POST_DHCP_ACTION                       = BASE + 257;
+    private static final int CMD_CONNECT_NETWORK                        = BASE + 258;
+    private static final int CMD_SAVE_NETWORK                           = BASE + 259;
+
+    /* Start connection to FILS AP*/
+    static final int CMD_START_FILS_CONNECTION                          = BASE + 262;
+
+    private static final int CMD_GET_CURRENT_NETWORK                    = BASE + 263;
+
     /* Take some GAP in numbering, start DPP commands from 301 onwards */
     /* Add bootstrap info*/
     public static final int CMD_DPP_GENERATE_BOOTSTRAP                  = BASE + 301;
@@ -659,13 +667,8 @@ public class ClientModeImpl extends StateMachine {
     /* Vendor specific cmd: To handle IP Reachability session */
     private static final int CMD_IP_REACHABILITY_SESSION_END            = BASE + 311;
 
-    private static final int CMD_CONNECT_NETWORK                        = BASE + 258;
-    private static final int CMD_SAVE_NETWORK                           = BASE + 259;
-
-    /* Start connection to FILS AP*/
-    static final int CMD_START_FILS_CONNECTION                          = BASE + 262;
-
-    private static final int CMD_GET_CURRENT_NETWORK                    = BASE + 263;
+    //Run Driver Command
+    private static final int CMD_DO_DRIVER_CMD                          = BASE + 312;
 
     // For message logging.
     private static final Class[] sMessageClasses = {
@@ -3604,6 +3607,7 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_ROAM_WATCHDOG_TIMER:
                 case WifiMonitor.DPP_EVENT:
                 case CMD_IP_REACHABILITY_SESSION_END:
+                case CMD_DO_DRIVER_CMD:
                     mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
@@ -4613,6 +4617,10 @@ public class ClientModeImpl extends StateMachine {
                 case WifiMonitor.DPP_EVENT:
                     Log.d(TAG, "DPP Event received. Type = " + message.arg1);
                     sendDppEventBroadcast(message.arg1, (DppResult) message.obj);
+                    break;
+                case CMD_DO_DRIVER_CMD:
+                    String reply = mWifiNative.doDriverCmd(mInterfaceName, (String) message.obj);
+                    replyToMessage(message, message.what, reply);
                     break;
                 default:
                     handleStatus = NOT_HANDLED;
@@ -7043,5 +7051,16 @@ public class ClientModeImpl extends StateMachine {
                 mWifiInfo.setHe8ssCapableAp(false);
             }
         }
+    }
+    /**
+     * Run Driver Command
+     * @param : Command string
+     */
+    public String doDriverCmd(AsyncChannel channel, String command)
+    {
+        Message resultMsg = channel.sendMessageSynchronously(CMD_DO_DRIVER_CMD, command);
+        String result = (String)resultMsg.obj;
+        resultMsg.recycle();
+        return result;
     }
 }

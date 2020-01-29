@@ -3996,4 +3996,15 @@ public class WifiNative {
         return ScanResult.WIFI_STANDARD_LEGACY;
     }
 
+    /**
+     * Run driver command
+     *
+     * @param ifaceName String representing iface name
+     * @param command to pass to driver
+     * returns String of command reply.
+     */
+    String doDriverCmd(String ifaceName, String command)
+    {
+        return mSupplicantStaIfaceHal.doDriverCmd(ifaceName, command);
+    }
 }
