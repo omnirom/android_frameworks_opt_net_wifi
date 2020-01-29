@@ -4152,7 +4152,8 @@ public class WifiServiceImpl extends BaseWifiService {
 
         // Remove double quotes in SSID and psk
         softApConfigBuilder.setSsid(WifiInfo.removeDoubleQuotes(currentStaConfig.SSID));
-        softApConfigBuilder.setWpa2Passphrase(WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey));
+        softApConfigBuilder.setPassphrase(WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey),
+            SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
 
         // Get band info from SoftAP configuration
         if (apConfig == null)

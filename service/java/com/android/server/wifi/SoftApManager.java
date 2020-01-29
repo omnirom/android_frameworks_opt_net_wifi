@@ -672,7 +672,7 @@ public class SoftApManager implements ActiveModeManager {
             if (result == SUCCESS) {
                 mApInterfaceName = mdualApInterfaces[1];
                 openConfigBuilder.setOweTransIfaceName(mdualApInterfaces[0]);
-                openConfigBuilder.setWpa2Passphrase(null);
+                openConfigBuilder.setPassphrase(null, SoftApConfiguration.SECURITY_TYPE_OPEN);
                 SoftApConfiguration openConfig = openConfigBuilder.build();
                 mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), openConfig,
                         mCurrentSoftApCapability);
