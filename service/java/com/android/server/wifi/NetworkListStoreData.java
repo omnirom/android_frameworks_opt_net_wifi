@@ -30,6 +30,7 @@ import com.android.server.wifi.util.XmlUtil.IpConfigurationXmlUtil;
 import com.android.server.wifi.util.XmlUtil.NetworkSelectionStatusXmlUtil;
 import com.android.server.wifi.util.XmlUtil.WifiConfigurationXmlUtil;
 import com.android.server.wifi.util.XmlUtil.WifiEnterpriseConfigXmlUtil;
+import com.android.server.wifi.util.WifiConfigurationVendorMigration;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -38,6 +39,9 @@ import org.xmlpull.v1.XmlSerializer;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
+import static com.android.server.wifi.util.WifiConfigurationVendorMigration.MIGRATION_STATUS_STARTED;
+import static com.android.server.wifi.util.WifiConfigurationVendorMigration.MIGRATION_STATUS_COMPLETED;
 
 /**
  * This class performs serialization and parsing of XML data block that contain the list of WiFi
@@ -61,8 +65,11 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
      */
     private List<WifiConfiguration> mConfigurations;
 
+    private final WifiConfigurationVendorMigration mVendorMigration;
+
     NetworkListStoreData(Context context) {
         mContext = context;
+        mVendorMigration = new WifiConfigurationVendorMigration();
     }
 
     @Override
@@ -181,6 +188,13 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
     private List<WifiConfiguration> parseNetworkList(XmlPullParser in, int outerTagDepth)
             throws XmlPullParserException, IOException {
         List<WifiConfiguration> networkList = new ArrayList<>();
+
+        // Check for first boot after OTA upgrade.
+        if (mVendorMigration.isMigrationRequired()) {
+            mVendorMigration.setStatus(MIGRATION_STATUS_STARTED);
+            mVendorMigration.update();
+        }
+
         while (XmlUtil.gotoNextSectionWithNameOrEnd(in, XML_TAG_SECTION_HEADER_NETWORK,
                 outerTagDepth)) {
             // Try/catch only runtime exceptions (like illegal args), any XML/IO exceptions are
@@ -193,6 +207,13 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
                 Log.e(TAG, "Failed to parse network config. Skipping...", e);
             }
         }
+
+        if (mVendorMigration.getStatus() != MIGRATION_STATUS_COMPLETED) {
+            Log.d(TAG, "Vendor wifi configuration migration completed");
+            mVendorMigration.setStatus(MIGRATION_STATUS_COMPLETED);
+            mVendorMigration.update();
+        }
+
         return networkList;
     }
 
@@ -254,6 +275,9 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         }
         String configKeyParsed = parsedConfig.first;
         WifiConfiguration configuration = parsedConfig.second;
+
+        mVendorMigration.checkAndMigrateVendorConfiguration(configKeyParsed, configuration);
+
         String configKeyCalculated = configuration.configKey();
         if (!configKeyParsed.equals(configKeyCalculated)) {
             throw new XmlPullParserException(
@@ -283,4 +307,3 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         return configuration;
     }
 }
-
