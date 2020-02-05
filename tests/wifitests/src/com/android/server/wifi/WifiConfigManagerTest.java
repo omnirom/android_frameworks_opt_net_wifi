@@ -26,7 +26,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.database.ContentObserver;
 import android.net.IpConfiguration;
 import android.net.MacAddress;
 import android.net.wifi.ScanResult;
@@ -41,7 +40,6 @@ import android.os.Process;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.test.TestLooper;
-import android.provider.Settings;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
@@ -133,13 +131,13 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     @Mock private WifiLastResortWatchdog mWifiLastResortWatchdog;
     @Mock private NetworkListSharedStoreData mNetworkListSharedStoreData;
     @Mock private NetworkListUserStoreData mNetworkListUserStoreData;
-    @Mock private DeletedEphemeralSsidsStoreData mDeletedEphemeralSsidsStoreData;
     @Mock private RandomizedMacStoreData mRandomizedMacStoreData;
     @Mock private WifiConfigManager.OnNetworkUpdateListener mWcmListener;
     @Mock private FrameworkFacade mFrameworkFacade;
     @Mock private DeviceConfigFacade mDeviceConfigFacade;
     @Mock private MacAddressUtil mMacAddressUtil;
     @Mock private BssidBlocklistMonitor mBssidBlocklistMonitor;
+    @Mock private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
 
     private MockResources mResources;
     private InOrder mContextConfigStoreMockOrder;
@@ -147,8 +145,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     private WifiConfigManager mWifiConfigManager;
     private boolean mStoreReadTriggered = false;
     private TestLooper mLooper = new TestLooper();
-    private ContentObserver mContentObserverPnoChannelCulling;
-    private ContentObserver mContentObserverPnoRecencySorting;
     private MockitoSession mSession;
     private TelephonyUtil mTelephonyUtil;
 
@@ -212,11 +208,13 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 .updateNetworkKeys(any(WifiConfiguration.class), any()))
                 .thenReturn(true);
 
-        setupStoreDataForRead(new ArrayList<>(), new ArrayList<>(), new HashMap<>());
+        setupStoreDataForRead(new ArrayList<>(), new ArrayList<>());
 
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         when(mWifiPermissionsUtil.isDeviceOwner(anyInt(), any())).thenReturn(false);
         when(mWifiPermissionsUtil.isProfileOwner(anyInt(), any())).thenReturn(false);
+        when(mWifiInjector.getWifiNetworkSuggestionsManager())
+                .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiInjector.getBssidBlocklistMonitor()).thenReturn(mBssidBlocklistMonitor);
         when(mWifiInjector.getWifiLastResortWatchdog()).thenReturn(mWifiLastResortWatchdog);
         when(mWifiInjector.getWifiLastResortWatchdog().shouldIgnoreSsidUpdate())
@@ -228,16 +226,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 mock(FrameworkFacade.class), mock(Context.class), mock(Handler.class));
         createWifiConfigManager();
         mWifiConfigManager.addOnNetworkUpdateListener(mWcmListener);
-        ArgumentCaptor<ContentObserver> observerCaptor =
-                ArgumentCaptor.forClass(ContentObserver.class);
-        verify(mFrameworkFacade).registerContentObserver(eq(mContext), eq(Settings.Global.getUriFor(
-                Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED)), eq(false),
-                observerCaptor.capture());
-        mContentObserverPnoChannelCulling = observerCaptor.getValue();
-        verify(mFrameworkFacade).registerContentObserver(eq(mContext), eq(Settings.Global.getUriFor(
-                Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED)), eq(false),
-                observerCaptor.capture());
-        mContentObserverPnoRecencySorting = observerCaptor.getValue();
         // static mocking
         mSession = ExtendedMockito.mockitoSession()
                 .mockStatic(WifiConfigStore.class, withSettings().lenient())
@@ -299,13 +287,27 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Verifies that the Mac randomization secret hashfunction is obtained after |loadFromStore|.
+     * Verify that a randomized MAC address is generated even if the KeyStore operation fails.
      */
     @Test
-    public void testMacHashIsObtainedAfterLoadFromStore() {
-        verify(mMacAddressUtil, never()).obtainMacRandHashFunction(anyInt());
-        assertTrue(mWifiConfigManager.loadFromStore());
-        verify(mMacAddressUtil).obtainMacRandHashFunction(anyInt());
+    public void testRandomizedMacIsGeneratedEvenIfKeyStoreFails() {
+        when(mMacAddressUtil.calculatePersistentMac(any(), any())).thenReturn(null);
+
+        // Try adding a network.
+        WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        List<WifiConfiguration> networks = new ArrayList<>();
+        networks.add(openNetwork);
+        verifyAddNetworkToWifiConfigManager(openNetwork);
+        List<WifiConfiguration> retrievedNetworks =
+                mWifiConfigManager.getConfiguredNetworksWithPasswords();
+
+        // Verify that we have attempted to generate the MAC address twice (1 retry)
+        verify(mMacAddressUtil, times(2)).calculatePersistentMac(any(), any());
+        assertEquals(1, retrievedNetworks.size());
+
+        // Verify that despite KeyStore returning null, we are still getting a valid MAC address.
+        assertNotEquals(WifiInfo.DEFAULT_MAC_ADDRESS,
+                retrievedNetworks.get(0).getRandomizedMacAddress().toString());
     }
 
     /**
@@ -398,7 +400,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
         Map<String, String> randomizedMacAddressMapping = new HashMap<>();
         final String randMac = "12:23:34:45:56:67";
-        randomizedMacAddressMapping.put(openNetwork.getSsidAndSecurityTypeString(), randMac);
+        randomizedMacAddressMapping.put(openNetwork.getKey(), randMac);
         assertNotEquals(randMac, openNetwork.getRandomizedMacAddress());
         when(mRandomizedMacStoreData.getMacMapping()).thenReturn(randomizedMacAddressMapping);
 
@@ -460,7 +462,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         sharedConfigList.add(openNetwork);
 
         // Setup xml storage
-        setupStoreDataForRead(sharedConfigList, new ArrayList<>(), new HashMap<>());
+        setupStoreDataForRead(sharedConfigList, new ArrayList<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -1308,7 +1310,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
 
     /**
      * Verifies the allowance/disallowance of autojoin to a network using
-     * {@link WifiConfigManager.allowAutojoin(int, boolean)}
+     * {@link WifiConfigManager#allowAutojoin(int, boolean)}
      */
     @Test
     public void testAllowDisallowAutojoin() throws Exception {
@@ -1529,7 +1531,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         // Copy over the updated debug params to the original network config before comparison.
         originalNetwork.lastUpdateUid = network.lastUpdateUid;
         originalNetwork.lastUpdateName = network.lastUpdateName;
-        originalNetwork.updateTime = network.updateTime;
 
         // Now verify that there was no change to the network configurations.
         WifiConfigurationTestUtil.assertConfigurationEqualForConfigManagerAddOrUpdate(
@@ -1688,7 +1689,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Verifies that ScanDetail added for a network is cached correctly.
+     * Verifies that ScanDetail added for a network is cached correctly with network ID
      */
     @Test
     public void testUpdateScanDetailForNetwork() {
@@ -1701,6 +1702,30 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         ScanResult scanResult = scanDetail.getScanResult();
 
         mWifiConfigManager.updateScanDetailForNetwork(result.getNetworkId(), scanDetail);
+
+        // Now retrieve the scan detail cache and ensure that the new scan detail is in cache.
+        ScanDetailCache retrievedScanDetailCache =
+                mWifiConfigManager.getScanDetailCacheForNetwork(result.getNetworkId());
+        assertEquals(1, retrievedScanDetailCache.size());
+        ScanResult retrievedScanResult = retrievedScanDetailCache.getScanResult(scanResult.BSSID);
+
+        ScanTestUtil.assertScanResultEquals(scanResult, retrievedScanResult);
+    }
+
+    /**
+     * Verifies that ScanDetail added for a network is cached correctly without network ID
+     */
+    @Test
+    public void testUpdateScanDetailCacheFromScanDetail() {
+        // First add the provided network.
+        WifiConfiguration testNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        NetworkUpdateResult result = verifyAddNetworkToWifiConfigManager(testNetwork);
+
+        // Now create a dummy scan detail corresponding to the network.
+        ScanDetail scanDetail = createScanDetailForNetwork(testNetwork);
+        ScanResult scanResult = scanDetail.getScanResult();
+
+        mWifiConfigManager.updateScanDetailCacheFromScanDetail(scanDetail);
 
         // Now retrieve the scan detail cache and ensure that the new scan detail is in cache.
         ScanDetailCache retrievedScanDetailCache =
@@ -2353,10 +2378,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      */
     @Test
     public void testRetrievePnoListFrequencies() {
-        when(mFrameworkFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED),
-                anyInt())).thenReturn(1);
-        mContentObserverPnoChannelCulling.onChange(false);
+        mResources.setBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled, true);
         // Create and add 3 networks.
         WifiConfiguration network1 = WifiConfigurationTestUtil.createEapNetwork();
         WifiConfiguration network2 = WifiConfigurationTestUtil.createPskNetwork();
@@ -2420,10 +2442,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      */
     @Test
     public void testRetrievePnoListFrequenciesFlagDisabled() {
-        when(mFrameworkFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_PNO_FREQUENCY_CULLING_ENABLED),
-                anyInt())).thenReturn(0);
-        mContentObserverPnoChannelCulling.onChange(false);
+        mResources.setBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled, false);
         WifiConfiguration network1 = WifiConfigurationTestUtil.createEapNetwork();
         verifyAddNetworkToWifiConfigManager(network1);
         assertTrue(mWifiConfigManager.enableNetwork(
@@ -2445,10 +2464,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      */
     @Test
     public void testRetrievePnoListPrefersLastConnectedNetwork() {
-        when(mFrameworkFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED),
-                anyInt())).thenReturn(1);
-        mContentObserverPnoRecencySorting.onChange(false);
+        mResources.setBoolean(R.bool.config_wifiPnoRecencySortingEnabled, true);
         // Create and add 3 networks.
         WifiConfiguration network1 = WifiConfigurationTestUtil.createEapNetwork();
         WifiConfiguration network2 = WifiConfigurationTestUtil.createPskNetwork();
@@ -2491,10 +2507,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      */
     @Test
     public void testRetrievePnoListPrefersLastConnectedNetworkThenMostConnectedNetworks() {
-        when(mFrameworkFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED),
-                anyInt())).thenReturn(1);
-        mContentObserverPnoRecencySorting.onChange(false);
+        mResources.setBoolean(R.bool.config_wifiPnoRecencySortingEnabled, true);
         // Create and add 3 networks.
         WifiConfiguration network1 = WifiConfigurationTestUtil.createEapNetwork();
         WifiConfiguration network2 = WifiConfigurationTestUtil.createPskNetwork();
@@ -2551,10 +2564,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      */
     @Test
     public void testRetrievePnoListRecencyFlagDisabled() {
-        when(mFrameworkFacade.getIntegerSetting(eq(mContext),
-                eq(Settings.Global.WIFI_PNO_RECENCY_SORTING_ENABLED),
-                anyInt())).thenReturn(0);
-        mContentObserverPnoRecencySorting.onChange(false);
+        mResources.setBoolean(R.bool.config_wifiPnoRecencySortingEnabled, false);
         // Create and add 3 networks.
         WifiConfiguration network1 = WifiConfigurationTestUtil.createEapNetwork();
         WifiConfiguration network2 = WifiConfigurationTestUtil.createPskNetwork();
@@ -3150,13 +3160,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(user1Network);
             }
         };
-        Map<String, Long> deletedSsidsToTimeMap = new HashMap<String, Long>() {
-            {
-                put(TEST_SSID, currentTimeMs);
-            }
-
-        };
-        setupStoreDataForRead(sharedNetworks, user1Networks, deletedSsidsToTimeMap);
+        setupStoreDataForRead(sharedNetworks, user1Networks);
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -3174,7 +3178,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         }
         assertTrue(sharedNetwork1Id != WifiConfiguration.INVALID_NETWORK_ID);
         assertTrue(sharedNetwork2Id != WifiConfiguration.INVALID_NETWORK_ID);
-        assertTrue(mWifiConfigManager.wasEphemeralNetworkDeleted(TEST_SSID));
+        assertFalse(mWifiConfigManager.wasEphemeralNetworkDeleted(TEST_SSID));
 
         // Set up the user 2 store data that is loaded at user switch.
         List<WifiConfiguration> user2Networks = new ArrayList<WifiConfiguration>() {
@@ -3240,7 +3244,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(user1Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, user1Networks, new HashMap<>());
+        setupStoreDataForRead(sharedNetworks, user1Networks);
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -3311,7 +3315,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(sharedNetwork);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -3363,7 +3367,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(user2Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -3444,7 +3448,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(passpointConfig);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>());
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
         assertEquals(1, mWifiConfigManager.getConfiguredNetworks().size());
@@ -3573,7 +3577,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(user1Network);
             }
         };
-        setupStoreDataForRead(sharedNetworks, user1Networks, new HashMap<>());
+        setupStoreDataForRead(sharedNetworks, user1Networks);
         assertTrue(mWifiConfigManager.loadFromStore());
         verify(mWifiConfigStore).read();
 
@@ -3952,7 +3956,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         // Set connect choice of network 2 over network 1.
         assertTrue(
                 mWifiConfigManager.setNetworkConnectChoice(
-                        network1.networkId, network2.getKey(), 78L));
+                        network1.networkId, network2.getKey()));
 
         WifiConfiguration retrievedNetwork =
                 mWifiConfigManager.getConfiguredNetwork(network1.networkId);
@@ -4752,7 +4756,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 add(peapSimNetwork);
             }
         };
-        setupStoreDataForRead(sharedNetworks, new ArrayList<>(), new HashMap<>());
+        setupStoreDataForRead(sharedNetworks, new ArrayList<>());
 
         // read from store now
         assertTrue(mWifiConfigManager.loadFromStore());
@@ -4827,7 +4831,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         // Set connect choice of passpoint network over saved network.
         assertTrue(
                 mWifiConfigManager.setNetworkConnectChoice(
-                        savedNetwork.networkId, passpointNetwork.getKey(), 78L));
+                        savedNetwork.networkId, passpointNetwork.getKey()));
 
         WifiConfiguration retrievedSavedNetwork =
                 mWifiConfigManager.getConfiguredNetwork(savedNetwork.networkId);
@@ -4914,7 +4918,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                         mWifiKeyStore, mWifiConfigStore,
                         mWifiPermissionsUtil, mWifiPermissionsWrapper, mWifiInjector,
                         mNetworkListSharedStoreData, mNetworkListUserStoreData,
-                        mDeletedEphemeralSsidsStoreData, mRandomizedMacStoreData,
+                        mRandomizedMacStoreData,
                         mFrameworkFacade, new Handler(mLooper.getLooper()), mDeviceConfigFacade);
         mWifiConfigManager.enableVerboseLogging(1);
     }
@@ -4925,9 +4929,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      * WifiConfigManager.
      */
     private void setDefaults(WifiConfiguration configuration) {
-        if (configuration.allowedAuthAlgorithms.isEmpty()) {
-            configuration.allowedAuthAlgorithms.set(WifiConfiguration.AuthAlgorithm.OPEN);
-        }
         if (configuration.allowedProtocols.isEmpty()) {
             configuration.allowedProtocols.set(WifiConfiguration.Protocol.RSN);
             configuration.allowedProtocols.set(WifiConfiguration.Protocol.WPA);
@@ -4960,27 +4961,20 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Modifies the provided configuration with creator uid, package name
-     * and time.
+     * Modifies the provided configuration with creator uid and package name.
      */
     private void setCreationDebugParams(WifiConfiguration configuration, int uid,
                                         String packageName) {
         configuration.creatorUid = configuration.lastUpdateUid = uid;
         configuration.creatorName = configuration.lastUpdateName = packageName;
-        configuration.creationTime = configuration.updateTime =
-                WifiConfigManager.createDebugTimeStampString(
-                        TEST_WALLCLOCK_CREATION_TIME_MILLIS);
     }
 
     /**
-     * Modifies the provided configuration with update uid, package name
-     * and time.
+     * Modifies the provided configuration with update uid and package name.
      */
     private void setUpdateDebugParams(WifiConfiguration configuration) {
         configuration.lastUpdateUid = TEST_UPDATE_UID;
         configuration.lastUpdateName = TEST_UPDATE_NAME;
-        configuration.updateTime =
-                WifiConfigManager.createDebugTimeStampString(TEST_WALLCLOCK_UPDATE_TIME_MILLIS);
     }
 
     /**
@@ -5090,11 +5084,10 @@ public class WifiConfigManagerTest extends WifiBaseTest {
      * after WifiConfigStore#read.
      */
     private void setupStoreDataForRead(List<WifiConfiguration> sharedConfigurations,
-            List<WifiConfiguration> userConfigurations, Map<String, Long> deletedEphemeralSsids) {
+            List<WifiConfiguration> userConfigurations) {
         when(mNetworkListSharedStoreData.getConfigurations())
                 .thenReturn(sharedConfigurations);
         when(mNetworkListUserStoreData.getConfigurations()).thenReturn(userConfigurations);
-        when(mDeletedEphemeralSsidsStoreData.getSsidToTimeMap()).thenReturn(deletedEphemeralSsids);
     }
 
     /**
@@ -5104,7 +5097,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     private void setupStoreDataForUserRead(List<WifiConfiguration> userConfigurations,
             Map<String, Long> deletedEphemeralSsids) {
         when(mNetworkListUserStoreData.getConfigurations()).thenReturn(userConfigurations);
-        when(mDeletedEphemeralSsidsStoreData.getSsidToTimeMap()).thenReturn(deletedEphemeralSsids);
     }
 
     /**
@@ -5670,5 +5662,44 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         NetworkUpdateResult networkUpdateResult = updateNetworkToWifiConfigManager(openNetwork);
         assertNotEquals(WifiConfiguration.INVALID_NETWORK_ID, networkUpdateResult.getNetworkId());
         assertFalse(mWifiConfigManager.isInFlakyRandomizationSsidHotlist(networkId));
+    }
+
+    /**
+     * Verifies that findScanRssi returns valid RSSI when scan was done recently
+     */
+    @Test
+    public void testFindScanRssiRecentScan() {
+        // First add the provided network.
+        WifiConfiguration testNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        NetworkUpdateResult result = verifyAddNetworkToWifiConfigManager(testNetwork);
+
+        when(mClock.getWallClockMillis()).thenReturn(TEST_WALLCLOCK_CREATION_TIME_MILLIS);
+        ScanDetail scanDetail = createScanDetailForNetwork(testNetwork, TEST_BSSID,
+                TEST_RSSI, TEST_FREQUENCY_1);
+        ScanResult scanResult = scanDetail.getScanResult();
+
+        mWifiConfigManager.updateScanDetailCacheFromScanDetail(scanDetail);
+        when(mClock.getWallClockMillis()).thenReturn(TEST_WALLCLOCK_CREATION_TIME_MILLIS + 2000);
+        assertEquals(mWifiConfigManager.findScanRssi(result.getNetworkId(), 5000), TEST_RSSI);
+    }
+
+    /**
+     * Verifies that findScanRssi returns INVALID_RSSI when scan was done a long time ago
+     */
+    @Test
+    public void testFindScanRssiOldScan() {
+        // First add the provided network.
+        WifiConfiguration testNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        NetworkUpdateResult result = verifyAddNetworkToWifiConfigManager(testNetwork);
+
+        when(mClock.getWallClockMillis()).thenReturn(TEST_WALLCLOCK_CREATION_TIME_MILLIS);
+        ScanDetail scanDetail = createScanDetailForNetwork(testNetwork, TEST_BSSID,
+                TEST_RSSI, TEST_FREQUENCY_1);
+        ScanResult scanResult = scanDetail.getScanResult();
+
+        mWifiConfigManager.updateScanDetailCacheFromScanDetail(scanDetail);
+        when(mClock.getWallClockMillis()).thenReturn(TEST_WALLCLOCK_CREATION_TIME_MILLIS + 15000);
+        assertEquals(mWifiConfigManager.findScanRssi(result.getNetworkId(), 5000),
+                WifiInfo.INVALID_RSSI);
     }
 }

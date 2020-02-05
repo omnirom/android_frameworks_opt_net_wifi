@@ -44,6 +44,7 @@ import android.net.wifi.WifiNetworkSpecifier;
 import android.net.wifi.WifiScanner;
 import android.os.Binder;
 import android.os.Handler;
+import android.os.HandlerExecutor;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PatternMatcher;
@@ -462,7 +463,7 @@ public class WifiNetworkFactory extends NetworkFactory {
     }
 
     boolean isRequestWithNetworkSpecifierValid(NetworkRequest networkRequest) {
-        NetworkSpecifier ns = networkRequest.networkCapabilities.getNetworkSpecifier();
+        NetworkSpecifier ns = networkRequest.getNetworkSpecifier();
         // Invalid network specifier.
         if (!(ns instanceof WifiNetworkSpecifier)) {
             Log.e(TAG, "Invalid network specifier mentioned. Rejecting");
@@ -472,7 +473,23 @@ public class WifiNetworkFactory extends NetworkFactory {
         // (NetworkAgent for connection with WifiNetworkSpecifier will not have internet capability)
         if (networkRequest.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
             Log.e(TAG, "Request with wifi network specifier cannot contain "
-                    + "NET_CAPABILITY_INTERNET. Rejecting");
+                    + "NET_CAPABILITY_INTERNET. Rejecting ");
+            return false;
+        }
+        WifiNetworkSpecifier wns = (WifiNetworkSpecifier) ns;
+        if (wns.requestorPackageName == null) {
+            Log.e(TAG, "Null  package name. Rejecting ");
+            return false;
+        }
+        try {
+            mAppOpsManager.checkPackage(wns.requestorUid, wns.requestorPackageName);
+        } catch (SecurityException e) {
+            Log.e(TAG, "Invalid uid/package name " + wns.requestorPackageName + ", "
+                    + wns.requestorPackageName + ". Rejecting ", e);
+            return false;
+        }
+        if (!WifiConfigurationUtil.validateNetworkSpecifier(wns)) {
+            Log.e(TAG, "Invalid network specifier. Rejecting ");
             return false;
         }
         return true;
@@ -485,7 +502,7 @@ public class WifiNetworkFactory extends NetworkFactory {
      */
     @Override
     public boolean acceptRequest(NetworkRequest networkRequest, int score) {
-        NetworkSpecifier ns = networkRequest.networkCapabilities.getNetworkSpecifier();
+        NetworkSpecifier ns = networkRequest.getNetworkSpecifier();
         if (ns == null) {
             // Generic wifi request. Always accept.
         } else {
@@ -500,20 +517,6 @@ public class WifiNetworkFactory extends NetworkFactory {
                 return false;
             }
             WifiNetworkSpecifier wns = (WifiNetworkSpecifier) ns;
-            if (!WifiConfigurationUtil.validateNetworkSpecifier(wns)) {
-                Log.e(TAG, "Invalid network specifier."
-                        + " Rejecting request from " + wns.requestorPackageName);
-                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
-                return false;
-            }
-            try {
-                mAppOpsManager.checkPackage(wns.requestorUid, wns.requestorPackageName);
-            } catch (SecurityException e) {
-                Log.e(TAG, "Invalid uid/package name " + wns.requestorPackageName + ", "
-                        + wns.requestorPackageName, e);
-                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
-                return false;
-            }
             // Only allow specific wifi network request from foreground app/service.
             if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(wns.requestorUid)
                     && !isRequestFromForegroundAppOrService(wns.requestorPackageName)) {
@@ -560,7 +563,7 @@ public class WifiNetworkFactory extends NetworkFactory {
      */
     @Override
     protected void needNetworkFor(NetworkRequest networkRequest, int score) {
-        NetworkSpecifier ns = networkRequest.networkCapabilities.getNetworkSpecifier();
+        NetworkSpecifier ns = networkRequest.getNetworkSpecifier();
         if (ns == null) {
             // Generic wifi request. Turn on auto-join if necessary.
             if (++mGenericConnectionReqCount == 1) {
@@ -582,7 +585,7 @@ public class WifiNetworkFactory extends NetworkFactory {
             setupForActiveRequest();
 
             // Store the active network request.
-            mActiveSpecificNetworkRequest = new NetworkRequest(networkRequest);
+            mActiveSpecificNetworkRequest = networkRequest;
             WifiNetworkSpecifier wns = (WifiNetworkSpecifier) ns;
             mActiveSpecificNetworkRequestSpecifier = new WifiNetworkSpecifier(
                     wns.ssidPatternMatcher, wns.bssidPatternMatcher, wns.wifiConfiguration,
@@ -607,7 +610,7 @@ public class WifiNetworkFactory extends NetworkFactory {
 
     @Override
     protected void releaseNetworkFor(NetworkRequest networkRequest) {
-        NetworkSpecifier ns = networkRequest.networkCapabilities.getNetworkSpecifier();
+        NetworkSpecifier ns = networkRequest.getNetworkSpecifier();
         if (ns == null) {
             // Generic wifi request. Turn off auto-join if necessary.
             if (mGenericConnectionReqCount == 0) {
@@ -1084,7 +1087,8 @@ public class WifiNetworkFactory extends NetworkFactory {
         }
         // Create a worksource using the caller's UID.
         WorkSource workSource = new WorkSource(mActiveSpecificNetworkRequestSpecifier.requestorUid);
-        mWifiScanner.startScan(mScanSettings, mScanListener, workSource);
+        mWifiScanner.startScan(
+                mScanSettings, new HandlerExecutor(mHandler), mScanListener, workSource);
     }
 
     private boolean doesScanResultMatchWifiNetworkSpecifier(

@@ -30,6 +30,12 @@
     <!-- boolean indicating whether the WiFi chipset has 6GHz band support -->
     <bool translatable="false" name ="config_wifi6ghzSupport">false</bool>
 
+      <!-- Indicates that 11ax mode is supported on this device
+           Note that if this flag is set to true, then 11ax is assumed to be supported.
+           However, if it is left to the default value of false, the 11ax support will
+           be checked via NL80211 interface -->
+    <bool translatable="false" name="config_wifi11axSupportOverride">false</bool>
+
     <!-- Maximum number of concurrent WiFi interfaces in AP mode -->
     <integer translatable="false" name="config_wifi_max_ap_interfaces">1</integer>
 
@@ -122,16 +128,29 @@
     <integer translatable="false" name="config_wifiFrameworkScoreGoodRssiThreshold6ghz">-57</integer>
 
     <!-- Integer delay in milliseconds before shutting down soft AP when there
-         are no connected devices. Framework will enforce a minimum limit on
-         this value and this setting will be overridden if the provided value is
-         smaller than the limit. -->
-    <integer translatable="false" name="config_wifi_framework_soft_ap_timeout_delay">600000</integer>
+         are no connected devices. -->
+    <integer translatable="false" name="config_wifiFrameworkSoftApShutDownTimeoutMilliseconds">600000</integer>
+
 
     <!-- Integer indicating maximum hardware supported client number of soft ap -->
-    <integer translatable="false" name="config_wifi_hardware_soft_ap_max_client_count">16</integer>
+    <integer translatable="false" name="config_wifiHardwareSoftapMaxClientCount">16</integer>
 
     <string  translatable="false" name="config_wifi_random_mac_oui">DA-A1-19</string>
-    <string  translatable="false" name="config_wifi_framework_sap_2G_channel_list">1,6,11</string>
+
+    <!-- List of allowed channels in 2GHz band for softap. If the device doesn't want to restrict
+         channels this should be empty. Values is a comma separated channel string and/or channel
+         range string like '1-6,11'. -->
+    <string  translatable="false" name="config_wifiSoftap2gChannelList">1,6,11</string>
+
+    <!-- List of allowed channels in 5GHz band for softap. If the device doesn't want to restrict
+         channels this should be empty. Values is a comma separated channel string and/or channel
+         range string like '36-48,149'. -->
+    <string  translatable="false" name="config_wifiSoftap5gChannelList"></string>
+
+    <!-- List of allowed channels in 6GHz band for softap. If the device doesn't want to restrict
+         channels this should be empty. Values is a comma separated channel string and/or channel
+         range string like '36-48,149'. -->
+    <string  translatable="false" name="config_wifiSoftap6gChannelList"></string>
 
     <!-- Integer indicating associated full scan max num active channels -->
     <integer translatable="false" name="config_wifi_framework_associated_partial_scan_max_num_active_channels">6</integer>
@@ -156,7 +175,7 @@
     <bool translatable="false" name="config_wifi_framework_enable_soft_ap_sar_tx_power_limit">false</bool>
 
     <!-- Wifi Hal supports force client disconnect for softap -->
-    <bool translatable="false" name="config_wifi_sofap_client_force_disconnect_supported">true</bool>
+    <bool translatable="false" name="config_wifiSofapClientForceDisconnectSupported">true</bool>
 
     <!-- Wifi driver supports Automatic channel selection (ACS) for softap -->
     <bool translatable="false" name="config_wifi_softap_acs_supported">false</bool>
@@ -164,16 +183,26 @@
     <!-- Wifi driver Automatic channel selection (ACS) for softap to include dfs channels -->
     <bool translatable="false" name="config_wifi_softap_acs_include_dfs">false</bool>
 
-    <!-- Channel list restriction to Automatic channel selection (ACS) for softap. If the device
-         doesn't want to restrict channels this should be empty. Value is a comma separated channel
-         string and/or channel range string like '1-6,11' -->
-    <string translatable="false" name="config_wifi_softap_acs_supported_channel_list"></string>
+    <!-- Wifi driver supports WPA3 Simultaneous Authentication of Equals (WPA3-SAE) for softap -->
+    <bool translatable="false" name="config_wifi_softap_sae_supported">false</bool>
 
     <!-- Wifi driver supports IEEE80211AC for softap -->
     <bool translatable="false" name="config_wifi_softap_ieee80211ac_supported">false</bool>
 
     <!-- Wifi driver supports IEEE80211AX for softap -->
     <bool translatable="false" name="config_wifiSoftapIeee80211axSupported">false</bool>
+
+    <!-- Wifi driver supports IEEE80211AX single user beamformer for softap -->
+    <bool translatable="false" name="config_wifiSoftapHeSuBeamformerSupported">false</bool>
+
+    <!-- Wifi driver supports IEEE80211AX single user beamformee for softap -->
+    <bool translatable="false" name="config_wifiSoftapHeSuBeamformeeSupported">false</bool>
+
+    <!-- Wifi driver supports IEEE80211AX multiple user beamformer for softap -->
+    <bool translatable="false" name="config_wifiSoftapHeMuBeamformerSupported">false</bool>
+
+    <!-- Wifi driver supports IEEE80211AX TWT (Target Wake Time) for softap -->
+    <bool translatable="false" name="config_wifiSoftapHeTwtSupported">false</bool>
 
     <!-- Wifi driver supports 6GHz band for softap -->
     <bool translatable="false" name="config_wifiSoftap6ghzSupported">false</bool>
@@ -210,9 +239,6 @@
 
     <!-- Indicates that wifi link probing is supported on this device -->
     <bool translatable="false" name="config_wifi_link_probing_supported">false</bool>
-
-    <!-- Indicates that 11ax mode is supported on this device -->
-    <bool translatable="false" name="config_wifi_11ax_supported">false</bool>
 
     <!-- Indicates that contiguous 160MHz mode is supported on this device -->
     <bool translatable="false" name="config_wifi_contiguous_160mhz_supported">false</bool>
@@ -278,4 +304,33 @@
 
     <!-- Indicates that hidden networks are to be scanned during scan only mode -->
     <bool translatable="false" name="config_wifiScanHiddenNetworksScanOnlyMode">false</bool>
+
+    <!-- Enable logging WifiIsUnusableEvent in metrics which gets triggered when wifi becomes unusable. -->
+    <bool translatable="false" name="config_wifiIsUnusableEventMetricsEnabled">true</bool>
+
+    <!-- The minimum number of txBad the framework has to observe to trigger a wifi data stall. -->
+    <integer translatable="false" name="config_wifiDataStallMinTxBad">1</integer>
+
+    <!-- The minimum number of txSuccess the framework has to observe
+         to trigger a wifi data stall when rxSuccess is 0. -->
+    <integer translatable="false" name="config_wifiDataStallMinTxSuccessWithoutRx">50</integer>
+
+    <!-- Enable logging Wifi LinkSpeedCounts in metrics. -->
+    <bool translatable="false" name="config_wifiLinkSpeedMetricsEnabled">true</bool>
+
+    <!-- Enable the PNO frequency culling optimization. -->
+    <bool translatable="false" name="config_wifiPnoFrequencyCullingEnabled">true</bool>
+
+    <!-- Enable the PNO frequency culling optimization. -->
+    <bool translatable="false" name="config_wifiPnoRecencySortingEnabled">true</bool>
+
+    <!-- Suspend optimization. -->
+    <bool translatable="false" name="config_wifiSuspendOptimizationsEnabled">true</bool>
+
+    <!-- The interval in milliseconds at which wifi rtt ranging requests will be throttled when
+         they are coming from the background apps (default = 30 mins). -->
+    <integer translatable="false" name="config_wifiRttBackgroundExecGapMs">1800000</integer>
+
+    <!-- Integer indicating the RSSI and link layer stats polling interval in milliseconds when device is connected and screen is on -->
+    <integer translatable="false" name="config_wifiPollRssiIntervalMilliseconds">3000</integer>
 </resources>

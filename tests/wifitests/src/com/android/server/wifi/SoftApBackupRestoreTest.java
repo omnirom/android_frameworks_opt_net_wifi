@@ -21,6 +21,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
+import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiConfiguration;
 import android.util.BackupUtils;
@@ -35,6 +36,7 @@ import org.junit.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 
 /**
  * Unit tests for {@link com.android.server.wifi.SoftApBackupRestore}.
@@ -44,6 +46,13 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
 
     private SoftApBackupRestore mSoftApBackupRestore;
     private static final int LAST_WIFICOFIGURATION_BACKUP_VERSION = 3;
+    private static final boolean TEST_CLIENTCONTROLENABLE = false;
+    private static final int TEST_MAXNUMBEROFCLIENTS = 10;
+    private static final int TEST_SHUTDOWNTIMEOUTMILLIS = 600_000;
+    private static final ArrayList<MacAddress> TEST_BLOCKEDLIST = new ArrayList<>();
+    private static final String TEST_BLOCKED_CLIENT = "11:22:33:44:55:66";
+    private static final ArrayList<MacAddress> TEST_ALLOWEDLIST = new ArrayList<>();
+    private static final String TEST_ALLOWED_CLIENT = "aa:bb:cc:dd:ee:ff";
 
     /**
      * Asserts that the WifiConfigurations equal to SoftApConfiguration.
@@ -57,7 +66,7 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
         assertEquals(ApConfigUtil.convertWifiConfigBandToSoftApConfigBand(backup.apBand),
                 restore.getBand());
         assertEquals(backup.apChannel, restore.getChannel());
-        assertEquals(backup.preSharedKey, restore.getWpa2Passphrase());
+        assertEquals(backup.preSharedKey, restore.getPassphrase());
         int authType = backup.getAuthType();
         if (backup.getAuthType() == WifiConfiguration.KeyMgmt.WPA2_PSK) {
             assertEquals(SoftApConfiguration.SECURITY_TYPE_WPA2_PSK, restore.getSecurityType());
@@ -98,8 +107,10 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
         SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setSsid("TestAP");
         configBuilder.setChannel(40, SoftApConfiguration.BAND_5GHZ);
-        configBuilder.setWpa2Passphrase("TestPsk");
+        configBuilder.setPassphrase("TestPskPassphrase",
+                SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
         configBuilder.setHiddenSsid(true);
+
         SoftApConfiguration config = configBuilder.build();
 
         byte[] data = mSoftApBackupRestore.retrieveBackupDataFromSoftApConfiguration(config);
@@ -144,5 +155,74 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
                 mSoftApBackupRestore.retrieveSoftApConfigurationFromBackupData(data);
 
         assertWifiConfigurationEqualSoftApConfiguration(wifiConfig, restoredConfig);
+    }
+
+    /**
+     * Verifies that the serialization/de-serialization for wpa3-sae softap config works.
+     */
+    @Test
+    public void testSoftApConfigBackupAndRestoreWithWpa3SaeConfig() throws Exception {
+        SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setSsid("TestAP");
+        configBuilder.setBand(SoftApConfiguration.BAND_5GHZ);
+        configBuilder.setChannel(40, SoftApConfiguration.BAND_5GHZ);
+        configBuilder.setPassphrase("TestPskPassphrase",
+                SoftApConfiguration.SECURITY_TYPE_WPA3_SAE);
+        configBuilder.setHiddenSsid(true);
+        SoftApConfiguration config = configBuilder.build();
+
+        byte[] data = mSoftApBackupRestore.retrieveBackupDataFromSoftApConfiguration(config);
+        SoftApConfiguration restoredConfig =
+                mSoftApBackupRestore.retrieveSoftApConfigurationFromBackupData(data);
+
+        assertThat(config).isEqualTo(restoredConfig);
+    }
+
+    /**
+     * Verifies that the serialization/de-serialization for wpa3-sae-transition softap config.
+     */
+    @Test
+    public void testSoftApConfigBackupAndRestoreWithWpa3SaeTransitionConfig() throws Exception {
+        SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setSsid("TestAP");
+        configBuilder.setBand(SoftApConfiguration.BAND_5GHZ);
+        configBuilder.setChannel(40, SoftApConfiguration.BAND_5GHZ);
+        configBuilder.setPassphrase("TestPskPassphrase",
+                SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION);
+        configBuilder.setHiddenSsid(true);
+        SoftApConfiguration config = configBuilder.build();
+
+        byte[] data = mSoftApBackupRestore.retrieveBackupDataFromSoftApConfiguration(config);
+        SoftApConfiguration restoredConfig =
+                mSoftApBackupRestore.retrieveSoftApConfigurationFromBackupData(data);
+
+        assertThat(config).isEqualTo(restoredConfig);
+    }
+
+    /**
+     * Verifies that the serialization/de-serialization for wpa3-sae-transition softap config.
+     */
+    @Test
+    public void testSoftApConfigBackupAndRestoreWithMaxShutDonwClientList() throws Exception {
+        TEST_BLOCKEDLIST.add(MacAddress.fromString(TEST_BLOCKED_CLIENT));
+        TEST_ALLOWEDLIST.add(MacAddress.fromString(TEST_ALLOWED_CLIENT));
+        SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setSsid("TestAP");
+        configBuilder.setBand(SoftApConfiguration.BAND_5GHZ);
+        configBuilder.setChannel(40, SoftApConfiguration.BAND_5GHZ);
+        configBuilder.setPassphrase("TestPskPassphrase",
+                SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION);
+        configBuilder.setHiddenSsid(true);
+        configBuilder.setMaxNumberOfClients(TEST_MAXNUMBEROFCLIENTS);
+        configBuilder.setShutdownTimeoutMillis(TEST_SHUTDOWNTIMEOUTMILLIS);
+        configBuilder.enableClientControlByUser(TEST_CLIENTCONTROLENABLE);
+        configBuilder.setClientList(TEST_BLOCKEDLIST, TEST_ALLOWEDLIST);
+        SoftApConfiguration config = configBuilder.build();
+
+        byte[] data = mSoftApBackupRestore.retrieveBackupDataFromSoftApConfiguration(config);
+        SoftApConfiguration restoredConfig =
+                mSoftApBackupRestore.retrieveSoftApConfigurationFromBackupData(data);
+
+        assertThat(config).isEqualTo(restoredConfig);
     }
 }

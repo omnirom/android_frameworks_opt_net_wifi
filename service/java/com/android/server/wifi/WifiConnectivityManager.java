@@ -32,6 +32,7 @@ import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.WifiScanner.PnoSettings;
 import android.net.wifi.WifiScanner.ScanSettings;
 import android.os.Handler;
+import android.os.HandlerExecutor;
 import android.os.Process;
 import android.os.WorkSource;
 import android.util.LocalLog;
@@ -950,7 +951,8 @@ public class WifiConnectivityManager {
 
         SingleScanListener singleScanListener =
                 new SingleScanListener(isFullBandScan);
-        mScanner.startScan(settings, singleScanListener, workSource);
+        mScanner.startScan(
+                settings, new HandlerExecutor(mEventHandler), singleScanListener, workSource);
         mWifiMetrics.incrementConnectivityOneshotScanCount();
     }
 
@@ -1053,7 +1055,8 @@ public class WifiConnectivityManager {
 
         mPnoScanListener.clearScanDetails();
 
-        mScanner.startDisconnectedPnoScan(scanSettings, pnoSettings, mPnoScanListener);
+        mScanner.startDisconnectedPnoScan(
+                scanSettings, pnoSettings, new HandlerExecutor(mEventHandler), mPnoScanListener);
         mPnoScanStarted = true;
         mWifiMetrics.logPnoScanStart();
     }
@@ -1337,7 +1340,7 @@ public class WifiConnectivityManager {
         mScanner = mWifiInjector.getWifiScanner();
         checkNotNull(mScanner);
         // Register for all single scan results
-        mScanner.registerScanListener(mAllSingleScanListener);
+        mScanner.registerScanListener(new HandlerExecutor(mEventHandler), mAllSingleScanListener);
     }
 
     /**

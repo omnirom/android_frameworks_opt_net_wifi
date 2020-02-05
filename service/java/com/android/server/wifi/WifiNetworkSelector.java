@@ -531,8 +531,6 @@ public class WifiNetworkSelector {
     private boolean setLegacyUserConnectChoice(@NonNull final WifiConfiguration selected) {
         boolean change = false;
         String key = selected.getKey();
-        // This is only used for setting the connect choice timestamp for debugging purposes.
-        long currentTime = mClock.getWallClockMillis();
         List<WifiConfiguration> configuredNetworks = mWifiConfigManager.getConfiguredNetworks();
 
         for (WifiConfiguration network : configuredNetworks) {
@@ -540,8 +538,7 @@ public class WifiNetworkSelector {
             if (network.networkId == selected.networkId) {
                 if (status.getConnectChoice() != null) {
                     localLog("Remove user selection preference of " + status.getConnectChoice()
-                            + " Set Time: " + status.getConnectChoiceTimestamp() + " from "
-                            + network.SSID + " : " + network.networkId);
+                            + " from " + network.SSID + " : " + network.networkId);
                     mWifiConfigManager.clearNetworkConnectChoice(network.networkId);
                     change = true;
                 }
@@ -550,9 +547,9 @@ public class WifiNetworkSelector {
 
             if (status.getSeenInLastQualifiedNetworkSelection()
                         && !key.equals(status.getConnectChoice())) {
-                localLog("Add key: " + key + " Set Time: " + currentTime + " to "
+                localLog("Add key: " + key + " to "
                         + toNetworkString(network));
-                mWifiConfigManager.setNetworkConnectChoice(network.networkId, key, currentTime);
+                mWifiConfigManager.setNetworkConnectChoice(network.networkId, key);
                 change = true;
             }
         }
@@ -655,7 +652,7 @@ public class WifiNetworkSelector {
     }
 
     /**
-     * Select the best network from the ones in range.
+     * Select the best network from the ones in range. Scan detail cache is also updated here.
      *
      * @param scanDetails    List of ScanDetail for all the APs in range
      * @param bssidBlacklist Blacklisted BSSIDs
@@ -685,6 +682,9 @@ public class WifiNetworkSelector {
 
         // Shall we start network selection at all?
         if (!isNetworkSelectionNeeded(scanDetails, wifiInfo, connected, disconnected)) {
+            // If network selection is skipped, update scan detail cache before exit.
+            // Otherwise, scan detail cache will be updated in each nominator.
+            updateScanDetailCache(scanDetails);
             return null;
         }
 
@@ -700,6 +700,9 @@ public class WifiNetworkSelector {
         mFilteredNetworks = filterScanResults(scanDetails, bssidBlacklist,
                 connected && wifiInfo.getScore() >= WIFI_POOR_SCORE, currentBssid);
         if (mFilteredNetworks.size() == 0) {
+            // If network selection is skipped, update scan detail cache before exit.
+            // Otherwise, scan detail cache will be updated in each nominator.
+            updateScanDetailCache(scanDetails);
             return null;
         }
 
@@ -828,6 +831,12 @@ public class WifiNetworkSelector {
         if (config.isPasspoint()) {
             config.SSID = choice.candidateKey.matchInfo.networkSsid;
             mWifiConfigManager.addOrUpdateNetwork(config, config.creatorUid, config.creatorName);
+        }
+    }
+
+    private void updateScanDetailCache(List<ScanDetail> scanDetails) {
+        for (ScanDetail scanDetail : scanDetails) {
+            mWifiConfigManager.updateScanDetailCacheFromScanDetail(scanDetail);
         }
     }
 

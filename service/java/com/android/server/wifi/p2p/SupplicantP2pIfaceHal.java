@@ -40,7 +40,7 @@ import android.net.wifi.p2p.WifiP2pGroup;
 import android.net.wifi.p2p.WifiP2pGroupList;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.nsd.WifiP2pServiceInfo;
-import android.os.HwRemoteBinder;
+import android.os.IHwBinder.DeathRecipient;
 import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Log;
@@ -102,7 +102,7 @@ public class SupplicantP2pIfaceHal {
             }
         }
     };
-    private final HwRemoteBinder.DeathRecipient mServiceManagerDeathRecipient =
+    private final DeathRecipient mServiceManagerDeathRecipient =
             cookie -> {
                 Log.w(TAG, "IServiceManager died: cookie=" + cookie);
                 synchronized (mLock) {
@@ -110,7 +110,7 @@ public class SupplicantP2pIfaceHal {
                     mIServiceManager = null; // Will need to register a new ServiceNotification
                 }
             };
-    private final HwRemoteBinder.DeathRecipient mSupplicantDeathRecipient =
+    private final DeathRecipient mSupplicantDeathRecipient =
             cookie -> {
                 Log.w(TAG, "ISupplicant/ISupplicantStaIface died: cookie=" + cookie);
                 synchronized (mLock) {
@@ -118,7 +118,7 @@ public class SupplicantP2pIfaceHal {
                 }
             };
 
-    private final HwRemoteBinder.DeathRecipient mSupplicantVendorDeathRecipient =
+    private final DeathRecipient mSupplicantVendorDeathRecipient =
             cookie -> {
                 synchronized (mLock) {
                     Log.w(TAG, "ISupplicantVendor/ISupplicantVendorP2PIface died: cookie=" + cookie);
@@ -807,7 +807,8 @@ public class SupplicantP2pIfaceHal {
     }
 
     /**
-     * Returns SupplicantP2pIface on success, logs failure to call methodStr and returns false otherwise
+     * Returns SupplicantP2pIface on success, logs failure to call methodStr
+     * and returns false otherwise
      */
     private android.hardware.wifi.supplicant.V1_2.ISupplicantP2pIface
             getSupplicantP2pIfaceAndLogFailureV1_2(String method) {
