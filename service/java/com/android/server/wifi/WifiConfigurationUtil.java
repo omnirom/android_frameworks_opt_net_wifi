@@ -244,7 +244,7 @@ public class WifiConfigurationUtil {
                                   newEnterpriseConfig.getIdentity())) {
                 return true;
             }
-            if (!existingEnterpriseConfig.requireSimCredential()
+            if (!existingEnterpriseConfig.isAuthenticationSimBased()
                     && !TextUtils.equals(existingEnterpriseConfig.getAnonymousIdentity(),
                     newEnterpriseConfig.getAnonymousIdentity())) {
                 return true;

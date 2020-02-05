@@ -18,6 +18,7 @@ package com.android.server.wifi.util;
 
 import android.annotation.NonNull;
 import android.content.Context;
+import android.content.res.Resources;
 import android.net.MacAddress;
 import android.net.wifi.SoftApCapability;
 import android.net.wifi.SoftApConfiguration;
@@ -30,6 +31,7 @@ import com.android.server.wifi.WifiNative;
 import com.android.wifi.resources.R;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -48,11 +50,6 @@ public class ApConfigUtil {
     public static final int ERROR_GENERIC = 2;
     public static final int ERROR_UNSUPPORTED_CONFIGURATION = 3;
 
-    /* Reason code in IEEE Std 802.11-2016, 9.4.1.7, Table 9-45. */
-    public static final int DISCONNECT_REASON_CODE_UNSPECIFIED_REASON = 1;
-    public static final int DISCONNECT_REASON_CODE_INVALID_AUTHENTICATION = 2;
-    public static final int DISCONNECT_REASON_CODE_NO_MORE_STAS = 5;
-
     /* Random number generator used for AP channel selection. */
     private static final Random sRandom = new Random();
 
@@ -63,7 +60,7 @@ public class ApConfigUtil {
      * @param band of channel to convert
      * @return center frequency in Mhz of the channel, -1 if no match
      */
-    public static int convertChannelToFrequency(int channel, int band) {
+    public static int convertChannelToFrequency(int channel, @BandType int band) {
         if (band == SoftApConfiguration.BAND_2GHZ) {
             if (channel == 14) {
                 return 2484;
@@ -177,35 +174,153 @@ public class ApConfigUtil {
     }
 
     /**
+     * Convert string to channel list
+     * Format of the list is a comma separated channel numbers, or range of channel numbers
+     * Example, "34-48, 149".
+     * @param channelString for a comma separated channel numbers, or range of channel numbers
+     *        such as "34-48, 149"
+     * @return list of channel numbers
+     */
+    public static List<Integer> convertStringToChannelList(String channelString) {
+        if (channelString == null) {
+            return null;
+        }
+
+        List<Integer> channelList = new ArrayList<Integer>();
+
+        for (String channelRange : channelString.split(",")) {
+            try {
+                if (channelRange.contains("-")) {
+                    String[] channels = channelRange.split("-");
+                    if (channels.length != 2) {
+                        Log.e(TAG, "Unrecognized channel range, Length is " + channels.length);
+                        continue;
+                    }
+                    int start = Integer.parseInt(channels[0].trim());
+                    int end = Integer.parseInt(channels[1].trim());
+                    if (start > end) {
+                        Log.e(TAG, "Invalid channel range, from " + start + " to " + end);
+                        continue;
+                    }
+
+                    for (int channel = start; channel <= end; channel++) {
+                        channelList.add(channel);
+                    }
+                } else {
+                    channelList.add(Integer.parseInt(channelRange.trim()));
+                }
+            } catch (NumberFormatException e) {
+                // Ignore malformed string
+                Log.e(TAG, "Malformed channel value detected: " + e);
+                continue;
+            }
+        }
+        return channelList;
+    }
+
+    /**
+     * Get channel frequencies for band that are allowed by both regulatory and OEM configuration
+     *
+     * @param band to get channels for
+     * @param wifiNative reference used to get regulatory restrictionsimport java.util.Arrays;
+     * @param resources used to get OEM restrictions
+     * @return A list of frequencies that are allowed, null on error.
+     */
+    public static List<Integer> getAvailableChannelFreqsForBand(
+            @BandType int band, WifiNative wifiNative, Resources resources) {
+        if (!isBandValid(band) || isMultiband(band)) {
+            return null;
+        }
+
+        List<Integer> configuredList;
+        int scannerBand;
+        switch (band) {
+            case SoftApConfiguration.BAND_2GHZ:
+                configuredList = convertStringToChannelList(resources.getString(
+                        R.string.config_wifiSoftap2gChannelList));
+                scannerBand = WifiScanner.WIFI_BAND_24_GHZ;
+                break;
+            case SoftApConfiguration.BAND_5GHZ:
+                configuredList = convertStringToChannelList(resources.getString(
+                        R.string.config_wifiSoftap5gChannelList));
+                scannerBand = WifiScanner.WIFI_BAND_5_GHZ;
+                break;
+            case SoftApConfiguration.BAND_6GHZ:
+                configuredList = convertStringToChannelList(resources.getString(
+                        R.string.config_wifiSoftap6gChannelList));
+                scannerBand = WifiScanner.WIFI_BAND_6_GHZ;
+                break;
+            default:
+                return null;
+        }
+
+        // Get the allowed list of channel frequencies in MHz
+        int[] regulatoryArray = wifiNative.getChannelsForBand(scannerBand);
+        List<Integer> regulatoryList = new ArrayList<Integer>();
+        for (int freq : regulatoryArray) {
+            regulatoryList.add(freq);
+        }
+
+        if (configuredList == null || configuredList.isEmpty()) {
+            return regulatoryList;
+        }
+
+        List<Integer> filteredList = new ArrayList<Integer>();
+        // Otherwise, filter the configured list
+        for (int channel : configuredList) {
+            int channelFreq = convertChannelToFrequency(channel, band);
+
+            if (regulatoryList.contains(channelFreq)) {
+                filteredList.add(channelFreq);
+            }
+        }
+        return filteredList;
+    }
+
+    /**
      * Return a channel number for AP setup based on the frequency band.
      * @param apBand one or combination of the values of SoftApConfiguration.BAND_*.
-     * @param allowed2GChannels list of allowed 2GHz channels
-     * @param allowed5GFreqList list of allowed 5GHz frequencies
-     * @param allowed6GFreqList list of allowed 6GHz frequencies
+     * @param wifiNative reference used to collect regulatory restrictions.
+     * @param resources the resources to use to get configured allowed channels.
      * @return a valid channel frequency on success, -1 on failure.
      */
-    public static int chooseApChannel(int apBand,
-                                      ArrayList<Integer> allowed2GChannels,
-                                      int[] allowed5GFreqList,
-                                      int[] allowed6GFreqList) {
+    public static int chooseApChannel(int apBand, WifiNative wifiNative, Resources resources) {
         if (!isBandValid(apBand)) {
             Log.e(TAG, "Invalid band: " + apBand);
             return -1;
         }
 
         int totalChannelCount = 0;
-        int size2gList = (allowed2GChannels != null) ? allowed2GChannels.size() : 0;
-        int size5gList = (allowed5GFreqList != null) ? allowed5GFreqList.length : 0;
-        int size6gList = (allowed6GFreqList != null) ? allowed6GFreqList.length : 0;
+        int size2gList = 0;
+        int size5gList = 0;
+        int size6gList = 0;
+        List<Integer> allowed2gFreqList = null;
+        List<Integer> allowed5gFreqList = null;
+        List<Integer> allowed6gFreqList = null;
 
         if ((apBand & SoftApConfiguration.BAND_2GHZ) != 0) {
-            totalChannelCount += size2gList;
+            allowed2gFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_2GHZ,
+                    wifiNative, resources);
+            if (allowed2gFreqList != null) {
+                size2gList = allowed2gFreqList.size();
+                totalChannelCount += size2gList;
+            }
         }
         if ((apBand & SoftApConfiguration.BAND_5GHZ) != 0) {
-            totalChannelCount += size5gList;
+            allowed5gFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_5GHZ,
+                    wifiNative, resources);
+            if (allowed5gFreqList != null) {
+                size5gList = allowed5gFreqList.size();
+                totalChannelCount += size5gList;
+            }
         }
         if ((apBand & SoftApConfiguration.BAND_6GHZ) != 0) {
-            totalChannelCount += size6gList;
+            allowed6gFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_6GHZ,
+                    wifiNative, resources);
+            if (allowed6gFreqList != null) {
+                size6gList = allowed6gFreqList.size();
+                totalChannelCount += size6gList;
+            }
         }
 
         if (totalChannelCount == 0) {
@@ -224,39 +339,37 @@ public class ApConfigUtil {
         // Pick a channel
         int selectedChannelIndex = sRandom.nextInt(totalChannelCount);
 
-        if ((apBand & SoftApConfiguration.BAND_2GHZ) != 0) {
+        if (size2gList != 0) {
             if (selectedChannelIndex < size2gList) {
-                return convertChannelToFrequency(
-                    allowed2GChannels.get(selectedChannelIndex).intValue(),
-                    SoftApConfiguration.BAND_2GHZ);
+                return allowed2gFreqList.get(selectedChannelIndex).intValue();
             } else {
                 selectedChannelIndex -= size2gList;
             }
         }
 
-        if ((apBand & SoftApConfiguration.BAND_5GHZ) != 0) {
+        if (size5gList != 0) {
             if (selectedChannelIndex < size5gList) {
-                return allowed5GFreqList[selectedChannelIndex];
+                return allowed5gFreqList.get(selectedChannelIndex).intValue();
             } else {
                 selectedChannelIndex -= size5gList;
             }
         }
 
-        return allowed6GFreqList[selectedChannelIndex];
+        return allowed6gFreqList.get(selectedChannelIndex).intValue();
     }
 
     /**
      * Update AP band and channel based on the provided country code and band.
      * This will also set
      * @param wifiNative reference to WifiNative
+     * @param resources the resources to use to get configured allowed channels.
      * @param countryCode country code
-     * @param allowed2GChannels list of allowed 2GHz channels
      * @param config configuration to update
      * @return an integer result code
      */
     public static int updateApChannelConfig(WifiNative wifiNative,
+                                            Resources resources,
                                             String countryCode,
-                                            ArrayList<Integer> allowed2GChannels,
                                             SoftApConfiguration.Builder configBuilder,
                                             SoftApConfiguration config,
                                             boolean acsEnabled) {
@@ -275,9 +388,7 @@ public class ApConfigUtil {
 
         /* Select a channel if it is not specified and ACS is not enabled */
         if ((config.getChannel() == 0) && !acsEnabled) {
-            int freq = chooseApChannel(config.getBand(), allowed2GChannels,
-                    wifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ),
-                    wifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_6_GHZ));
+            int freq = chooseApChannel(config.getBand(), wifiNative, resources);
             if (freq == -1) {
                 /* We're not able to get channel from wificond. */
                 Log.e(TAG, "Failed to get available channel.");
@@ -291,53 +402,14 @@ public class ApConfigUtil {
     }
 
     /**
-     * Helper function for converting SoftapConfiguration to WifiConfiguration.
-     * Note that WifiConfiguration only Supports 2GHz, 5GHz, 2GHz+5GHz bands,
-     * so conversion is limited to these bands.
-     */
-    @NonNull
-    public static WifiConfiguration convertToWifiConfiguration(
-            @NonNull SoftApConfiguration softApConfig) {
-        WifiConfiguration wifiConfig = new WifiConfiguration();
-
-        wifiConfig.SSID = softApConfig.getSsid();
-        if (softApConfig.getBssid() != null) {
-            wifiConfig.BSSID = softApConfig.getBssid().toString();
-        }
-        wifiConfig.preSharedKey = softApConfig.getWpa2Passphrase();
-        wifiConfig.hiddenSSID = softApConfig.isHiddenSsid();
-        switch (softApConfig.getBand()) {
-            case SoftApConfiguration.BAND_2GHZ:
-                wifiConfig.apBand  = WifiConfiguration.AP_BAND_2GHZ;
-                break;
-            case SoftApConfiguration.BAND_5GHZ:
-                wifiConfig.apBand  = WifiConfiguration.AP_BAND_5GHZ;
-                break;
-            default:
-                wifiConfig.apBand  = WifiConfiguration.AP_BAND_ANY;
-                break;
-        }
-        wifiConfig.apChannel = softApConfig.getChannel();
-        int authType = softApConfig.getSecurityType();
-        switch (authType) {
-            case SoftApConfiguration.SECURITY_TYPE_WPA2_PSK:
-                authType = WifiConfiguration.KeyMgmt.WPA2_PSK;
-                break;
-            default:
-                authType = WifiConfiguration.KeyMgmt.NONE;
-                break;
-        }
-        wifiConfig.allowedKeyManagement.set(authType);
-
-        return wifiConfig;
-    }
-
-    /**
      * Helper function for converting WifiConfiguration to SoftApConfiguration.
      *
      * Only Support None and WPA2 configuration conversion.
      * Note that WifiConfiguration only Supports 2GHz, 5GHz, 2GHz+5GHz bands,
      * so conversion is limited to these bands.
+     *
+     * @param wifiConfig the WifiConfiguration which need to convert.
+     * @return the SoftApConfiguration which convert from WifiConfiguration.
      */
     @NonNull
     public static SoftApConfiguration fromWifiConfiguration(
@@ -348,7 +420,8 @@ public class ApConfigUtil {
             configBuilder.setBssid(MacAddress.fromString(wifiConfig.BSSID));
         }
         if (wifiConfig.getAuthType() == WifiConfiguration.KeyMgmt.WPA2_PSK) {
-            configBuilder.setWpa2Passphrase(wifiConfig.preSharedKey);
+            configBuilder.setPassphrase(wifiConfig.preSharedKey,
+                    SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
         }
         configBuilder.setHiddenSsid(wifiConfig.hiddenSSID);
 
@@ -375,6 +448,9 @@ public class ApConfigUtil {
 
     /**
      * Helper function to creating SoftApCapability instance with initial field from resource file.
+     *
+     * @param context the caller context used to get value from resource file.
+     * @return SoftApCapability which updated the feature support or not from resource.
      */
     @NonNull
     public static SoftApCapability updateCapabilityFromResource(@NonNull Context context) {
@@ -385,19 +461,91 @@ public class ApConfigUtil {
             features |= SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
         }
 
-        if (context.getResources().getBoolean(
-                R.bool.config_wifi_sofap_client_force_disconnect_supported)) {
+        if (isClientForceDisconnectSupported(context)) {
             Log.d(TAG, "Update Softap capability, add client control feature support");
             features |= SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT;
         }
+
+        if (isWpa3SaeSupported(context)) {
+            Log.d(TAG, "Update Softap capability, add SAE feature support");
+            features |= SoftApCapability.SOFTAP_FEATURE_WPA3_SAE;
+        }
         SoftApCapability capability = new SoftApCapability(features);
         int hardwareSupportedMaxClient = context.getResources().getInteger(
-                R.integer.config_wifi_hardware_soft_ap_max_client_count);
+                R.integer.config_wifiHardwareSoftapMaxClientCount);
         if (hardwareSupportedMaxClient > 0) {
             Log.d(TAG, "Update Softap capability, max client = " + hardwareSupportedMaxClient);
             capability.setMaxSupportedClients(hardwareSupportedMaxClient);
         }
 
         return capability;
+    }
+
+    /**
+     * Helper function to get hal support client force disconnect or not.
+     *
+     * @param context the caller context used to get value from resource file.
+     * @return true if supported, false otherwise.
+     */
+    public static boolean isClientForceDisconnectSupported(@NonNull Context context) {
+        return context.getResources().getBoolean(
+                R.bool.config_wifiSofapClientForceDisconnectSupported);
+    }
+
+    /**
+     * Helper function to get SAE support or not.
+     *
+     * @param context the caller context used to get value from resource file.
+     * @return true if supported, false otherwise.
+     */
+    public static boolean isWpa3SaeSupported(@NonNull Context context) {
+        return context.getResources().getBoolean(
+                R.bool.config_wifi_softap_sae_supported);
+    }
+
+    /**
+     * Helper function for comparing two SoftApConfiguration.
+     *
+     * @param currentConfig the original configuration.
+     * @param newConfig the new configuration which plan to apply.
+     * @return true if the difference between the two configurations requires a restart to apply,
+     *         false otherwise.
+     */
+    public static boolean checkConfigurationChangeNeedToRestart(
+            SoftApConfiguration currentConfig, SoftApConfiguration newConfig) {
+        return currentConfig.getSsid() != newConfig.getSsid()
+                || currentConfig.getBssid() != newConfig.getBssid()
+                || currentConfig.getSecurityType() != newConfig.getSecurityType()
+                || currentConfig.getPassphrase() != newConfig.getPassphrase()
+                || currentConfig.isHiddenSsid() != newConfig.isHiddenSsid()
+                || currentConfig.getBand() != newConfig.getBand()
+                || currentConfig.getChannel() != newConfig.getChannel();
+    }
+
+
+    /**
+     * Helper function for checking all of the configuration are supported or not.
+     *
+     * @param config target configuration want to check.
+     * @param capability the capability which indicate feature support or not.
+     * @return true if supported, false otherwise.
+     */
+    public static boolean checkSupportAllConfiguration(SoftApConfiguration config,
+            SoftApCapability capability) {
+        if (!capability.isFeatureSupported(
+                SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)
+                && (config.getMaxNumberOfClients() != 0 || config.isClientControlByUserEnabled())) {
+            Log.d(TAG, "Error, Client control requires HAL support");
+            return false;
+        }
+
+        if (!capability.isFeatureSupported(SoftApCapability.SOFTAP_FEATURE_WPA3_SAE)
+                && (config.getSecurityType()
+                == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION
+                || config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE)) {
+            Log.d(TAG, "Error, SAE requires HAL support");
+            return false;
+        }
+        return true;
     }
 }

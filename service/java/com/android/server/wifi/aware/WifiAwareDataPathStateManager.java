@@ -29,9 +29,10 @@ import android.net.LinkProperties;
 import android.net.MacAddress;
 import android.net.MatchAllNetworkSpecifier;
 import android.net.NetworkAgent;
+import android.net.NetworkAgentConfig;
 import android.net.NetworkCapabilities;
 import android.net.NetworkFactory;
-import android.net.NetworkInfo;
+import android.net.NetworkProvider;
 import android.net.NetworkRequest;
 import android.net.NetworkSpecifier;
 import android.net.RouteInfo;
@@ -74,7 +75,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
-import java.util.stream.Collectors;
 
 /**
  * Manages Aware data-path lifetime: interface creation/deletion, data-path setup and tear-down.
@@ -566,8 +566,6 @@ public class WifiAwareDataPathStateManager {
             nnri.peerDataMac = mac;
             nnri.channelInfo = channelInfo;
 
-            NetworkInfo networkInfo = new NetworkInfo(ConnectivityManager.TYPE_NONE, 0,
-                    NETWORK_TAG, "");
             NetworkCapabilities networkCapabilities = new NetworkCapabilities(
                     sNetworkCapabilitiesFilter);
             LinkProperties linkProperties = new LinkProperties();
@@ -647,19 +645,22 @@ public class WifiAwareDataPathStateManager {
             }
 
             if (!mNiWrapper.configureAgentProperties(nnri, nnri.equivalentRequests, ndpId,
-                    networkInfo, networkCapabilities, linkProperties)) {
+                    networkCapabilities, linkProperties)) {
                 declareUnfullfillableAndEndDp(nnri, ndpId);
                 return networkSpecifier;
             }
 
+            final NetworkAgentConfig naConfig = new NetworkAgentConfig.Builder()
+                    .setLegacyType(ConnectivityManager.TYPE_NONE)
+                    .setLegacyTypeName(NETWORK_TAG)
+                    .build();
+
             nnri.networkAgent = new WifiAwareNetworkAgent(mLooper, mContext,
                     AGENT_TAG_PREFIX + nnri.ndpId,
-                    new NetworkInfo(ConnectivityManager.TYPE_NONE, 0, NETWORK_TAG, ""),
                     networkCapabilities, linkProperties, NETWORK_FACTORY_SCORE_AVAIL,
-                    nnri);
+                    naConfig, mNetworkFactory.getProvider(), nnri);
             nnri.startValidationTimestamp = mClock.getElapsedSinceBootMillis();
-            handleAddressValidation(nnri, linkProperties, networkInfo, ndpId,
-                    networkSpecifier.isOutOfBand());
+            handleAddressValidation(nnri, linkProperties, ndpId, networkSpecifier.isOutOfBand());
         } else {
             if (VDBG || mVerboseLoggingEnabled) {
                 Log.v(TAG, "onDataPathConfirm: data-path for networkSpecifier=" + networkSpecifier
@@ -675,10 +676,9 @@ public class WifiAwareDataPathStateManager {
     }
 
     private void handleAddressValidation(AwareNetworkRequestInformation nnri,
-            LinkProperties linkProperties, NetworkInfo networkInfo, int ndpId,
-            boolean isOutOfBand) {
+            LinkProperties linkProperties, int ndpId, boolean isOutOfBand) {
         if (mNiWrapper.isAddressUsable(linkProperties)) {
-            mNiWrapper.sendAgentNetworkInfo(nnri.networkAgent, networkInfo);
+            mNiWrapper.setConnected(nnri.networkAgent);
 
             mAwareMetrics.recordNdpStatus(NanStatusType.SUCCESS, isOutOfBand, nnri.startTimestamp);
             nnri.startTimestamp = mClock.getElapsedSinceBootMillis(); // update time-stamp
@@ -695,7 +695,7 @@ public class WifiAwareDataPathStateManager {
                 Log.d(TAG, "Failed address validation");
             }
             mHandler.postDelayed(() -> {
-                handleAddressValidation(nnri, linkProperties, networkInfo, ndpId, isOutOfBand);
+                handleAddressValidation(nnri, linkProperties, ndpId, isOutOfBand);
             }, ADDRESS_VALIDATION_RETRY_INTERVAL_MS);
         }
     }
@@ -841,8 +841,7 @@ public class WifiAwareDataPathStateManager {
                 return false;
             }
 
-            NetworkSpecifier networkSpecifierBase =
-                    request.networkCapabilities.getNetworkSpecifier();
+            NetworkSpecifier networkSpecifierBase = request.getNetworkSpecifier();
             if (!(networkSpecifierBase instanceof WifiAwareNetworkSpecifier)) {
                 Log.w(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request
                         + " - not a WifiAwareNetworkSpecifier");
@@ -911,8 +910,7 @@ public class WifiAwareDataPathStateManager {
                         + networkRequest + ", score=" + score);
             }
 
-            NetworkSpecifier networkSpecifierObj =
-                    networkRequest.networkCapabilities.getNetworkSpecifier();
+            NetworkSpecifier networkSpecifierObj = networkRequest.getNetworkSpecifier();
             WifiAwareNetworkSpecifier networkSpecifier = null;
             if (networkSpecifierObj instanceof WifiAwareNetworkSpecifier) {
                 networkSpecifier = (WifiAwareNetworkSpecifier) networkSpecifierObj;
@@ -964,8 +962,7 @@ public class WifiAwareDataPathStateManager {
                         + networkRequest);
             }
 
-            NetworkSpecifier networkSpecifierObj =
-                    networkRequest.networkCapabilities.getNetworkSpecifier();
+            NetworkSpecifier networkSpecifierObj = networkRequest.getNetworkSpecifier();
             WifiAwareNetworkSpecifier networkSpecifier = null;
             if (networkSpecifierObj instanceof WifiAwareNetworkSpecifier) {
                 networkSpecifier = (WifiAwareNetworkSpecifier) networkSpecifierObj;
@@ -1029,20 +1026,19 @@ public class WifiAwareDataPathStateManager {
      */
     @VisibleForTesting
     public class WifiAwareNetworkAgent extends NetworkAgent {
-        private NetworkInfo mNetworkInfo;
         private AwareNetworkRequestInformation mAwareNetworkRequestInfo;
 
-        WifiAwareNetworkAgent(Looper looper, Context context, String logTag, NetworkInfo ni,
+        WifiAwareNetworkAgent(Looper looper, Context context, String logTag,
                 NetworkCapabilities nc, LinkProperties lp, int score,
+                NetworkAgentConfig config, NetworkProvider provider,
                 AwareNetworkRequestInformation anri) {
-            super(looper, context, logTag, ni, nc, lp, score);
-
-            mNetworkInfo = ni;
+            super(context, looper, logTag, nc, lp, score, config, provider);
             mAwareNetworkRequestInfo = anri;
+            register();
         }
 
         @Override
-        protected void unwanted() {
+        public void onNetworkUnwanted() {
             if (VDBG || mVerboseLoggingEnabled) {
                 Log.v(TAG, "WifiAwareNetworkAgent.unwanted: request=" + mAwareNetworkRequestInfo);
             }
@@ -1059,9 +1055,7 @@ public class WifiAwareDataPathStateManager {
                 Log.v(TAG, "WifiAwareNetworkAgent.reconfigureAgentAsDisconnected: request="
                         + mAwareNetworkRequestInfo);
             }
-
-            mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.DISCONNECTED, null, "");
-            sendNetworkInfo(mNetworkInfo);
+            unregister();
         }
     }
 
@@ -1222,10 +1216,10 @@ public class WifiAwareDataPathStateManager {
 
         private NetworkCapabilities getNetworkCapabilities() {
             NetworkCapabilities nc = new NetworkCapabilities(sNetworkCapabilitiesFilter);
-            nc.setNetworkSpecifier(
-                    new WifiAwareAgentNetworkSpecifier(equivalentRequests.stream().map(
-                            nr -> nr.networkCapabilities.getNetworkSpecifier()).collect(
-                            Collectors.toList()).toArray(new WifiAwareNetworkSpecifier[0])));
+            nc.setNetworkSpecifier(new WifiAwareAgentNetworkSpecifier(
+                    equivalentRequests.stream()
+                            .map(NetworkRequest::getNetworkSpecifier)
+                            .toArray(WifiAwareNetworkSpecifier[]::new)));
             if (peerIpv6 != null) {
                 nc.setTransportInfo(
                         new WifiAwareNetworkInfo(peerIpv6, peerPort, peerTransportProtocol));
@@ -1479,8 +1473,7 @@ public class WifiAwareDataPathStateManager {
          */
         public boolean configureAgentProperties(AwareNetworkRequestInformation nnri,
                 Set<NetworkRequest> networkRequests, int ndpId,
-                NetworkInfo networkInfo, NetworkCapabilities networkCapabilities,
-                LinkProperties linkProperties) {
+                NetworkCapabilities networkCapabilities, LinkProperties linkProperties) {
             // find link-local address
             InetAddress linkLocal = null;
             NetworkInterface ni;
@@ -1516,14 +1509,10 @@ public class WifiAwareDataPathStateManager {
                 return false;
             }
 
-            // configure agent
-            networkInfo.setIsAvailable(true);
-            networkInfo.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, null);
-
-            networkCapabilities.setNetworkSpecifier(
-                    new WifiAwareAgentNetworkSpecifier(networkRequests.stream().map(
-                            nr -> nr.networkCapabilities.getNetworkSpecifier()).collect(
-                            Collectors.toList()).toArray(new WifiAwareNetworkSpecifier[0])));
+            networkCapabilities.setNetworkSpecifier(new WifiAwareAgentNetworkSpecifier(
+                    networkRequests.stream()
+                            .map(NetworkRequest::getNetworkSpecifier)
+                            .toArray(WifiAwareNetworkSpecifier[]::new)));
 
             linkProperties.setInterfaceName(nnri.interfaceName);
             linkProperties.addLinkAddress(new LinkAddress(linkLocal, 64));
@@ -1557,11 +1546,10 @@ public class WifiAwareDataPathStateManager {
         }
 
         /**
-         * Send updated network information to the agent.
+         * Tell the network agent the network is now connected.
          */
-        public void sendAgentNetworkInfo(WifiAwareNetworkAgent networkAgent,
-                NetworkInfo networkInfo) {
-            networkAgent.sendNetworkInfo(networkInfo);
+        public void setConnected(WifiAwareNetworkAgent networkAgent) {
+            networkAgent.setConnected();
         }
     }
 

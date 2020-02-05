@@ -22,6 +22,7 @@ import android.annotation.NonNull;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.net.MacAddress;
+import android.net.util.MacAddressUtils;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiConfiguration;
 import android.os.Environment;
@@ -43,7 +44,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
-import java.util.ArrayList;
 import java.util.Random;
 
 import javax.annotation.Nullable;
@@ -226,19 +226,40 @@ public class WifiApConfigStore {
         persistConfigAndTriggerBackupManagerProxy(config);
     }
 
-    public ArrayList<Integer> getAllowed2GChannel() {
-        String ap2GChannelListStr = mContext.getResources().getString(
-                R.string.config_wifi_framework_sap_2G_channel_list);
-        Log.d(TAG, "2G band allowed channels are:" + ap2GChannelListStr);
-
-        ArrayList<Integer> allowed2GChannels = new ArrayList<>();
-        if (ap2GChannelListStr != null) {
-            String[] channelList = ap2GChannelListStr.split(",");
-            for (String tmp : channelList) {
-                allowed2GChannels.add(Integer.parseInt(tmp));
+    /**
+     * Returns SoftApConfiguration in which some parameters might be reset to supported default
+     * config.
+     *
+     * MaxNumberOfClients and enableClientControlByUser will need HAL support client force
+     * disconnect. Reset to default when device doesn't support it.
+     *
+     * SAE/SAE-Transition need hardware support, reset to secured WPA2 security type when device
+     * doesn't support it.
+     */
+    public SoftApConfiguration resetToDefaultForUnsupportedConfig(
+            @NonNull SoftApConfiguration config) {
+        SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder(config);
+        if (!ApConfigUtil.isClientForceDisconnectSupported(mContext)) {
+            configBuilder.setMaxNumberOfClients(0);
+            configBuilder.enableClientControlByUser(false);
+            if (config.getMaxNumberOfClients() != 0) {
+                Log.e(TAG, "Reset MaxNumberOfClients to 0 due to device doesn't support");
+            }
+            if (config.isClientControlByUserEnabled()) {
+                Log.e(TAG, "Reset ClientControlByUser to false due to device doesn't support");
             }
         }
-        return allowed2GChannels;
+
+        if (!ApConfigUtil.isWpa3SaeSupported(mContext) && (config.getSecurityType()
+                == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE
+                || config.getSecurityType()
+                == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION)) {
+            configBuilder.setPassphrase(generatePassword(),
+                    SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+            Log.e(TAG, "Device doesn't support WPA3-SAE, reset config to WPA2");
+        }
+
+        return configBuilder.build();
     }
 
     private SoftApConfiguration sanitizePersistentApConfig(SoftApConfiguration config) {
@@ -334,7 +355,8 @@ public class WifiApConfigStore {
 
             int authType = in.readInt();
             if (authType == WifiConfiguration.KeyMgmt.WPA2_PSK) {
-                configBuilder.setWpa2Passphrase(in.readUTF());
+                configBuilder.setPassphrase(in.readUTF(),
+                        SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
             }
             config = configBuilder.build();
         } catch (IOException e) {
@@ -356,7 +378,8 @@ public class WifiApConfigStore {
     }
 
     /**
-     * Generate a default WPA2 based configuration with a random password.
+     * Generate a default WPA3 SAE transition (if supported) or WPA2 based
+     * configuration with a random password.
      * We are changing the Wifi Ap configuration storage from secure settings to a
      * flat file accessible only by the system. A WPA2 based default configuration
      * will keep the device secure after the update.
@@ -366,7 +389,13 @@ public class WifiApConfigStore {
         configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
         configBuilder.setSsid(mContext.getResources().getString(
                 R.string.wifi_tether_configure_ssid_default) + "_" + getRandomIntForDefaultSsid());
-        configBuilder.setWpa2Passphrase(generatePassword());
+        if (ApConfigUtil.isWpa3SaeSupported(mContext)) {
+            configBuilder.setPassphrase(generatePassword(),
+                    SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION);
+        } else {
+            configBuilder.setPassphrase(generatePassword(),
+                    SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+        }
         return configBuilder.build();
     }
 
@@ -400,7 +429,13 @@ public class WifiApConfigStore {
             configBuilder.setSsid(generateLohsSsid(context));
         }
         if (customConfig == null) {
-            configBuilder.setWpa2Passphrase(generatePassword());
+            if (ApConfigUtil.isWpa3SaeSupported(context)) {
+                configBuilder.setPassphrase(generatePassword(),
+                        SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION);
+            } else {
+                configBuilder.setPassphrase(generatePassword(),
+                        SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+            }
         }
 
         return configBuilder.build();
@@ -418,7 +453,7 @@ public class WifiApConfigStore {
             if (macAddress == null) {
                 Log.e(TAG, "Failed to calculate MAC from SSID. "
                         + "Generating new random MAC instead.");
-                macAddress = MacAddress.createRandomUnicastAddress();
+                macAddress = MacAddressUtils.createRandomUnicastAddress();
             }
             configBuilder.setBssid(macAddress);
         }
@@ -488,7 +523,7 @@ public class WifiApConfigStore {
             return false;
         }
 
-        String preSharedKey = apConfig.getWpa2Passphrase();
+        String preSharedKey = apConfig.getPassphrase();
         boolean hasPreSharedKey = !TextUtils.isEmpty(preSharedKey);
         int authType;
 
@@ -507,15 +542,17 @@ public class WifiApConfigStore {
                 return false;
             }
         } else if (authType == SoftApConfiguration.SECURITY_TYPE_WPA2_PSK
-                || authType == SoftApConfiguration.SECURITY_TYPE_SAE) {
+                || authType == SoftApConfiguration.SECURITY_TYPE_SAE
+                || authType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION
+                || authType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE) {
             // this is a config that should have a password - check that first
             if (!hasPreSharedKey) {
                 Log.d(TAG, "softap network password must be set");
                 return false;
             }
-
-            if (!validateApConfigPreSharedKey(preSharedKey)) {
-                // failed preSharedKey checks
+            if (authType != SoftApConfiguration.SECURITY_TYPE_WPA3_SAE
+                    && !validateApConfigPreSharedKey(preSharedKey)) {
+                // failed preSharedKey checks for WPA2 and WPA3 SAE Transition mode.
                 return false;
             }
         } else {

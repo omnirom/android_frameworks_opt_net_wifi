@@ -28,6 +28,7 @@ import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_CONF;
 
 import android.annotation.NonNull;
 import android.content.Context;
+import android.hardware.wifi.V1_0.WifiChannelWidthInMhz;
 import android.hardware.wifi.supplicant.V1_0.ISupplicant;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendor;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorIface;
@@ -54,10 +55,10 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiSsid;
-import android.os.Handler;
 import android.net.wifi.WifiDppConfig;
 import android.net.wifi.WifiDppConfig.DppResult;
-import android.os.HwRemoteBinder;
+import android.os.Handler;
+import android.os.IHwBinder.DeathRecipient;
 import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Log;
@@ -156,7 +157,7 @@ public class SupplicantStaIfaceHal {
             }
         }
     };
-    private class ServiceManagerDeathRecipient implements HwRemoteBinder.DeathRecipient {
+    private class ServiceManagerDeathRecipient implements DeathRecipient {
         @Override
         public void serviceDied(long cookie) {
             mEventHandler.post(() -> {
@@ -168,7 +169,7 @@ public class SupplicantStaIfaceHal {
             });
         }
     }
-    private class SupplicantDeathRecipient implements HwRemoteBinder.DeathRecipient {
+    private class SupplicantDeathRecipient implements DeathRecipient {
         @Override
         public void serviceDied(long cookie) {
             mEventHandler.post(() -> {
@@ -191,7 +192,7 @@ public class SupplicantStaIfaceHal {
         }
     }
 
-    private final HwRemoteBinder.DeathRecipient mSupplicantVendorDeathRecipient =
+    private final DeathRecipient mSupplicantVendorDeathRecipient =
             cookie -> {
                 synchronized (mLock) {
                     Log.w(TAG, "ISupplicantVendor/ISupplicantVendorStaIface died: cookie=" + cookie);
@@ -292,7 +293,7 @@ public class SupplicantStaIfaceHal {
     }
 
     private boolean linkToSupplicantDeath(
-            HwRemoteBinder.DeathRecipient deathRecipient, long cookie) {
+            DeathRecipient deathRecipient, long cookie) {
         synchronized (mLock) {
             if (mISupplicant == null) return false;
             try {
@@ -3368,20 +3369,37 @@ public class SupplicantStaIfaceHal {
         }
     }
 
+    private int getChannelBandwidthFromCap(ConnectionCapabilities cap) {
+        switch(cap.channelBandwidth) {
+            case WifiChannelWidthInMhz.WIDTH_20:
+                return ScanResult.CHANNEL_WIDTH_20MHZ;
+            case WifiChannelWidthInMhz.WIDTH_40:
+                return ScanResult.CHANNEL_WIDTH_40MHZ;
+            case WifiChannelWidthInMhz.WIDTH_80:
+                return ScanResult.CHANNEL_WIDTH_80MHZ;
+            case WifiChannelWidthInMhz.WIDTH_160:
+                return ScanResult.CHANNEL_WIDTH_160MHZ;
+            case WifiChannelWidthInMhz.WIDTH_80P80:
+                return ScanResult.CHANNEL_WIDTH_80MHZ_PLUS_MHZ;
+            default:
+                return ScanResult.CHANNEL_WIDTH_20MHZ;
+        }
+    }
+
     /**
-     * Returns wifi standard for connected network
+     * Returns connection capabilities of the current network
      *
      *  This is a v1.3+ HAL feature.
-     *  On error, or if these features are not supported, 0 is returned.
+     * @param ifaceName Name of the interface.
+     * @return connection capabilities of the current network
      */
-    public @ScanResult.WifiStandard int getWifiStandard(@NonNull String ifaceName) {
-        final String methodStr = "getWifiStandard";
-        MutableInt wifiStandard = new MutableInt(ScanResult.WIFI_STANDARD_UNKNOWN);
-
+    public WifiNative.ConnectionCapabilities getConnectionCapabilities(@NonNull String ifaceName) {
+        final String methodStr = "getConnectionCapabilities";
+        WifiNative.ConnectionCapabilities capOut = new WifiNative.ConnectionCapabilities();
         if (isV1_3()) {
             ISupplicantStaIface iface = checkSupplicantStaIfaceAndLogFailure(ifaceName, methodStr);
             if (iface == null) {
-                return ScanResult.WIFI_STANDARD_UNKNOWN;
+                return capOut;
             }
 
             // Get a v1.3 supplicant STA Interface
@@ -3391,16 +3409,17 @@ public class SupplicantStaIfaceHal {
             if (staIfaceV13 == null) {
                 Log.e(TAG, methodStr
                         + ": SupplicantStaIface is null, cannot get Connection Capabilities");
-                return ScanResult.WIFI_STANDARD_UNKNOWN;
+                return capOut;
             }
 
             try {
                 staIfaceV13.getConnectionCapabilities(
-                        (SupplicantStatus statusInternal,
-                         ConnectionCapabilities connCapabilitiesInternal) -> {
+                        (SupplicantStatus statusInternal, ConnectionCapabilities cap) -> {
                             if (statusInternal.code == SupplicantStatusCode.SUCCESS) {
-                                wifiStandard.value =
-                                        getWifiStandardFromCap(connCapabilitiesInternal);
+                                capOut.wifiStandard = getWifiStandardFromCap(cap);
+                                capOut.channelBandwidth = getChannelBandwidthFromCap(cap);
+                                capOut.maxNumberTxSpatialStreams = cap.maxNumberTxSpatialStreams;
+                                capOut.maxNumberRxSpatialStreams = cap.maxNumberRxSpatialStreams;
                             }
                             checkStatusAndLogFailure(statusInternal, methodStr);
                         });
@@ -3410,8 +3429,7 @@ public class SupplicantStaIfaceHal {
         } else {
             Log.e(TAG, "Method " + methodStr + " is not supported in existing HAL");
         }
-
-        return wifiStandard.value;
+        return capOut;
     }
 
     /**

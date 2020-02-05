@@ -20,7 +20,6 @@ import static java.lang.StrictMath.toIntExact;
 
 import android.content.Context;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
-import android.net.NetworkAgent;
 import android.net.wifi.EAPConstants;
 import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
@@ -39,7 +38,6 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.RemoteException;
 import android.os.SystemProperties;
-import android.provider.Settings;
 import android.util.ArrayMap;
 import android.util.Base64;
 import android.util.Log;
@@ -131,7 +129,7 @@ public class WifiMetrics {
     /** Maximum time period between ScanResult and RSSI poll to generate rssi delta datapoint */
     public static final long TIMEOUT_RSSI_DELTA_MILLIS =  3000;
     private static final int MIN_WIFI_SCORE = 0;
-    private static final int MAX_WIFI_SCORE = NetworkAgent.WIFI_BASE_SCORE;
+    private static final int MAX_WIFI_SCORE = ConnectedScore.WIFI_MAX_SCORE;
     private static final int MIN_WIFI_USABILITY_SCORE = 0; // inclusive
     private static final int MAX_WIFI_USABILITY_SCORE = 100; // inclusive
     @VisibleForTesting
@@ -157,8 +155,6 @@ public class WifiMetrics {
     public static final int MAX_UNUSABLE_EVENTS = 20;
     // Minimum time wait before generating next WifiIsUnusableEvent from data stall
     public static final int MIN_DATA_STALL_WAIT_MS = 120 * 1000; // 2 minutes
-    private static final int WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED_DEFAULT = 1; // 1 = true
-    private static final int WIFI_LINK_SPEED_METRICS_ENABLED_DEFAULT = 1; // 1 = true
     // Max number of WifiUsabilityStatsEntry elements to store in the ringbuffer.
     public static final int MAX_WIFI_USABILITY_STATS_ENTRIES_LIST_SIZE = 40;
     // Max number of WifiUsabilityStats elements to store for each type.
@@ -226,11 +222,6 @@ public class WifiMetrics {
     private int mLastPollRxLinkSpeed = -1;
     private int mLastPollFreq = -1;
     private int mLastScore = -1;
-
-    /** Tracks if we should be logging WifiIsUnusableEvent */
-    private boolean mUnusableEventLogging = false;
-    /** Tracks if we should be logging LinkSpeedCounts */
-    private boolean mLinkSpeedCountsLogging = true;
 
     /**
      * Metrics are stored within an instance of the WifiLog proto during runtime,
@@ -771,7 +762,6 @@ public class WifiMetrics {
         mWifiPowerMetrics = wifiPowerMetrics;
         mWifiP2pMetrics = wifiP2pMetrics;
         mDppMetrics = dppMetrics;
-        loadSettings();
         mHandler = new Handler(looper) {
             public void handleMessage(Message msg) {
                 synchronized (mLock) {
@@ -788,26 +778,6 @@ public class WifiMetrics {
         mCurrentDeviceMobilityStatePnoScanStartMs = -1;
         mOnWifiUsabilityListeners =
                 new ExternalCallbackTracker<IOnWifiUsabilityStatsListener>(mHandler);
-    }
-
-    /**
-     * Load setting values related to metrics logging.
-     */
-    @VisibleForTesting
-    public void loadSettings() {
-        int unusableEventFlag = mFacade.getIntegerSetting(
-                mContext, Settings.Global.WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED,
-                WIFI_IS_UNUSABLE_EVENT_METRICS_ENABLED_DEFAULT);
-        mUnusableEventLogging = (unusableEventFlag == 1);
-        setWifiIsUnusableLoggingEnabled(mUnusableEventLogging);
-        int linkSpeedCountsFlag = mFacade.getIntegerSetting(
-                mContext, Settings.Global.WIFI_LINK_SPEED_METRICS_ENABLED,
-                WIFI_LINK_SPEED_METRICS_ENABLED_DEFAULT);
-        mLinkSpeedCountsLogging = (linkSpeedCountsFlag == 1);
-        setLinkSpeedCountsLoggingEnabled(mLinkSpeedCountsLogging);
-        if (mWifiDataStall != null) {
-            mWifiDataStall.loadSettings();
-        }
     }
 
     /** Sets internal ScoringParams member */
@@ -1587,7 +1557,7 @@ public class WifiMetrics {
      */
     @VisibleForTesting
     public void incrementLinkSpeedCount(int linkSpeed, int rssi) {
-        if (!(mLinkSpeedCountsLogging
+        if (!(mContext.getResources().getBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled)
                 && linkSpeed >= MIN_LINK_SPEED_MBPS
                 && rssi >= MIN_RSSI_POLL
                 && rssi <= MAX_RSSI_POLL)) {
@@ -1614,7 +1584,7 @@ public class WifiMetrics {
      */
     @VisibleForTesting
     public void incrementTxLinkSpeedBandCount(int txLinkSpeed, int frequency) {
-        if (!(mLinkSpeedCountsLogging
+        if (!(mContext.getResources().getBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled)
                 && txLinkSpeed >= MIN_LINK_SPEED_MBPS)) {
             return;
         }
@@ -1639,7 +1609,7 @@ public class WifiMetrics {
      */
     @VisibleForTesting
     public void incrementRxLinkSpeedBandCount(int rxLinkSpeed, int frequency) {
-        if (!(mLinkSpeedCountsLogging
+        if (!(mContext.getResources().getBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled)
                 && rxLinkSpeed >= MIN_LINK_SPEED_MBPS)) {
             return;
         }
@@ -2747,13 +2717,17 @@ public class WifiMetrics {
                                 R.bool.config_wifi_connected_mac_randomization_supported));
                 pw.println("mWifiLogProto.scoreExperimentId=" + mWifiLogProto.scoreExperimentId);
                 pw.println("mExperimentValues.wifiIsUnusableLoggingEnabled="
-                        + mExperimentValues.wifiIsUnusableLoggingEnabled);
+                        + mContext.getResources().getBoolean(
+                                R.bool.config_wifiIsUnusableEventMetricsEnabled));
                 pw.println("mExperimentValues.wifiDataStallMinTxBad="
-                        + mExperimentValues.wifiDataStallMinTxBad);
+                        + mContext.getResources().getInteger(
+                                R.integer.config_wifiDataStallMinTxBad));
                 pw.println("mExperimentValues.wifiDataStallMinTxSuccessWithoutRx="
-                        + mExperimentValues.wifiDataStallMinTxSuccessWithoutRx);
+                        + mContext.getResources().getInteger(
+                                R.integer.config_wifiDataStallMinTxSuccessWithoutRx));
                 pw.println("mExperimentValues.linkSpeedCountsLoggingEnabled="
-                        + mExperimentValues.linkSpeedCountsLoggingEnabled);
+                        + mContext.getResources().getBoolean(
+                                R.bool.config_wifiLinkSpeedMetricsEnabled));
                 pw.println("mExperimentValues.dataStallDurationMs="
                         + mExperimentValues.dataStallDurationMs);
                 pw.println("mExperimentValues.dataStallTxTputThrKbps="
@@ -2853,6 +2827,8 @@ public class WifiMetrics {
                 pw.println("mWifiLogProto.rxLinkSpeedCount5gLow=" + mRxLinkSpeedCount5gLow);
                 pw.println("mWifiLogProto.rxLinkSpeedCount5gMid=" + mRxLinkSpeedCount5gMid);
                 pw.println("mWifiLogProto.rxLinkSpeedCount5gHigh=" + mRxLinkSpeedCount5gHigh);
+                pw.println("mWifiLogProto.numIpRenewalFailure="
+                        + mWifiLogProto.numIpRenewalFailure);
             }
         }
     }
@@ -3283,6 +3259,15 @@ public class WifiMetrics {
             mWifiLogProto.wifiWakeStats = mWifiWakeMetrics.buildProto();
             mWifiLogProto.isMacRandomizationOn = mContext.getResources().getBoolean(
                     R.bool.config_wifi_connected_mac_randomization_supported);
+            mExperimentValues.wifiIsUnusableLoggingEnabled = mContext.getResources().getBoolean(
+                    R.bool.config_wifiIsUnusableEventMetricsEnabled);
+            mExperimentValues.linkSpeedCountsLoggingEnabled = mContext.getResources().getBoolean(
+                    R.bool.config_wifiLinkSpeedMetricsEnabled);
+            mExperimentValues.wifiDataStallMinTxBad = mContext.getResources().getInteger(
+                    R.integer.config_wifiDataStallMinTxBad);
+            mExperimentValues.wifiDataStallMinTxSuccessWithoutRx =
+                    mContext.getResources().getInteger(
+                            R.integer.config_wifiDataStallMinTxSuccessWithoutRx);
             mWifiLogProto.experimentValues = mExperimentValues;
             mWifiLogProto.wifiIsUnusableEventList =
                     new WifiIsUnusableEvent[mWifiIsUnusableList.size()];
@@ -3403,8 +3388,7 @@ public class WifiMetrics {
         }
     }
 
-    private static int linkProbeFailureReasonToProto(
-            @WifiCondManager.SendMgmtFrameError int reason) {
+    private static int linkProbeFailureReasonToProto(int reason) {
         switch (reason) {
             case WifiCondManager.SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_MCS_UNSUPPORTED;
@@ -3493,7 +3477,6 @@ public class WifiMetrics {
      */
     private void clear() {
         synchronized (mLock) {
-            loadSettings();
             mConnectionEventList.clear();
             if (mCurrentConnectionEvent != null) {
                 mConnectionEventList.add(mCurrentConnectionEvent);
@@ -4191,7 +4174,7 @@ public class WifiMetrics {
      */
     public void logWifiIsUnusableEvent(int triggerType, int firmwareAlertCode) {
         mScoreBreachLowTimeMillis = -1;
-        if (!mUnusableEventLogging) {
+        if (!mContext.getResources().getBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled)) {
             return;
         }
 
@@ -4235,45 +4218,6 @@ public class WifiMetrics {
         mWifiIsUnusableList.add(new WifiIsUnusableWithTime(event, mClock.getWallClockMillis()));
         if (mWifiIsUnusableList.size() > MAX_UNUSABLE_EVENTS) {
             mWifiIsUnusableList.removeFirst();
-        }
-    }
-
-    /**
-     * Sets whether or not WifiIsUnusableEvent is logged in metrics
-     */
-    @VisibleForTesting
-    public void setWifiIsUnusableLoggingEnabled(boolean enabled) {
-        synchronized (mLock) {
-            mExperimentValues.wifiIsUnusableLoggingEnabled = enabled;
-        }
-    }
-
-    /**
-     * Sets whether or not LinkSpeedCounts is logged in metrics
-     */
-    @VisibleForTesting
-    public void setLinkSpeedCountsLoggingEnabled(boolean enabled) {
-        synchronized (mLock) {
-            mExperimentValues.linkSpeedCountsLoggingEnabled = enabled;
-        }
-    }
-
-    /**
-     * Sets the minimum number of txBad to trigger a data stall
-     */
-    public void setWifiDataStallMinTxBad(int minTxBad) {
-        synchronized (mLock) {
-            mExperimentValues.wifiDataStallMinTxBad = minTxBad;
-        }
-    }
-
-    /**
-     * Sets the minimum number of txSuccess to trigger a data stall
-     * when rxSuccess is 0
-     */
-    public void setWifiDataStallMinRxWithoutTx(int minTxSuccessWithoutRx) {
-        synchronized (mLock) {
-            mExperimentValues.wifiDataStallMinTxSuccessWithoutRx = minTxSuccessWithoutRx;
         }
     }
 
@@ -4748,7 +4692,7 @@ public class WifiMetrics {
      * @param reason The error code for the failure. See {@link WifiCondManager.SendMgmtFrameError}.
      */
     public void logLinkProbeFailure(long timeSinceLastTxSuccessMs,
-            int rssi, int linkSpeed, @WifiCondManager.SendMgmtFrameError int reason) {
+            int rssi, int linkSpeed, int reason) {
         synchronized (mLock) {
             mProbeStatusSinceLastUpdate =
                     android.net.wifi.WifiUsabilityStatsEntry.PROBE_STATUS_FAILURE;
@@ -5108,6 +5052,15 @@ public class WifiMetrics {
     public void incrementPasspointProvisionSuccess() {
         synchronized (mLock) {
             mNumProvisionSuccess++;
+        }
+    }
+
+    /**
+     * Increment number of IP renewal failures.
+     */
+    public void incrementIpRenewalFailure() {
+        synchronized (mLock) {
+            mWifiLogProto.numIpRenewalFailure++;
         }
     }
 

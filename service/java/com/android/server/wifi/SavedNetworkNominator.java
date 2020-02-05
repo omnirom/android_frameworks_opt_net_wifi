@@ -101,11 +101,6 @@ public class SavedNetworkNominator implements WifiNetworkSelector.NetworkNominat
                 continue;
             }
 
-            // Ignore networks that the user has disallowed auto-join for.
-            if (!network.allowAutojoin) {
-                continue;
-            }
-
             /**
              * Ignore Passpoint and Ephemeral networks. They are configured networks,
              * but without being persisted to the storage. They are nominated by
@@ -113,6 +108,11 @@ public class SavedNetworkNominator implements WifiNetworkSelector.NetworkNominat
              * respectively.
              */
             if (network.isPasspoint() || network.isEphemeral()) {
+                continue;
+            }
+
+            // Ignore networks that the user has disallowed auto-join for.
+            if (!network.allowAutojoin) {
                 continue;
             }
 
@@ -132,7 +132,7 @@ public class SavedNetworkNominator implements WifiNetworkSelector.NetworkNominat
                         + scanResult.BSSID);
                 continue;
             } else if (network.enterpriseConfig != null
-                    && network.enterpriseConfig.requireSimCredential()) {
+                    && network.enterpriseConfig.isAuthenticationSimBased()) {
                 int subId = mTelephonyUtil.getBestMatchSubscriptionId(network);
                 if (!mTelephonyUtil.isSimPresent(subId)) {
                     // Don't select if security type is EAP SIM/AKA/AKA' when SIM is not present.

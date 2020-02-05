@@ -51,9 +51,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 
 /**
@@ -91,6 +89,7 @@ public class WifiConfigStoreTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedGroupMgmtCiphers\" num=\"0\"></byte-array>\n"
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
+                    + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
                     + "<null name=\"ProviderFriendlyName\" />\n"
@@ -104,7 +103,6 @@ public class WifiConfigStoreTest extends WifiBaseTest {
                     + "<int name=\"NumAssociation\" value=\"0\" />\n"
                     + "<int name=\"CreatorUid\" value=\"%d\" />\n"
                     + "<string name=\"CreatorName\">%s</string>\n"
-                    + "<null name=\"CreationTime\" />\n"
                     + "<int name=\"LastUpdateUid\" value=\"-1\" />\n"
                     + "<null name=\"LastUpdateName\" />\n"
                     + "<int name=\"LastConnectUid\" value=\"0\" />\n"
@@ -118,7 +116,6 @@ public class WifiConfigStoreTest extends WifiBaseTest {
                     + "<string name=\"SelectionStatus\">NETWORK_SELECTION_ENABLED</string>\n"
                     + "<string name=\"DisableReason\">NETWORK_SELECTION_ENABLE</string>\n"
                     + "<null name=\"ConnectChoice\" />\n"
-                    + "<long name=\"ConnectChoiceTimeStamp\" value=\"-1\" />\n"
                     + "<boolean name=\"HasEverConnected\" value=\"false\" />\n"
                     + "</NetworkStatus>\n"
                     + "<IpConfiguration>\n"
@@ -127,11 +124,6 @@ public class WifiConfigStoreTest extends WifiBaseTest {
                     + "</IpConfiguration>\n"
                     + "</Network>\n"
                     + "</NetworkList>\n"
-                    + "<DeletedEphemeralSSIDList>\n"
-                    + "<map name=\"SSIDList\">\n"
-                    + "<long name=\"%s\" value=\"0\" />\n"
-                    + "</map>\n"
-                    + "</DeletedEphemeralSSIDList>\n"
                     + "</WifiConfigStoreData>\n";
 
     private static final String TEST_DATA_XML_STRING_FORMAT_V1_WITH_ONE_DATA_SOURCE =
@@ -522,27 +514,18 @@ public class WifiConfigStoreTest extends WifiBaseTest {
         List<WifiConfiguration> userConfigs = new ArrayList<>();
         userConfigs.add(openNetwork);
 
-        // Setup deleted ephemeral SSID list.
-        DeletedEphemeralSsidsStoreData deletedEphemeralSsids =
-                new DeletedEphemeralSsidsStoreData(mClock);
-        mWifiConfigStore.registerStoreData(deletedEphemeralSsids);
-        String testSsid = "\"Test SSID\"";
-        Map<String, Long> ssidMap = new HashMap<>();
-        ssidMap.put(testSsid, 0L);
-
         // Setup user store XML bytes.
         String xmlString = String.format(TEST_DATA_XML_STRING_FORMAT,
                 openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid, openNetwork.creatorName,
-                openNetwork.getRandomizedMacAddress(), testSsid.replaceAll("\"", "&quot;"));
+                openNetwork.getRandomizedMacAddress());
         byte[] xmlBytes = xmlString.getBytes(StandardCharsets.UTF_8);
         mUserStore.storeRawDataToWrite(xmlBytes);
 
         mWifiConfigStore.switchUserStoresAndRead(mUserStores);
         WifiConfigurationTestUtil.assertConfigurationsEqualForConfigStore(
                 userConfigs, networkList.getConfigurations());
-        assertEquals(ssidMap, deletedEphemeralSsids.getSsidToTimeMap());
     }
 
     /**
@@ -568,21 +551,12 @@ public class WifiConfigStoreTest extends WifiBaseTest {
         userConfigs.add(openNetwork);
         networkList.setConfigurations(userConfigs);
 
-        // Setup deleted ephemeral SSID list store data.
-        DeletedEphemeralSsidsStoreData deletedEphemeralSsids =
-                new DeletedEphemeralSsidsStoreData(mClock);
-        mWifiConfigStore.registerStoreData(deletedEphemeralSsids);
-        String testSsid = "Test SSID";
-        Map<String, Long> ssidMap = new HashMap<>();
-        ssidMap.put(testSsid, 0L);
-        deletedEphemeralSsids.setSsidToTimeMap(ssidMap);
-
         // Setup expected XML bytes.
         String xmlString = String.format(TEST_DATA_XML_STRING_FORMAT,
                 openNetwork.getKey().replaceAll("\"", "&quot;"),
                 openNetwork.SSID.replaceAll("\"", "&quot;"),
                 openNetwork.shared, openNetwork.creatorUid, openNetwork.creatorName,
-                openNetwork.getRandomizedMacAddress(), testSsid.replaceAll("\"", "&quot;"));
+                openNetwork.getRandomizedMacAddress());
 
         mWifiConfigStore.write(true);
         // Verify the user store content.
