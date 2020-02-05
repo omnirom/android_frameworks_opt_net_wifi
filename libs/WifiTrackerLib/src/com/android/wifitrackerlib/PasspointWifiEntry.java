@@ -16,13 +16,14 @@
 
 package com.android.wifitrackerlib;
 
-import static android.net.wifi.WifiInfo.removeDoubleQuotes;
+import static android.net.wifi.WifiInfo.sanitizeSsid;
 
 import static androidx.core.util.Preconditions.checkNotNull;
 
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
-import static com.android.wifitrackerlib.Utils.getSecurityFromWifiConfiguration;
+import static com.android.wifitrackerlib.Utils.getSecurityTypeFromWifiConfiguration;
 
+import android.content.Context;
 import android.net.NetworkInfo;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
@@ -31,6 +32,7 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.pps.HomeSp;
 import android.os.Handler;
+import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -40,7 +42,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * WifiEntry representation of a Passpoint network, uniquely identified by FQDN.
+ * WifiEntry representation of a subscribed Passpoint network, uniquely identified by FQDN.
  */
 class PasspointWifiEntry extends WifiEntry {
     static final String KEY_PREFIX = "PasspointWifiEntry:";
@@ -50,46 +52,38 @@ class PasspointWifiEntry extends WifiEntry {
 
     @NonNull private final String mKey;
     @NonNull private String mFriendlyName;
-    @Nullable private PasspointConfiguration mPasspointConfig;
+    @NonNull private final Context mContext;
+    @NonNull private PasspointConfiguration mPasspointConfig;
     @Nullable private WifiConfiguration mWifiConfig;
     private @Security int mSecurity;
     private boolean mIsRoaming = false;
-    @Nullable private NetworkInfo mNetworkInfo;
-    @Nullable private WifiInfo mWifiInfo;
-    @Nullable private ConnectCallback mConnectCallback;
-    @Nullable private DisconnectCallback mDisconnectCallback;
-    @Nullable private ForgetCallback mForgetCallback;
-    private boolean mCalledConnect = false;
-    private boolean mCalledDisconnect = false;
 
     private int mLevel = WIFI_LEVEL_UNREACHABLE;
+    protected long mSubscriptionExpirationTimeInMillis;
 
     /**
      * Create a PasspointWifiEntry with the associated PasspointConfiguration
      */
-    PasspointWifiEntry(@NonNull Handler callbackHandler,
+    PasspointWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull PasspointConfiguration passpointConfig,
             @NonNull WifiManager wifiManager) throws IllegalArgumentException {
-        super(callbackHandler, false /* forSavedNetworksPage */, wifiManager);
+        super(callbackHandler, wifiManager, false /* forSavedNetworksPage */);
 
         checkNotNull(passpointConfig, "Cannot construct with null PasspointConfiguration!");
 
+        mContext = context;
+        mPasspointConfig = passpointConfig;
         final HomeSp homeSp = passpointConfig.getHomeSp();
         mKey = fqdnToPasspointWifiEntryKey(homeSp.getFqdn());
         mFriendlyName = homeSp.getFriendlyName();
         mSecurity = SECURITY_NONE; //TODO: Should this always be Enterprise?
+        mSubscriptionExpirationTimeInMillis =
+                passpointConfig.getSubscriptionExpirationTimeInMillis();
     }
 
     @Override
     public String getKey() {
         return mKey;
-    }
-
-    @Override
-    @ConnectedState
-    public int getConnectedState() {
-        // TODO(b/70983952): Fill this method in
-        return CONNECTED_STATE_DISCONNECTED;
     }
 
     @Override
@@ -104,8 +98,12 @@ class PasspointWifiEntry extends WifiEntry {
 
     @Override
     public String getSummary(boolean concise) {
+        if (isExpired()) {
+            return mContext.getString(R.string.wifi_passpoint_expired);
+        }
+
         // TODO(b/70983952): Fill this method in
-        return "Passpoint"; // Placeholder string
+        return "Passpoint (Placeholder Text)"; // Placeholder string
     }
 
     @Override
@@ -115,7 +113,7 @@ class PasspointWifiEntry extends WifiEntry {
 
     @Override
     public String getSsid() {
-        return mWifiConfig != null ? removeDoubleQuotes(mWifiConfig.SSID) : null;
+        return mWifiConfig != null ? sanitizeSsid(mWifiConfig.SSID) : null;
     }
 
     @Override
@@ -139,7 +137,6 @@ class PasspointWifiEntry extends WifiEntry {
 
     @Override
     public boolean isSaved() {
-        // TODO(b/70983952): Fill this method in
         return false;
     }
 
@@ -154,20 +151,20 @@ class PasspointWifiEntry extends WifiEntry {
     }
 
     @Override
-    public ConnectedInfo getConnectedInfo() {
-        // TODO(b/70983952): Fill this method in
-        return null;
-    }
-
-    @Override
     public boolean canConnect() {
         return mLevel != WIFI_LEVEL_UNREACHABLE
-                && getConnectedState() == CONNECTED_STATE_DISCONNECTED;
+                && getConnectedState() == CONNECTED_STATE_DISCONNECTED && mWifiConfig != null;
     }
 
     @Override
     public void connect(@Nullable ConnectCallback callback) {
-        // TODO(b/70983952): Fill this method in
+        mConnectCallback = callback;
+
+        if (mWifiConfig == null) {
+            // We should not be able to call connect() if mWifiConfig is null
+            new ConnectActionListener().onFailure(0);
+        }
+        mWifiManager.connect(mWifiConfig, new ConnectActionListener());
     }
 
     @Override
@@ -177,76 +174,96 @@ class PasspointWifiEntry extends WifiEntry {
 
     @Override
     public void disconnect(@Nullable DisconnectCallback callback) {
-        // TODO(b/70983952): Fill this method in
+        if (canDisconnect()) {
+            mCalledDisconnect = true;
+            mDisconnectCallback = callback;
+            mCallbackHandler.postDelayed(() -> {
+                if (callback != null && mCalledDisconnect) {
+                    callback.onDisconnectResult(
+                            DisconnectCallback.DISCONNECT_STATUS_FAILURE_UNKNOWN);
+                }
+            }, 10_000 /* delayMillis */);
+            mWifiManager.disconnect();
+        }
     }
 
     @Override
     public boolean canForget() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return true;
     }
 
     @Override
     public void forget(@Nullable ForgetCallback callback) {
-        // TODO(b/70983952): Fill this method in
+        mForgetCallback = callback;
+        mWifiManager.removePasspointConfiguration(mPasspointConfig.getHomeSp().getFqdn());
+        new ForgetActionListener().onSuccess();
     }
 
     @Override
     public boolean canSignIn() {
-        // TODO(b/70983952): Fill this method in
         return false;
     }
 
     @Override
     public void signIn(@Nullable SignInCallback callback) {
-        // TODO(b/70983952): Fill this method in
+        return;
     }
 
     @Override
     public boolean canShare() {
-        // TODO(b/70983952): Fill this method in
         return false;
     }
 
     @Override
     public boolean canEasyConnect() {
-        // TODO(b/70983952): Fill this method in
         return false;
     }
 
     @Override
     public String getQrCodeString() {
-        // TODO(b/70983952): Fill this method in
         return null;
     }
 
     @Override
     public boolean canSetPassword() {
-        // TODO(b/70983952): Fill this method in
         return false;
     }
 
     @Override
     public void setPassword(@NonNull String password) {
-        // TODO(b/70983952): Fill this method in
+        // Do nothing.
     }
 
     @Override
     @MeteredChoice
     public int getMeteredChoice() {
-        // TODO(b/70983952): Fill this method in
-        return METERED_CHOICE_UNKNOWN;
+        final int meteredOverride = mPasspointConfig.getMeteredOverride();
+        if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_METERED) {
+            return METERED_CHOICE_METERED;
+        } else if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_NOT_METERED) {
+            return METERED_CHOICE_UNMETERED;
+        }
+        return METERED_CHOICE_AUTO;
     }
 
     @Override
     public boolean canSetMeteredChoice() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return true;
     }
 
     @Override
     public void setMeteredChoice(int meteredChoice) {
-        // TODO(b/70983952): Fill this method in
+        final String fqdn = mPasspointConfig.getHomeSp().getFqdn();
+        if (meteredChoice == METERED_CHOICE_AUTO) {
+            mWifiManager.setMeteredOverridePasspoint(fqdn,
+                    WifiConfiguration.METERED_OVERRIDE_NONE);
+        } else if (meteredChoice == METERED_CHOICE_METERED) {
+            mWifiManager.setMeteredOverridePasspoint(fqdn,
+                    WifiConfiguration.METERED_OVERRIDE_METERED);
+        } else if (meteredChoice == METERED_CHOICE_UNMETERED) {
+            mWifiManager.setMeteredOverridePasspoint(fqdn,
+                    WifiConfiguration.METERED_OVERRIDE_NOT_METERED);
+        }
     }
 
     @Override
@@ -284,11 +301,28 @@ class PasspointWifiEntry extends WifiEntry {
         // TODO(b/70983952): Fill this method in
     }
 
+    @Override
+    public String getSecurityString(boolean concise) {
+        return concise ? mContext.getString(R.string.wifi_security_short_eap) :
+                mContext.getString(R.string.wifi_security_eap);
+    }
+
+    @Override
+    public boolean isExpired() {
+        if (mSubscriptionExpirationTimeInMillis <= 0) {
+            // Expiration time not specified.
+            return false;
+        } else {
+            return System.currentTimeMillis() >= mSubscriptionExpirationTimeInMillis;
+        }
+    }
+
     @WorkerThread
     void updatePasspointConfig(@NonNull PasspointConfiguration passpointConfig) {
-        checkNotNull(passpointConfig, "Cannot update with null PasspointConfiguration!");
         mPasspointConfig = passpointConfig;
         mFriendlyName = passpointConfig.getHomeSp().getFriendlyName();
+        mSubscriptionExpirationTimeInMillis =
+                passpointConfig.getSubscriptionExpirationTimeInMillis();
         notifyOnUpdated();
     }
 
@@ -298,7 +332,7 @@ class PasspointWifiEntry extends WifiEntry {
             @Nullable List<ScanResult> roamingScanResults)
             throws IllegalArgumentException {
         mWifiConfig = wifiConfig;
-        mSecurity = getSecurityFromWifiConfiguration(wifiConfig);
+        mSecurity = getSecurityTypeFromWifiConfiguration(wifiConfig);
 
         if (homeScanResults == null) {
             homeScanResults = new ArrayList<>();
@@ -333,7 +367,8 @@ class PasspointWifiEntry extends WifiEntry {
             return false;
         }
 
-        return mWifiConfig != null && mWifiConfig.networkId == wifiInfo.getNetworkId();
+        return TextUtils.equals(
+                wifiInfo.getPasspointFqdn(), mPasspointConfig.getHomeSp().getFqdn());
     }
 
     @NonNull

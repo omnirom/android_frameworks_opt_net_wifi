@@ -1105,7 +1105,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         ScanResultMatchInfo fromScanResult = ScanResultMatchInfo.fromScanResult(scanResult);
         ScanResultMatchInfo fromWifiConfiguration =
                 ScanResultMatchInfo.fromWifiConfiguration(wns.wifiConfiguration);
-        return fromScanResult.networkTypeEquals(fromWifiConfiguration);
+        return fromScanResult.networkTypeEquals(fromWifiConfiguration, false);
     }
 
     // Loops through the scan results and finds scan results matching the active network
@@ -1276,7 +1276,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         if (mCompanionDeviceManager == null) {
             mCompanionDeviceManager = mContext.getSystemService(CompanionDeviceManager.class);
         }
-        boolean approved = mCompanionDeviceManager.isDeviceAssociated(
+        boolean approved = mCompanionDeviceManager.isDeviceAssociatedForWifiConnection(
                 requestorPackageName, MacAddress.fromString(scanResult.BSSID), requestorUserHandle);
         if (!approved) return false;
         if (mVerboseLoggingEnabled) {

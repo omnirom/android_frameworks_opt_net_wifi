@@ -60,10 +60,6 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.CharBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CharsetDecoder;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -86,7 +82,6 @@ import java.util.TimeZone;
  */
 public class WifiNative {
     private static final String TAG = "WifiNative";
-    private static final String JNI_LIB = "/apex/com.android.wifi/lib64/libwifi-jni.so";
 
     private final SupplicantStaIfaceHal mSupplicantStaIfaceHal;
     private final HostapdHal mHostapdHal;
@@ -410,7 +405,7 @@ public class WifiNative {
         }
     }
 
-    private Object mLock = new Object();
+    private final Object mLock = new Object();
     private final IfaceManager mIfaceMgr = new IfaceManager();
     private HashSet<StatusListener> mStatusListeners = new HashSet<>();
 
@@ -991,6 +986,43 @@ public class WifiNative {
     }
 
     /**
+     * Callback to notify when the availability of an interface has changed.
+     */
+    public interface InterfaceAvailableForRequestListener {
+        /**
+         * @param isAvailable Whether it is possible to create an iface of the specified type or
+         *                    not.
+         */
+        void onAvailabilityChanged(boolean isAvailable);
+    }
+
+    /**
+     * Register a callback to notify when the availability of Client interface has changed.
+     *
+     * It is safe to re-register the same callback object - duplicates are detected and only a
+     * single copy kept.
+     *
+     * @param listener Instance of {@link InterfaceAvailableForRequestListener}.
+     */
+    public void registerClientInterfaceAvailabilityListener(
+            @NonNull InterfaceAvailableForRequestListener listener) {
+        mWifiVendorHal.registerStaIfaceAvailabilityListener(listener);
+    }
+
+    /**
+     * Register a callback to notify when the availability of SoftAp interface has changed.
+     *
+     * It is safe to re-register the same callback object - duplicates are detected and only a
+     * single copy kept.
+     *
+     * @param listener Instance of {@link InterfaceAvailableForRequestListener}.
+     */
+    public void registerSoftApInterfaceAvailabilityListener(
+            @NonNull InterfaceAvailableForRequestListener listener) {
+        mWifiVendorHal.registerApIfaceAvailabilityListener(listener);
+    }
+
+    /**
      * Callback to notify when the associated interface is destroyed, up or down.
      */
     public interface InterfaceCallback {
@@ -1177,7 +1209,6 @@ public class WifiNative {
             Log.i(TAG, "Successfully setup " + iface);
 
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
-            iface.phyCapabilities = getPhyCapabilities(iface.name);
             return iface.name;
         }
     }
@@ -1411,7 +1442,6 @@ public class WifiNative {
             }
             iface.type = Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY;
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
-            iface.phyCapabilities = getPhyCapabilities(iface.name);
             Log.i(TAG, "Successfully switched to connectivity mode on iface=" + iface);
             return true;
         }
@@ -3781,13 +3811,6 @@ public class WifiNative {
     }
 
     /**
-     * Get device phy capabilities
-     */
-    public DeviceWiphyCapabilities getPhyCapabilities(@NonNull String ifaceName) {
-        return mWifiCondManager.getDeviceWiphyCapabilities(ifaceName);
-    }
-
-    /**
      * Query of support of Wi-Fi standard
      *
      * @param ifaceName name of the interface to check support on
@@ -3805,44 +3828,44 @@ public class WifiNative {
         }
     }
 
-    /********************************************************
-     * JNI operations
-     ********************************************************/
-    /* Register native functions */
-    static {
-        /* Native functions are defined in libwifi-jni.so */
-        try {
-            System.load(JNI_LIB);
-            registerNatives();
-        } catch (UnsatisfiedLinkError e) {
-            Log.e(TAG, "Failed to load jni library", e);
+    /**
+     * Get the Wiphy capabilities of a device for a given interface
+     * If the interface is not associated with one,
+     * it will be read from the device through wificond
+     *
+     * @param ifaceName name of the interface
+     * @return the device capabilities for this interface
+     */
+    public DeviceWiphyCapabilities getDeviceWiphyCapabilities(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            Iface iface = mIfaceMgr.getIface(ifaceName);
+            if (iface == null) {
+                Log.e(TAG, "Failed to get device capabilities, interface not found: " + ifaceName);
+                return null;
+            }
+            if (iface.phyCapabilities == null) {
+                iface.phyCapabilities = mWifiCondManager.getDeviceWiphyCapabilities(ifaceName);
+            }
+            return iface.phyCapabilities;
         }
     }
 
-    private static native int registerNatives();
-    /* kernel logging support */
-    private static native byte[] readKernelLogNative();
-
     /**
-     * Fetches the latest kernel logs.
+     * Set the Wiphy capabilities of a device for a given interface
+     *
+     * @param ifaceName name of the interface
+     * @param capabilities the wiphy capabilities to set for this interface
      */
-    public synchronized String readKernelLog() {
-        try {
-            byte[] bytes = readKernelLogNative();
-            if (bytes != null) {
-                CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
-                try {
-                    CharBuffer decoded = decoder.decode(ByteBuffer.wrap(bytes));
-                    return decoded.toString();
-                } catch (CharacterCodingException cce) {
-                    return new String(bytes, StandardCharsets.ISO_8859_1);
-                }
+    public void setDeviceWiphyCapabilities(@NonNull String ifaceName,
+            DeviceWiphyCapabilities capabilities) {
+        synchronized (mLock) {
+            Iface iface = mIfaceMgr.getIface(ifaceName);
+            if (iface == null) {
+                Log.e(TAG, "Failed to set device capabilities, interface not found: " + ifaceName);
+                return;
             }
-        } catch (UnsatisfiedLinkError e) {
-            // TODO (b/145196311): Fix this linker error.
-            Log.e(TAG, "Failed to load jni library", e);
+            iface.phyCapabilities = capabilities;
         }
-        return "*** failed to read kernel log ***";
     }
 
     /**

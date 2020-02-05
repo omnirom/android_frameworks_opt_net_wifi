@@ -232,8 +232,10 @@ public class WifiNetworkSelector {
      * @return true if it has active Tx or Rx traffic, false otherwise.
      */
     public static boolean hasActiveStream(WifiInfo wifiInfo, ScoringParams scoringParams) {
-        return (wifiInfo.getTxSuccessRate() > scoringParams.getActiveTrafficPacketsPerSecond())
-                || (wifiInfo.getRxSuccessRate() > scoringParams.getActiveTrafficPacketsPerSecond());
+        return (wifiInfo.getSuccessfulTxPacketsPerSecond()
+                        > scoringParams.getActiveTrafficPacketsPerSecond())
+                || (wifiInfo.getSuccessfulRxPacketsPerSecond()
+                        > scoringParams.getActiveTrafficPacketsPerSecond());
     }
 
     /**
@@ -520,7 +522,7 @@ public class WifiNetworkSelector {
         // Enable the network if it is disabled.
         if (!selected.getNetworkSelectionStatus().isNetworkEnabled()) {
             mWifiConfigManager.updateNetworkSelectionStatus(netId,
-                    WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
+                    WifiConfiguration.NetworkSelectionStatus.DISABLED_NONE);
         }
         return setLegacyUserConnectChoice(selected);
     }
@@ -710,7 +712,7 @@ public class WifiNetworkSelector {
         final int lastUserSelectedNetworkId = mWifiConfigManager.getLastSelectedNetwork();
         final double lastSelectionWeight = calculateLastSelectionWeight();
 
-        WifiCandidates wifiCandidates = new WifiCandidates(mWifiScoreCard);
+        WifiCandidates wifiCandidates = new WifiCandidates(mWifiScoreCard, mContext);
         if (currentNetwork != null) {
             wifiCandidates.setCurrent(currentNetwork.networkId, currentBssid);
         }
@@ -902,6 +904,7 @@ public class WifiNetworkSelector {
                             scanDetail.getScanResult().frequency);
         }
         return mThroughputPredictor.predictThroughput(
+                mWifiNative.getDeviceWiphyCapabilities(mWifiNative.getClientInterfaceName()),
                 scanDetail.getScanResult().getWifiStandard(),
                 scanDetail.getScanResult().channelWidth,
                 scanDetail.getScanResult().level,

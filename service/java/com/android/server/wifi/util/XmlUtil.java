@@ -433,7 +433,6 @@ public class XmlUtil {
                 throws XmlPullParserException, IOException {
             XmlUtil.writeNextValue(out, XML_TAG_CONFIG_KEY, configuration.getKey());
             XmlUtil.writeNextValue(out, XML_TAG_SSID, configuration.SSID);
-            XmlUtil.writeNextValue(out, XML_TAG_BSSID, configuration.BSSID);
             XmlUtil.writeNextValue(out, XML_TAG_SHARE_THIS_AP, configuration.shareThisAp);
             writePreSharedKeyToXml(out, configuration.preSharedKey, encryptionUtil);
             XmlUtil.writeNextValue(out, XML_TAG_SAE_PASSWORD_ID_KEY, configuration.saePasswordId);
@@ -493,6 +492,7 @@ public class XmlUtil {
                 @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
                 throws XmlPullParserException, IOException {
             writeCommonElementsToXml(out, configuration, encryptionUtil);
+            XmlUtil.writeNextValue(out, XML_TAG_BSSID, configuration.BSSID);
             XmlUtil.writeNextValue(out, XML_TAG_STATUS, configuration.status);
             XmlUtil.writeNextValue(out, XML_TAG_FQDN, configuration.FQDN);
             XmlUtil.writeNextValue(
@@ -1042,7 +1042,7 @@ public class XmlUtil {
                     out, XML_TAG_DISABLE_REASON, selectionStatus.getNetworkDisableReasonString());
             XmlUtil.writeNextValue(out, XML_TAG_CONNECT_CHOICE, selectionStatus.getConnectChoice());
             XmlUtil.writeNextValue(
-                    out, XML_TAG_HAS_EVER_CONNECTED, selectionStatus.getHasEverConnected());
+                    out, XML_TAG_HAS_EVER_CONNECTED, selectionStatus.hasEverConnected());
         }
 
         /**
@@ -1098,7 +1098,7 @@ public class XmlUtil {
             if (status == -1 || disableReason == -1 ||
                     status == NetworkSelectionStatus.NETWORK_SELECTION_TEMPORARY_DISABLED) {
                 status = NetworkSelectionStatus.NETWORK_SELECTION_ENABLED;
-                disableReason = NetworkSelectionStatus.NETWORK_SELECTION_ENABLE;
+                disableReason = NetworkSelectionStatus.DISABLED_NONE;
             }
             selectionStatus.setNetworkSelectionStatus(status);
             selectionStatus.setNetworkSelectionDisableReason(disableReason);

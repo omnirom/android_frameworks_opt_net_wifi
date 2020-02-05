@@ -23,6 +23,9 @@ import static com.android.server.wifi.ActiveModeManager.ROLE_SOFTAP_TETHERED;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
@@ -57,6 +60,7 @@ import android.util.Log;
 
 import androidx.test.filters.SmallTest;
 
+import com.android.server.wifi.WifiNative.InterfaceAvailableForRequestListener;
 import com.android.server.wifi.util.GeneralUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.wifi.resources.R;
@@ -123,6 +127,10 @@ public class ActiveModeWardenTest extends WifiBaseTest {
 
     final ArgumentCaptor<WifiNative.StatusListener> mStatusListenerCaptor =
             ArgumentCaptor.forClass(WifiNative.StatusListener.class);
+    final ArgumentCaptor<InterfaceAvailableForRequestListener> mClientIfaceAvailableListener =
+            ArgumentCaptor.forClass(InterfaceAvailableForRequestListener.class);
+    final ArgumentCaptor<InterfaceAvailableForRequestListener> mSoftApIfaceAvailableListener =
+            ArgumentCaptor.forClass(InterfaceAvailableForRequestListener.class);
 
     /**
      * Set up the test environment.
@@ -176,6 +184,11 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         verify(mWifiNative).registerStatusListener(mStatusListenerCaptor.capture());
         mWifiNativeStatusListener = mStatusListenerCaptor.getValue();
 
+        verify(mWifiNative).registerClientInterfaceAvailabilityListener(
+                mClientIfaceAvailableListener.capture());
+        verify(mWifiNative).registerSoftApInterfaceAvailabilityListener(
+                mSoftApIfaceAvailableListener.capture());
+
         mActiveModeWarden.registerSoftApCallback(mSoftApStateMachineCallback);
         mActiveModeWarden.registerLohsCallback(mLohsStateMachineCallback);
         mTestSoftApInfo = new SoftApInfo();
@@ -228,7 +241,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         verify(mClientModeManager).setRole(ROLE_CLIENT_PRIMARY);
         verify(mScanRequestProxy).enableScanning(true, true);
         if (fromState.equals(DISABLED_STATE_STRING)) {
-            verify(mBatteryStats).noteWifiOn();
+            verify(mBatteryStats).reportWifiOn();
         }
     }
 
@@ -252,9 +265,9 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         verify(mClientModeManager).setRole(ROLE_CLIENT_SCAN_ONLY);
         verify(mScanRequestProxy).enableScanning(true, false);
         if (fromState.equals(DISABLED_STATE_STRING)) {
-            verify(mBatteryStats).noteWifiOn();
+            verify(mBatteryStats).reportWifiOn();
         }
-        verify(mBatteryStats).noteWifiState(BatteryStatsManager.WIFI_STATE_OFF_SCANNING, null);
+        verify(mBatteryStats).reportWifiState(BatteryStatsManager.WIFI_STATE_OFF_SCANNING, null);
     }
 
     private void enterSoftApActiveMode() throws Exception {
@@ -283,7 +296,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         verify(mSoftApManager).start();
         verify(mSoftApManager).setRole(softApRole);
         if (fromState.equals(DISABLED_STATE_STRING)) {
-            verify(mBatteryStats).noteWifiOn();
+            verify(mBatteryStats).reportWifiOn();
         }
     }
 
@@ -514,7 +527,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         verify(mClientModeManager).stop();
-        verify(mBatteryStats).noteWifiOff();
+        verify(mBatteryStats).reportWifiOff();
         assertInDisabledState();
     }
 
@@ -529,7 +542,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         reset(mDefaultModeManager);
         enterStaDisabledMode(true);
         verify(mSoftApManager, never()).stop();
-        verify(mBatteryStats, never()).noteWifiOff();
+        verify(mBatteryStats, never()).reportWifiOff();
     }
 
     /**
@@ -605,7 +618,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         mClientListener.onStartFailure();
         mLooper.dispatchAll();
         assertInDisabledState();
-        verify(mBatteryStats).noteWifiOff();
+        verify(mBatteryStats).reportWifiOff();
     }
 
     /**
@@ -618,7 +631,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         // now inject failure through the SoftApManager.Listener
         mSoftApListener.onStartFailure();
         mLooper.dispatchAll();
-        verify(mBatteryStats).noteWifiOff();
+        verify(mBatteryStats).reportWifiOff();
     }
 
     /**
@@ -634,7 +647,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertInDisabledState();
-        verify(mBatteryStats).noteWifiOff();
+        verify(mBatteryStats).reportWifiOff();
     }
 
     /**
@@ -647,7 +660,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         // now inject failure through the SoftApManager.Listener
         mSoftApListener.onStartFailure();
         mLooper.dispatchAll();
-        verify(mBatteryStats).noteWifiOff();
+        verify(mBatteryStats).reportWifiOff();
         verifyNoMoreInteractions(mWifiNative);
     }
 
@@ -795,7 +808,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
 
         verify(mSoftApManager).start();
         verify(softapManager).start();
-        verify(mBatteryStats).noteWifiOn();
+        verify(mBatteryStats).reportWifiOn();
     }
 
     /**
@@ -969,7 +982,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         lohsSoftApListener.value.onStarted();
         verify(mSoftApManager).start();
         verify(lohsSoftapManager).start();
-        verify(mBatteryStats).noteWifiOn();
+        verify(mBatteryStats).reportWifiOn();
 
         // disable tethering
         mActiveModeWarden.stopSoftAp(WifiManager.IFACE_IP_MODE_TETHERED);
@@ -2112,4 +2125,67 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         verify(mSoftApManager, never()).updateConfiguration(any());
     }
 
+    @Test
+    public void interfaceAvailabilityListener() throws Exception {
+        assertFalse(mActiveModeWarden.canRequestMoreClientModeManagers());
+        assertFalse(mActiveModeWarden.canRequestMoreSoftApManagers());
+
+        assertNotNull(mClientIfaceAvailableListener.getValue());
+        assertNotNull(mSoftApIfaceAvailableListener.getValue());
+
+        mClientIfaceAvailableListener.getValue().onAvailabilityChanged(true);
+        mLooper.dispatchAll();
+        assertTrue(mActiveModeWarden.canRequestMoreClientModeManagers());
+
+        mSoftApIfaceAvailableListener.getValue().onAvailabilityChanged(true);
+        mLooper.dispatchAll();
+        assertTrue(mActiveModeWarden.canRequestMoreSoftApManagers());
+
+        mClientIfaceAvailableListener.getValue().onAvailabilityChanged(false);
+        mLooper.dispatchAll();
+        assertFalse(mActiveModeWarden.canRequestMoreClientModeManagers());
+
+        mSoftApIfaceAvailableListener.getValue().onAvailabilityChanged(false);
+        mLooper.dispatchAll();
+        assertFalse(mActiveModeWarden.canRequestMoreSoftApManagers());
+    }
+
+    @Test
+    public void canSupportAtleastOneConcurrentClientAndSoftApManager() throws Exception {
+        assertNotNull(mClientIfaceAvailableListener.getValue());
+        assertNotNull(mSoftApIfaceAvailableListener.getValue());
+
+        // No mode manager
+        assertFalse(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager());
+
+        // client mode manager active, but cannot create one more softap manager
+        enterClientModeActiveState();
+        assertFalse(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager());
+
+        // client mode manager active, can create one more softap manager
+        mSoftApIfaceAvailableListener.getValue().onAvailabilityChanged(true);
+        mLooper.dispatchAll();
+        assertTrue(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager());
+
+        // Tear down client mode manager
+        enterStaDisabledMode(false);
+
+        // active softap manager, but cannot create one more client mode manager
+        reset(mSoftApManager, mBatteryStats);
+        enterSoftApActiveMode();
+        assertFalse(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager());
+
+        // active softap manager, can create one more client mode manager
+        mClientIfaceAvailableListener.getValue().onAvailabilityChanged(true);
+        mLooper.dispatchAll();
+        assertTrue(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager());
+
+        // softap manager + client mode manager active, cannot create any more mode managers
+        reset(mClientModeManager, mBatteryStats, mScanRequestProxy);
+        enterClientModeActiveState();
+        mSoftApIfaceAvailableListener.getValue().onAvailabilityChanged(false);
+        mClientIfaceAvailableListener.getValue().onAvailabilityChanged(false);
+        mLooper.dispatchAll();
+        assertTrue(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager());
+    }
 }
