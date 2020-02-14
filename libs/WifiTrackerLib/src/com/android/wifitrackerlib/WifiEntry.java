@@ -56,18 +56,18 @@ import java.util.stream.Collectors;
  * actions on the represented network.
  */
 public abstract class WifiEntry implements Comparable<WifiEntry> {
+    /**
+     * Security type based on WifiConfiguration.KeyMgmt
+     */
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(value = {
             SECURITY_NONE,
+            SECURITY_OWE,
             SECURITY_WEP,
             SECURITY_PSK,
-            SECURITY_EAP,
-            SECURITY_OWE,
             SECURITY_SAE,
+            SECURITY_EAP,
             SECURITY_EAP_SUITE_B,
-            SECURITY_PSK_SAE_TRANSITION,
-            SECURITY_OWE_TRANSITION,
-            SECURITY_MAX_VAL
     })
 
     public @interface Security {}
@@ -79,9 +79,8 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public static final int SECURITY_OWE = 4;
     public static final int SECURITY_SAE = 5;
     public static final int SECURITY_EAP_SUITE_B = 6;
-    public static final int SECURITY_PSK_SAE_TRANSITION = 7;
-    public static final int SECURITY_OWE_TRANSITION = 8;
-    public static final int SECURITY_MAX_VAL = 9; // Has to be the last
+
+    public static final int NUM_SECURITY_TYPES = 7;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(value = {
@@ -106,7 +105,6 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
             METERED_CHOICE_AUTO,
             METERED_CHOICE_METERED,
             METERED_CHOICE_UNMETERED,
-            METERED_CHOICE_UNKNOWN
     })
 
     public @interface MeteredChoice {}
@@ -115,7 +113,6 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public static final int METERED_CHOICE_AUTO = 0;
     public static final int METERED_CHOICE_METERED = 1;
     public static final int METERED_CHOICE_UNMETERED = 2;
-    public static final int METERED_CHOICE_UNKNOWN = 3;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(value = {
@@ -194,12 +191,13 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
 
     protected ConnectCallback mConnectCallback;
     protected DisconnectCallback mDisconnectCallback;
+    protected ForgetCallback mForgetCallback;
 
     protected boolean mCalledConnect = false;
     protected boolean mCalledDisconnect = false;
 
-    WifiEntry(@NonNull Handler callbackHandler, boolean forSavedNetworksPage,
-            @NonNull WifiManager wifiManager) throws IllegalArgumentException {
+    WifiEntry(@NonNull Handler callbackHandler, @NonNull WifiManager wifiManager,
+            boolean forSavedNetworksPage) throws IllegalArgumentException {
         checkNotNull(callbackHandler, "Cannot construct with null handler!");
         checkNotNull(wifiManager, "Cannot construct with null WifiManager!");
         mCallbackHandler = callbackHandler;
@@ -262,6 +260,12 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     @Security
     public abstract int getSecurity();
 
+    /** Returns the string representation of the security of the WifiEntry. */
+    public String getSecurityString() {
+        // TODO (b/70983952) Implement this
+        return null;
+    }
+
     /** Returns the MAC address of the connection */
     public abstract String getMacAddress();
 
@@ -271,8 +275,7 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public abstract boolean isMetered();
 
     /**
-     * Indicates whether or not an entry is saved, whether by a saved configuration or
-     * subscription.
+     * Indicates whether or not an entry is for a saved configuration.
      */
     public abstract boolean isSaved();
 
@@ -375,6 +378,11 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public abstract boolean canSetAutoJoinEnabled();
     /** Sets whether a network will be auto-joined or not */
     public abstract void setAutoJoinEnabled(boolean enabled);
+    /** Returns the string displayed for @Security */
+    public abstract String getSecurityString(boolean concise);
+    /** Returns whether subscription of the entry is expired */
+    public abstract boolean isExpired();
+
     /** Returns the ScanResult information of a WifiEntry */
     abstract String getScanResultDescription();
 
@@ -610,12 +618,58 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
             sj.add("standard = " + mWifiInfo.getWifiStandard());
             sj.add("rssi = " + mWifiInfo.getRssi());
             sj.add("score = " + mWifiInfo.getScore());
-            sj.add(String.format(" tx=%.1f,", mWifiInfo.getTxSuccessRate()));
-            sj.add(String.format("%.1f,", mWifiInfo.getTxRetriesRate()));
-            sj.add(String.format("%.1f ", mWifiInfo.getTxBadRate()));
-            sj.add(String.format("rx=%.1f", mWifiInfo.getRxSuccessRate()));
+            sj.add(String.format(" tx=%.1f,", mWifiInfo.getSuccessfulTxPacketsPerSecond()));
+            sj.add(String.format("%.1f,", mWifiInfo.getRetriedTxPacketsPerSecond()));
+            sj.add(String.format("%.1f ", mWifiInfo.getLostTxPacketsPerSecond()));
+            sj.add(String.format("rx=%.1f", mWifiInfo.getSuccessfulRxPacketsPerSecond()));
         }
         return sj.toString();
+    }
+
+    protected class ConnectActionListener implements WifiManager.ActionListener {
+        @Override
+        public void onSuccess() {
+            mCalledConnect = true;
+            // If we aren't connected to the network after 10 seconds, trigger the failure callback
+            mCallbackHandler.postDelayed(() -> {
+                if (mConnectCallback != null && mCalledConnect
+                        && getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
+                    mConnectCallback.onConnectResult(
+                            ConnectCallback.CONNECT_STATUS_FAILURE_UNKNOWN);
+                    mCalledConnect = false;
+                }
+            }, 10_000 /* delayMillis */);
+        }
+
+        @Override
+        public void onFailure(int i) {
+            mCallbackHandler.post(() -> {
+                if (mConnectCallback != null) {
+                    mConnectCallback.onConnectResult(
+                            mConnectCallback.CONNECT_STATUS_FAILURE_UNKNOWN);
+                }
+            });
+        }
+    }
+
+    protected class ForgetActionListener implements WifiManager.ActionListener {
+        @Override
+        public void onSuccess() {
+            mCallbackHandler.post(() -> {
+                if (mForgetCallback != null) {
+                    mForgetCallback.onForgetResult(ForgetCallback.FORGET_STATUS_SUCCESS);
+                }
+            });
+        }
+
+        @Override
+        public void onFailure(int i) {
+            mCallbackHandler.post(() -> {
+                if (mForgetCallback != null) {
+                    mForgetCallback.onForgetResult(ForgetCallback.FORGET_STATUS_FAILURE_UNKNOWN);
+                }
+            });
+        }
     }
 
     // TODO (b/70983952) Come up with a sorting scheme that does the right thing.
@@ -627,6 +681,9 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
         if (getLevel() == WIFI_LEVEL_UNREACHABLE && other.getLevel() != WIFI_LEVEL_UNREACHABLE) {
             return 1;
         }
+
+        if (isSubscription() && !other.isSubscription()) return -1;
+        if (!isSubscription() && other.isSubscription()) return 1;
 
         if (isSaved() && !other.isSaved()) return -1;
         if (!isSaved() && other.isSaved()) return 1;

@@ -893,7 +893,8 @@ public class WifiServiceImpl extends BaseWifiService {
             return false;
         }
 
-        if (!isConcurrentLohsAndTetheringSupported()) {
+        if (!mWifiThreadRunner.call(
+                () -> mActiveModeWarden.canRequestMoreSoftApManagers(), false)) {
             // Take down LOHS if it is up.
             mLohsSoftApTracker.stopAll();
         }
@@ -952,7 +953,8 @@ public class WifiServiceImpl extends BaseWifiService {
             return false;
         }
 
-        if (!isConcurrentLohsAndTetheringSupported()) {
+        if (!mWifiThreadRunner.call(
+                () -> mActiveModeWarden.canRequestMoreSoftApManagers(), false)) {
             // Take down LOHS if it is up.
             mLohsSoftApTracker.stopAll();
         }
@@ -1097,11 +1099,9 @@ public class WifiServiceImpl extends BaseWifiService {
                 CarrierConfigManager carrierConfigManager =
                         (CarrierConfigManager) mContext.getSystemService(
                         Context.CARRIER_CONFIG_SERVICE);
-                if (carrierConfigManager == null) {
-                    return;
-                }
-                PersistableBundle carrierConfig = carrierConfigManager.getConfigForSubId(
-                        subId);
+                if (carrierConfigManager == null) return;
+                PersistableBundle carrierConfig = carrierConfigManager.getConfigForSubId(subId);
+                if (carrierConfig == null) return;
                 int carrierMaxClient = carrierConfig.getInt(
                         CarrierConfigManager.Wifi.KEY_HOTSPOT_MAX_CLIENT_COUNT);
                 int finalSupportedClientNumber = mContext.getResources().getInteger(
@@ -1618,7 +1618,7 @@ public class WifiServiceImpl extends BaseWifiService {
                             && mLohsInterfaceMode == WifiManager.IFACE_IP_MODE_LOCAL_ONLY) {
                         // holding the required lock: send message to requestors and clear the list
                         sendHotspotStoppedMessageToAllLOHSRequestInfoEntriesLocked();
-                    } else if (!isConcurrentLohsAndTetheringSupported()) {
+                    } else {
                         // LOHS not active: report an error (still holding the required lock)
                         sendHotspotFailedMessageToAllLOHSRequestInfoEntriesLocked(ERROR_GENERIC);
                     }
@@ -1842,8 +1842,7 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         // check if we are currently tethering
-        // TODO(b/123227116): handle all interface combinations just by changing the HAL.
-        if (!isConcurrentLohsAndTetheringSupported()
+        if (!mActiveModeWarden.canRequestMoreSoftApManagers()
                 && mTetheredSoftApTracker.getState() == WIFI_AP_STATE_ENABLED) {
             // Tethering is enabled, cannot start LocalOnlyHotspot
             mLog.info("Cannot start localOnlyHotspot when WiFi Tethering is active.")
@@ -2158,14 +2157,13 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         // Convert the LinkLayerStats into WifiActivityEnergyInfo
-        WifiActivityEnergyInfo energyInfo = new WifiActivityEnergyInfo(
+        return new WifiActivityEnergyInfo(
                 mClock.getElapsedSinceBootMillis(),
                 WifiActivityEnergyInfo.STACK_STATE_STATE_IDLE,
                 stats.tx_time,
                 stats.rx_time,
                 stats.on_time_scan,
                 rxIdleTimeMillis);
-        return energyInfo.isValid() ? energyInfo : null;
     }
 
     /**
@@ -2581,6 +2579,20 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
+     * See {@link android.net.wifi.WifiManager#allowAutojoinGlobal(boolean)}
+     * @param choice the OEM's choice to allow auto-join
+     */
+    @Override
+    public void allowAutojoinGlobal(boolean choice) {
+        enforceNetworkSettingsPermission();
+
+        int callingUid = Binder.getCallingUid();
+        mLog.info("allowAutojoin=% uid=%").c(choice).c(callingUid).flush();
+
+        mWifiThreadRunner.post(() -> mClientModeImpl.allowAutoJoinGlobal(choice));
+    }
+
+    /**
      * See {@link android.net.wifi.WifiManager#allowAutojoin(int, boolean)}
      * @param netId the integer that identifies the network configuration
      * @param choice the user's choice to allow auto-join
@@ -2661,6 +2673,25 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
+     * See {@link android.net.wifi.WifiManager#setMeteredOverridePasspoint(String, boolean)}
+     * @param fqdn the FQDN that identifies the passpoint configuration
+     * @param meteredOverride One of the values in {@link MeteredOverride}
+     */
+    @Override
+    public void setMeteredOverridePasspoint(String fqdn, int meteredOverride) {
+        enforceNetworkSettingsPermission();
+        if (fqdn == null) {
+            throw new IllegalArgumentException("FQDN cannot be null");
+        }
+
+        int callingUid = Binder.getCallingUid();
+        mLog.info("setMeteredOverridePasspoint=% uid=%")
+                .c(meteredOverride).c(callingUid).flush();
+        mWifiThreadRunner.post(
+                () -> mPasspointManager.setMeteredOverride(fqdn, meteredOverride));
+    }
+
+    /**
      * See {@link android.net.wifi.WifiManager#getConnectionInfo()}
      * @return the Wi-Fi information, contained in {@link WifiInfo}.
      */
@@ -2737,6 +2768,46 @@ public class WifiServiceImpl extends BaseWifiService {
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
+    }
+
+    /**
+     * Return the filtered ScanResults which may be authenticated by the suggested network
+     * configurations.
+     * @return The map of {@link WifiNetworkSuggestion} and the list of {@link ScanResult} which
+     * may be authenticated by the corresponding network configuration.
+     */
+    @Override
+    @NonNull
+    public Map<WifiNetworkSuggestion, List<ScanResult>> getMatchingScanResults(
+            @NonNull List<WifiNetworkSuggestion> networkSuggestions,
+            @Nullable List<ScanResult> scanResults,
+            String callingPackage, String callingFeatureId) {
+        enforceAccessPermission();
+        int uid = Binder.getCallingUid();
+        long ident = Binder.clearCallingIdentity();
+        try {
+            mWifiPermissionsUtil.enforceCanAccessScanResults(callingPackage, callingFeatureId,
+                    uid, null);
+
+            return mWifiThreadRunner.call(
+                    () -> {
+                        if (scanResults == null || scanResults.isEmpty()) {
+                            return mWifiNetworkSuggestionsManager.getMatchingScanResults(
+                                    networkSuggestions, mScanRequestProxy.getScanResults());
+                        } else {
+                            return mWifiNetworkSuggestionsManager.getMatchingScanResults(
+                                    networkSuggestions, scanResults);
+                        }
+                    },
+                    Collections.emptyMap());
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permission violation - getMatchingScanResults not allowed for uid="
+                    + uid + ", packageName=" + callingPackage + ", reason + e");
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+
+        return Collections.emptyMap();
     }
 
     /**
@@ -2872,7 +2943,8 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     private boolean is5GhzBandSupportedInternal() {
-        return mContext.getResources().getBoolean(R.bool.config_wifi5ghzSupport);
+        return mWifiThreadRunner.call(
+                () -> mClientModeImpl.isWifiBandSupported(WifiScanner.WIFI_BAND_5_GHZ), false);
     }
 
     @Override
@@ -2885,41 +2957,14 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     private boolean is6GhzBandSupportedInternal() {
-        return mContext.getResources().getBoolean(R.bool.config_wifi6ghzSupport);
+        return mWifiThreadRunner.call(
+                () -> mClientModeImpl.isWifiBandSupported(WifiScanner.WIFI_BAND_6_GHZ), false);
     }
 
     @Override
     public boolean isWifiStandardSupported(@ScanResult.WifiStandard int standard) {
         return mWifiThreadRunner.call(
                 () -> mClientModeImpl.isWifiStandardSupported(standard), false);
-    }
-
-    private int getMaxApInterfacesCount() {
-        //TODO (b/123227116): pull it from the HAL
-        return mContext.getResources().getInteger(
-                R.integer.config_wifi_max_ap_interfaces);
-    }
-
-    private boolean isConcurrentLohsAndTetheringSupported() {
-        // TODO(b/110697252): handle all configurations in the wifi stack (just by changing the HAL)
-        return getMaxApInterfacesCount() >= 2;
-    }
-
-    /**
-     * Method allowing callers with NETWORK_SETTINGS permission to check if this is a dual mode
-     * capable device (STA+AP).
-     *
-     * @return true if a dual mode capable device
-     */
-    @Override
-    public boolean needs5GHzToAnyApBandConversion() {
-        enforceNetworkSettingsPermission();
-
-        if (mVerboseLoggingEnabled) {
-            mLog.info("needs5GHzToAnyApBandConversion uid=%").c(Binder.getCallingUid()).flush();
-        }
-        return mContext.getResources().getBoolean(
-                R.bool.config_wifi_convert_apband_5ghz_to_any);
     }
 
     /**
@@ -3467,7 +3512,9 @@ public class WifiServiceImpl extends BaseWifiService {
 
     @Override
     public Network getCurrentNetwork() {
-        enforceAccessPermission();
+        if (!isSettingsOrSuw(Binder.getCallingPid(), Binder.getCallingUid())) {
+            throw new SecurityException(TAG + ": Permission denied");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getCurrentNetwork uid=%").c(Binder.getCallingUid()).flush();
         }
@@ -3484,20 +3531,6 @@ public class WifiServiceImpl extends BaseWifiService {
             sb.append(String.format(" %02x", s.charAt(n) & 0xffff));
         }
         return sb.toString();
-    }
-
-    /**
-     * Enable/disable WifiConnectivityManager at runtime
-     *
-     * @param enabled true-enable; false-disable
-     */
-    @Override
-    public void enableWifiConnectivityManager(boolean enabled) {
-        enforceConnectivityInternalPermission();
-        mLog.info("enableWifiConnectivityManager uid=% enabled=%")
-                .c(Binder.getCallingUid())
-                .c(enabled).flush();
-        mClientModeImpl.enableWifiConnectivityManager(enabled);
     }
 
     /**
@@ -3712,12 +3745,42 @@ public class WifiServiceImpl extends BaseWifiService {
 
     private long getSupportedFeaturesInternal() {
         final AsyncChannel channel = mClientModeImplChannel;
+        long supportedFeatureSet = 0L;
         if (channel != null) {
-            return mClientModeImpl.syncGetSupportedFeatures(channel);
+            supportedFeatureSet = mClientModeImpl.syncGetSupportedFeatures(channel);
         } else {
             Log.e(TAG, "mClientModeImplChannel is not initialized");
-            return 0;
+            return supportedFeatureSet;
         }
+        // Mask the feature set against system properties.
+        boolean rttSupported = mContext.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_WIFI_RTT);
+        if (!rttSupported) {
+            // flags filled in by vendor HAL, remove if overlay disables it.
+            supportedFeatureSet &=
+                    ~(WifiManager.WIFI_FEATURE_D2D_RTT | WifiManager.WIFI_FEATURE_D2AP_RTT);
+        }
+        if (!mContext.getResources().getBoolean(
+                R.bool.config_wifi_p2p_mac_randomization_supported)) {
+            // flags filled in by vendor HAL, remove if overlay disables it.
+            supportedFeatureSet &= ~WifiManager.WIFI_FEATURE_P2P_RAND_MAC;
+        }
+        if (mContext.getResources().getBoolean(
+                R.bool.config_wifi_connected_mac_randomization_supported)) {
+            // no corresponding flags in vendor HAL, set if overlay enables it.
+            supportedFeatureSet |= WifiManager.WIFI_FEATURE_CONNECTED_RAND_MAC;
+        }
+        if (mContext.getResources().getBoolean(
+                R.bool.config_wifi_ap_mac_randomization_supported)) {
+            // no corresponding flags in vendor HAL, set if overlay enables it.
+            supportedFeatureSet |= WifiManager.WIFI_FEATURE_AP_RAND_MAC;
+        }
+        if (mWifiThreadRunner.call(
+                () -> mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager(),
+                false)) {
+            supportedFeatureSet |= WifiManager.WIFI_FEATURE_AP_STA;
+        }
+        return supportedFeatureSet;
     }
 
     private static boolean hasAutomotiveFeature(Context context) {

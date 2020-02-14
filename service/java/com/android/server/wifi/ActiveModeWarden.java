@@ -79,6 +79,9 @@ public class ActiveModeWarden {
     private WifiManager.SoftApCallback mSoftApCallback;
     private WifiManager.SoftApCallback mLohsCallback;
 
+    private boolean mCanRequestMoreClientModeManagers = false;
+    private boolean mCanRequestMoreSoftApManagers = false;
+
     /**
      * Called from WifiServiceImpl to register a callback for notifications from SoftApManager
      */
@@ -136,6 +139,51 @@ public class ActiveModeWarden {
                 });
             }
         });
+
+        wifiNative.registerClientInterfaceAvailabilityListener(
+                (isAvailable) -> mHandler.post(() -> {
+                    mCanRequestMoreClientModeManagers = isAvailable;
+                }));
+        wifiNative.registerSoftApInterfaceAvailabilityListener(
+                (isAvailable) -> mHandler.post(() -> {
+                    mCanRequestMoreSoftApManagers = isAvailable;
+                }));
+    }
+
+    /**
+     * @return Returns whether we can create more client mode managers or not.
+     */
+    public boolean canRequestMoreClientModeManagers() {
+        return mCanRequestMoreClientModeManagers;
+    }
+
+    /**
+     * @return Returns whether we can create more SoftAp managers or not.
+     */
+    public boolean canRequestMoreSoftApManagers() {
+        return mCanRequestMoreSoftApManagers;
+    }
+
+    /**
+     * @return Returns whether the device can support at least one concurrent client mode manager &
+     * softap manager.
+     */
+    public boolean canSupportAtleastOneConcurrentClientAndSoftApManager() {
+        // We already have 1 client mode manager and 1 softap manager active, so yes.
+        if (hasAnyClientModeManager() && hasAnySoftApManager()) {
+            return true;
+        }
+        // We already have 1 client mode manager active, check if we can create a softap manager.
+        if (hasAnyClientModeManager()) {
+            return mCanRequestMoreSoftApManagers;
+        }
+        // We already have 1 softap manager active, check if we can create a client mode manager.
+        if (hasAnySoftApManager()) {
+            return mCanRequestMoreClientModeManagers;
+        }
+        // We don't have any active mode manager, this can happen if wifi is fully off. We return
+        // false here because we cannot retrieve this info from the HAL.
+        return false;
     }
 
     /** Begin listening to broadcasts and start the internal state machine. */
@@ -518,18 +566,18 @@ public class ActiveModeWarden {
         if (enabled) {
             if (mActiveModeManagers.size() == 1) {
                 // only report wifi on if we haven't already
-                mBatteryStatsManager.noteWifiOn();
+                mBatteryStatsManager.reportWifiOn();
             }
         } else {
             if (mActiveModeManagers.size() == 0) {
                 // only report if we don't have any active modes
-                mBatteryStatsManager.noteWifiOff();
+                mBatteryStatsManager.reportWifiOff();
             }
         }
     }
 
     private void updateBatteryStatsScanModeActive() {
-        mBatteryStatsManager.noteWifiState(BatteryStatsManager.WIFI_STATE_OFF_SCANNING, null);
+        mBatteryStatsManager.reportWifiState(BatteryStatsManager.WIFI_STATE_OFF_SCANNING, null);
     }
 
     private boolean checkScanOnlyModeAvailable() {

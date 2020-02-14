@@ -267,14 +267,12 @@ public class WifiPickerTrackerTest {
 
         mBroadcastReceiverCaptor.getValue().onReceive(mMockContext,
                 new Intent(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
-        List<String> seenKeys = new ArrayList<>();
+        List<String> seenTitles = new ArrayList<>();
         for (WifiEntry wifiEntry : wifiPickerTracker.getWifiEntries()) {
-            seenKeys.add(wifiEntry.getKey());
+            seenTitles.add(wifiEntry.getTitle());
         }
 
-        assertThat(seenKeys).containsExactly(
-                StandardWifiEntry.scanResultToStandardWifiEntryKey(openNetwork),
-                StandardWifiEntry.scanResultToStandardWifiEntryKey(secureNetwork));
+        assertThat(seenTitles).containsExactly("Open Network", "Secure Network");
     }
 
     /**
@@ -532,5 +530,31 @@ public class WifiPickerTrackerTest {
 
         assertThat(wifiPickerTracker.getWifiEntries()).isNotEmpty();
         assertThat(wifiPickerTracker.getWifiEntries().get(0).getTitle()).isEqualTo("friendlyName");
+    }
+
+    @Test
+    public void testGetConnectedEntry_alreadyConnectedToPasspoint_returnsPasspointEntry() {
+        final String fqdn = "fqdn";
+        final String friendlyName = "friendlyName";
+        final WifiPickerTracker wifiPickerTracker = createTestWifiPickerTracker();
+        final PasspointConfiguration config = new PasspointConfiguration();
+        final HomeSp homeSp = new HomeSp();
+        homeSp.setFqdn(fqdn);
+        homeSp.setFriendlyName(friendlyName);
+        config.setHomeSp(homeSp);
+        when(mMockWifiManager.getPasspointConfigurations())
+                .thenReturn(Collections.singletonList(config));
+        when(mMockWifiInfo.isPasspointAp()).thenReturn(true);
+        when(mMockWifiInfo.getPasspointFqdn()).thenReturn(fqdn);
+        when(mMockWifiInfo.getRssi()).thenReturn(-50);
+        when(mMockNetworkInfo.getDetailedState()).thenReturn(NetworkInfo.DetailedState.CONNECTED);
+
+        wifiPickerTracker.onStart();
+        verify(mMockContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
+                any(), any(), any());
+        mTestLooper.dispatchAll();
+
+        verify(mMockCallback, atLeastOnce()).onWifiEntriesChanged();
+        assertThat(wifiPickerTracker.getConnectedWifiEntry().getTitle()).isEqualTo(friendlyName);
     }
 }

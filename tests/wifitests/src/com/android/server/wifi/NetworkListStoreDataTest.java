@@ -66,7 +66,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<WifiConfiguration>\n"
                     + "<string name=\"ConfigKey\">%s</string>\n"
                     + "<string name=\"SSID\">%s</string>\n"
-                    + "<null name=\"BSSID\" />\n"
                     + "<null name=\"PreSharedKey\" />\n"
                     + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
@@ -82,6 +81,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
                     + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                    + "<null name=\"BSSID\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
                     + "<null name=\"ProviderFriendlyName\" />\n"
@@ -121,7 +121,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<WifiConfiguration>\n"
                     + "<string name=\"ConfigKey\">%s</string>\n"
                     + "<string name=\"SSID\">%s</string>\n"
-                    + "<null name=\"BSSID\" />\n"
                     + "<null name=\"PreSharedKey\" />\n"
                     + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
@@ -137,6 +136,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
                     + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                    + "<null name=\"BSSID\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
                     + "<null name=\"ProviderFriendlyName\" />\n"
@@ -196,7 +196,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<WifiConfiguration>\n"
                     + "<string name=\"ConfigKey\">%s</string>\n"
                     + "<string name=\"SSID\">%s</string>\n"
-                    + "<null name=\"BSSID\" />\n"
                     + "<string name=\"PreSharedKey\">&quot;WifiConfigurationTestUtilPsk&quot;"
                     + "</string>\n"
                     + "<null name=\"SaePasswordId\" />\n"
@@ -213,6 +212,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
                     + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                    + "<null name=\"BSSID\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
                     + "<null name=\"ProviderFriendlyName\" />\n"
@@ -252,13 +252,16 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
     private NetworkListSharedStoreData mNetworkListSharedStoreData;
     @Mock private Context mContext;
     @Mock private PackageManager mPackageManager;
+    @Mock WifiOemConfigStoreMigrationDataHolder mWifiOemConfigStoreMigrationDataHolder;
 
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
         when(mContext.getPackageManager()).thenReturn(mPackageManager);
         when(mPackageManager.getNameForUid(anyInt())).thenReturn(TEST_CREATOR_NAME);
-        mNetworkListSharedStoreData = new NetworkListSharedStoreData(mContext);
+        when(mWifiOemConfigStoreMigrationDataHolder.getUserSavedNetworks()).thenReturn(null);
+        mNetworkListSharedStoreData =
+                new NetworkListSharedStoreData(mContext, mWifiOemConfigStoreMigrationDataHolder);
     }
 
     /**
@@ -394,7 +397,8 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         assertEquals(WifiConfigStore.STORE_FILE_SHARED_GENERAL,
                 mNetworkListSharedStoreData.getStoreFileId());
         assertEquals(WifiConfigStore.STORE_FILE_USER_GENERAL,
-                new NetworkListUserStoreData(mContext).getStoreFileId());
+                new NetworkListUserStoreData(mContext, mWifiOemConfigStoreMigrationDataHolder)
+                        .getStoreFileId());
     }
 
     /**
@@ -437,7 +441,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                         + "<WifiConfiguration>\n"
                         + "<string name=\"ConfigKey\">%s</string>\n"
                         + "<string name=\"SSID\">%s</string>\n"
-                        + "<null name=\"BSSID\" />\n"
                         + "<null name=\"PreSharedKey\" />\n"
                         + "<null name=\"WEPKeys\" />\n"
                         + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
@@ -451,6 +454,8 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                         + "<byte-array name=\"AllowedGroupMgmtCiphers\" num=\"0\"></byte-array>\n"
                         + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                         + "<boolean name=\"Shared\" value=\"%s\" />\n"
+                        + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                        + "<null name=\"BSSID\" />\n"
                         + "<null name=\"FQDN\" />\n"
                         + "<null name=\"ProviderFriendlyName\" />\n"
                         + "<null name=\"LinkedNetworksList\" />\n"
@@ -680,5 +685,20 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
 
         assertFalse(retrievedNetworkList.get(0).allowedAuthAlgorithms
                 .get(WifiConfiguration.AuthAlgorithm.OPEN));
+    }
+
+    /**
+     * Verify that the shared configurations deserialized correctly from OEM migration hook.
+     */
+    @Test
+    public void deserializeSharedConfigurationsFromOemConfigStoreMigration() throws Exception {
+        List<WifiConfiguration> oemUserSavedNetworks = getTestNetworksConfig(true /* shared */);
+        when(mWifiOemConfigStoreMigrationDataHolder.getUserSavedNetworks())
+                .thenReturn(oemUserSavedNetworks);
+
+        // File contents are ignored.
+        List<WifiConfiguration> parsedNetworks = deserializeData("".getBytes());
+        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigStore(
+                oemUserSavedNetworks, parsedNetworks);
     }
 }

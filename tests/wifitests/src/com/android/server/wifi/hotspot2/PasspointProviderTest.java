@@ -288,7 +288,7 @@ public class PasspointProviderTest extends WifiBaseTest {
     }
 
     /**
-     * Helper function for verifying wifi configuration based on passpoing configuration
+     * Helper function for verifying wifi configuration based on Passpoint configuration
      *
      * @param passpointConfig the source of wifi configuration.
      * @param wifiConfig wifi configuration be verified.
@@ -320,6 +320,12 @@ public class PasspointProviderTest extends WifiBaseTest {
                 wifiConfig.updateIdentifier);
         assertFalse(wifiConfig.shared);
         assertEquals(credential.getRealm(), wifiEnterpriseConfig.getRealm());
+        if (passpointConfig.isMacRandomizationEnabled()) {
+            assertEquals(WifiConfiguration.RANDOMIZATION_PERSISTENT,
+                    wifiConfig.macRandomizationSetting);
+        } else {
+            assertEquals(WifiConfiguration.RANDOMIZATION_NONE, wifiConfig.macRandomizationSetting);
+        }
 
         if (credential.getUserCredential() != null) {
             Credential.UserCredential userCredential = credential.getUserCredential();
@@ -345,7 +351,8 @@ public class PasspointProviderTest extends WifiBaseTest {
             }
             assertEquals(userCredential.getUsername(), wifiEnterpriseConfig.getIdentity());
             assertEquals(decodedPassword, wifiEnterpriseConfig.getPassword());
-            assertEquals(WifiConfiguration.METERED_OVERRIDE_METERED, wifiConfig.meteredOverride);
+            assertEquals(WifiConfiguration.METERED_OVERRIDE_NONE,
+                    wifiConfig.meteredOverride);
 
             if (!ArrayUtils.isEmpty(passpointConfig.getAaaServerTrustedNames())) {
                 assertEquals(String.join(";", passpointConfig.getAaaServerTrustedNames()),
@@ -375,7 +382,7 @@ public class PasspointProviderTest extends WifiBaseTest {
             assertEquals("anonymous@" + credential.getRealm(),
                     wifiEnterpriseConfig.getAnonymousIdentity());
             assertEquals(WifiEnterpriseConfig.Eap.TLS, wifiEnterpriseConfig.getEapMethod());
-            assertEquals(WifiConfiguration.METERED_OVERRIDE_METERED, wifiConfig.meteredOverride);
+            assertEquals(WifiConfiguration.METERED_OVERRIDE_NONE, wifiConfig.meteredOverride);
             // Domain suffix match
             if (ArrayUtils.isEmpty(passpointConfig.getAaaServerTrustedNames())) {
                 assertEquals(homeSp.getFqdn(), wifiEnterpriseConfig.getDomainSuffixMatch());
@@ -659,9 +666,10 @@ public class PasspointProviderTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that there is no match when the provider's FQDN matches a domain name in the
-     * Domain Name ANQP element but the provider's credential doesn't match the authentication
-     * method provided in the NAI realm.
+     * Verify that Home provider is matched even when the provider's FQDN matches a domain name in
+     * the Domain Name ANQP element but the provider's credential doesn't match the authentication
+     * method provided in the NAI realm. This can happen when the infrastructure provider is not
+     * the identity provider, and authentication method matching is not required in the spec.
      *
      * @throws Exception
      */
@@ -679,7 +687,8 @@ public class PasspointProviderTest extends WifiBaseTest {
         anqpElementMap.put(ANQPElementType.ANQPNAIRealm,
                 createNAIRealmElement(TEST_REALM, EAPConstants.EAP_TLS, null));
 
-        assertEquals(PasspointMatch.None, mProvider.match(anqpElementMap, mRoamingConsortium));
+        assertEquals(PasspointMatch.HomeProvider,
+                mProvider.match(anqpElementMap, mRoamingConsortium));
     }
 
     /**
@@ -788,8 +797,8 @@ public class PasspointProviderTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that there is no match when a roaming consortium OI matches an OI
-     * in the roaming consortium ANQP element and but NAI realm is not matched.
+     * Verify that there is Roaming provider match when a roaming consortium OI matches an OI
+     * in the roaming consortium ANQP element and regardless of NAI realm mismatch.
      *
      * @throws Exception
      */
@@ -808,7 +817,7 @@ public class PasspointProviderTest extends WifiBaseTest {
         anqpElementMap.put(ANQPElementType.ANQPNAIRealm,
                 createNAIRealmElement(TEST_REALM, EAPConstants.EAP_TLS, null));
 
-        assertEquals(PasspointMatch.None,
+        assertEquals(PasspointMatch.RoamingProvider,
                 mProvider.match(anqpElementMap, mRoamingConsortium));
     }
 
@@ -863,8 +872,14 @@ public class PasspointProviderTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that there is no match when a roaming consortium OI matches an OI
+     * Verify that there is Roaming provider match when a roaming consortium OI matches an OI
      * in the roaming consortium information element, but NAI realm is not matched.
+     * This can happen in roaming federation where the infrastructure provider is not the
+     * identity provider.
+     * Page 133 in the Hotspot2.0 specification states:
+     * Per subclause 11.25.8 of [2], if the value of HomeOI matches an OI in the Roaming
+     * Consortium advertised by a hotspot operator, successful authentication with that hotspot
+     * is possible.
      *
      * @throws Exception
      */
@@ -884,7 +899,7 @@ public class PasspointProviderTest extends WifiBaseTest {
         anqpElementMap.put(ANQPElementType.ANQPNAIRealm,
                 createNAIRealmElement(TEST_REALM, EAPConstants.EAP_TLS, null));
 
-        assertEquals(PasspointMatch.None,
+        assertEquals(PasspointMatch.RoamingProvider,
                 mProvider.match(anqpElementMap, mRoamingConsortium));
     }
 
@@ -1230,6 +1245,20 @@ public class PasspointProviderTest extends WifiBaseTest {
         // Retrieve the WifiConfiguration associated with the provider, and verify the content of
         // the configuration.
         verifyWifiConfigWithTestData(config, mProvider.getWifiConfig());
+    }
+
+    /**
+     * Verify that the mac randomization setting will be included in the generated
+     * WifiConfiguration.
+     */
+    @Test
+    public void testSetMacRandomizationEnabledToFalse() throws Exception {
+        // Create provider.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.SIM, false);
+        mProvider = createProvider(config);
+        mProvider.setMacRandomizationEnabled(false);
+        verifyWifiConfigWithTestData(mProvider.getConfig(), mProvider.getWifiConfig());
     }
 
     /**
