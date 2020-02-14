@@ -16,9 +16,9 @@
 
 package com.android.wifitrackerlib;
 
-
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
@@ -54,30 +54,28 @@ public class PasspointWifiEntryTest {
 
     @Test
     public void testGetSummary_expiredTimeNotAvailable_notShowExpired() {
-        long notSpecifiedExpiredTimeMilli = -1;
+        // default SubscriptionExpirationTimeInMillis is unset
         PasspointConfiguration passpointConfiguration = getPasspointConfiguration();
-        passpointConfiguration.setSubscriptionExpirationTimeInMillis(notSpecifiedExpiredTimeMilli);
         String expired = "Expired";
         when(mMockResources.getString(R.string.wifi_passpoint_expired)).thenReturn(expired);
 
         PasspointWifiEntry passpointWifiEntry = new PasspointWifiEntry(mMockContext, mTestHandler,
-                passpointConfiguration, mMockWifiManager);
+                passpointConfiguration, mMockWifiManager, false /* forSavedNetworksPage */);
 
         assertThat(passpointWifiEntry.getSummary()).isNotEqualTo(expired);
     }
 
     @Test
     public void testGetSummary_expired_showExpired() {
-        long expiredTimeMilli = 100;
         PasspointConfiguration passpointConfiguration = getPasspointConfiguration();
-        passpointConfiguration.setSubscriptionExpirationTimeInMillis(expiredTimeMilli);
         String expired = "Expired";
         when(mMockResources.getString(R.string.wifi_passpoint_expired)).thenReturn(expired);
-
         PasspointWifiEntry passpointWifiEntry = new PasspointWifiEntry(mMockContext, mTestHandler,
-                passpointConfiguration, mMockWifiManager);
+                passpointConfiguration, mMockWifiManager, false /* forSavedNetworksPage */);
+        PasspointWifiEntry spyEntry = spy(passpointWifiEntry);
+        when(spyEntry.isExpired()).thenReturn(true);
 
-        assertThat(passpointWifiEntry.getSummary()).isEqualTo(expired);
+        assertThat(spyEntry.getSummary()).isEqualTo(expired);
     }
 
     private PasspointConfiguration getPasspointConfiguration() {
@@ -86,5 +84,15 @@ public class PasspointWifiEntryTest {
         homeSp.setFqdn("fqdn");
         passpointConfiguration.setHomeSp(homeSp);
         return passpointConfiguration;
+    }
+
+    @Test
+    public void testGetMeteredChoice_afterSetMeteredChoice_getCorrectValue() {
+        PasspointWifiEntry entry = new PasspointWifiEntry(mMockContext, mTestHandler,
+                getPasspointConfiguration(), mMockWifiManager, false /* forSavedNetworksPage */);
+
+        entry.setMeteredChoice(WifiEntry.METERED_CHOICE_UNMETERED);
+
+        assertThat(entry.getMeteredChoice()).isEqualTo(WifiEntry.METERED_CHOICE_UNMETERED);
     }
 }

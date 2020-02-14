@@ -122,6 +122,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
+import android.net.wifi.hotspot2.pps.Credential;
 import android.net.wifi.hotspot2.pps.HomeSp;
 import android.os.Binder;
 import android.os.Build;
@@ -286,6 +287,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Mock PowerProfile mPowerProfile;
     @Mock WifiTrafficPoller mWifiTrafficPolller;
     @Mock ScanRequestProxy mScanRequestProxy;
+    @Mock WakeupController mWakeupController;
     @Mock ITrafficStateCallback mTrafficStateCallback;
     @Mock INetworkRequestMatchCallback mNetworkRequestMatchCallback;
     @Mock WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
@@ -358,6 +360,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mWifiInjector.getWifiSettingsStore()).thenReturn(mSettingsStore);
         when(mWifiInjector.getClock()).thenReturn(mClock);
         when(mWifiInjector.getScanRequestProxy()).thenReturn(mScanRequestProxy);
+        when(mWifiInjector.getWakeupController()).thenReturn(mWakeupController);
         when(mWifiInjector.getWifiNetworkSuggestionsManager())
                 .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiInjector.makeTelephonyManager()).thenReturn(mTelephonyManager);
@@ -3116,8 +3119,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
      * permissions and NETWORK_SETUP_WIZARD.
      */
     @Test(expected = SecurityException.class)
-    public void testGetAllMatchingFqdnsForScanResultsWithoutPermissions() {
-        mWifiServiceImpl.getAllMatchingFqdnsForScanResults(new ArrayList<>());
+    public void testGetAllMatchingPasspointProfilesForScanResultsWithoutPermissions() {
+        mWifiServiceImpl.getAllMatchingPasspointProfilesForScanResults(new ArrayList<>());
     }
 
     /**
@@ -3274,7 +3277,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.startAutoDispatch();
         mWifiServiceImpl.removePasspointConfiguration(TEST_FQDN, TEST_PACKAGE_NAME);
         mLooper.stopAutoDispatchAndIgnoreExceptions();
-        verify(mPasspointManager).removeProvider(Binder.getCallingUid(), false, TEST_FQDN);
+        verify(mPasspointManager).removeProvider(Binder.getCallingUid(), false, null,
+                TEST_FQDN);
     }
 
     /**
@@ -3289,7 +3293,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.startAutoDispatch();
         mWifiServiceImpl.removePasspointConfiguration(TEST_FQDN, TEST_PACKAGE_NAME);
         mLooper.stopAutoDispatchAndIgnoreExceptions();
-        verify(mPasspointManager).removeProvider(Binder.getCallingUid(), true, TEST_FQDN);
+        verify(mPasspointManager).removeProvider(Binder.getCallingUid(), true, null,
+                TEST_FQDN);
     }
 
     /**
@@ -3787,6 +3792,27 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
+     * Verifies that sim state change does not set or reset the country code
+     */
+    @Test
+    public void testSimStateChangeDoesNotResetCountryCodeForRebroadcastedIntent() {
+        mWifiServiceImpl.checkAndStartWifi();
+        mLooper.dispatchAll();
+        verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
+                (IntentFilter) argThat((IntentFilter filter) ->
+                        filter.hasAction(TelephonyIntents.ACTION_SIM_STATE_CHANGED)));
+
+        int userHandle = TEST_USER_HANDLE;
+        // Send the broadcast
+        Intent intent = new Intent(TelephonyIntents.ACTION_SIM_STATE_CHANGED);
+        intent.putExtra(Intent.EXTRA_USER_HANDLE, userHandle);
+        intent.putExtra(Intent.EXTRA_REBROADCAST_ON_UNLOCK, true);
+        intent.putExtra(Intent.EXTRA_SIM_STATE, Intent.SIM_STATE_ABSENT);
+        mBroadcastReceiverCaptor.getValue().onReceive(mContext, intent);
+        verifyNoMoreInteractions(mWifiCountryCode);
+    }
+
+    /**
      * Verifies that entering airplane mode does not reset country code.
      */
     @Test
@@ -3967,6 +3993,9 @@ public class WifiServiceImplTest extends WifiBaseTest {
         HomeSp homeSp = new HomeSp();
         homeSp.setFqdn(fqdn);
         config.setHomeSp(homeSp);
+        Credential credential = new Credential();
+        credential.setRealm("example.com");
+        config.setCredential(credential);
 
         mWifiServiceImpl.mClientModeImplChannel = mAsyncChannel;
         when(mWifiConfigManager.getSavedNetworks(anyInt()))
@@ -3983,7 +4012,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         verify(mWifiConfigManager).removeNetwork(
                 network.networkId, Binder.getCallingUid(), TEST_PACKAGE_NAME);
-        verify(mPasspointManager).removeProvider(anyInt(), anyBoolean(), eq(fqdn));
+        verify(mPasspointManager).removeProvider(anyInt(), anyBoolean(), isNull(),
+                eq(config.getUniqueId()));
         verify(mWifiConfigManager).clearDeletedEphemeralNetworks();
         verify(mClientModeImpl).clearNetworkRequestUserApprovedAccessPoints();
         verify(mWifiNetworkSuggestionsManager).clear();
@@ -4832,13 +4862,15 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
 
         String fqdn = "test.com";
-        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), eq(fqdn))).thenReturn(true);
+        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), isNull(), eq(fqdn)))
+                .thenReturn(true);
         mLooper.startAutoDispatch();
         assertTrue(mWifiServiceImpl.removePasspointConfiguration(fqdn, TEST_PACKAGE_NAME));
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         reset(mPasspointManager);
 
-        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), eq(fqdn))).thenReturn(false);
+        when(mPasspointManager.removeProvider(anyInt(), anyBoolean(), isNull(), eq(fqdn)))
+                .thenReturn(false);
         mLooper.startAutoDispatch();
         assertFalse(mWifiServiceImpl.removePasspointConfiguration(fqdn, TEST_PACKAGE_NAME));
         mLooper.stopAutoDispatchAndIgnoreExceptions();
@@ -5483,5 +5515,73 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertEquals(supportedFeaturesFromClientModeImpl | WifiManager.WIFI_FEATURE_AP_STA,
                 mWifiServiceImpl.getSupportedFeatures());
         mLooper.stopAutoDispatchAndIgnoreExceptions();
+    }
+
+    @Test
+    public void testSetScanThrottleEnabledWithNetworkSettingsPermission() {
+        doNothing().when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        mWifiServiceImpl.setScanThrottleEnabled(true);
+        mLooper.dispatchAll();
+        verify(mScanRequestProxy).setScanThrottleEnabled(true);
+
+        mWifiServiceImpl.setScanThrottleEnabled(false);
+        mLooper.dispatchAll();
+        verify(mScanRequestProxy).setScanThrottleEnabled(false);
+    }
+
+    @Test(expected = SecurityException.class)
+    public void testSetScanThrottleEnabledWithNoNetworkSettingsPermission() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+
+        mWifiServiceImpl.setScanThrottleEnabled(true);
+        mLooper.dispatchAll();
+        verify(mScanRequestProxy, never()).setScanThrottleEnabled(true);
+    }
+
+    @Test
+    public void testIsScanThrottleEnabled() {
+        when(mScanRequestProxy.isScanThrottleEnabled()).thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertTrue(mWifiServiceImpl.isScanThrottleEnabled());
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mScanRequestProxy).isScanThrottleEnabled();
+    }
+
+    @Test
+    public void testSetAutoWakeupEnabledWithNetworkSettingsPermission() {
+        doNothing().when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        mWifiServiceImpl.setAutoWakeupEnabled(true);
+        mLooper.dispatchAll();
+        verify(mWakeupController).setEnabled(true);
+
+        mWifiServiceImpl.setAutoWakeupEnabled(false);
+        mLooper.dispatchAll();
+        verify(mWakeupController).setEnabled(false);
+    }
+
+    @Test(expected = SecurityException.class)
+    public void testSetAutoWakeupEnabledWithNoNetworkSettingsPermission() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+
+        mWifiServiceImpl.setAutoWakeupEnabled(true);
+        mLooper.dispatchAll();
+        verify(mWakeupController, never()).setEnabled(true);
+    }
+
+    @Test
+    public void testIsAutoWakeupEnabled() {
+        when(mWakeupController.isEnabled()).thenReturn(true);
+        mLooper.startAutoDispatch();
+        assertTrue(mWifiServiceImpl.isAutoWakeupEnabled());
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+        verify(mWakeupController).isEnabled();
     }
 }

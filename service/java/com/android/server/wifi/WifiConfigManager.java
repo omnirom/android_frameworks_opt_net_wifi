@@ -236,6 +236,7 @@ public class WifiConfigManager {
     private final WifiInjector mWifiInjector;
     private final MacAddressUtil mMacAddressUtil;
     private final TelephonyUtil mTelephonyUtil;
+    private final WifiScoreCard mWifiScoreCard;
 
     /**
      * Local log used for debugging any WifiConfigManager issues.
@@ -333,7 +334,7 @@ public class WifiConfigManager {
             NetworkListUserStoreData networkListUserStoreData,
             RandomizedMacStoreData randomizedMacStoreData,
             FrameworkFacade frameworkFacade, Handler handler,
-            DeviceConfigFacade deviceConfigFacade) {
+            DeviceConfigFacade deviceConfigFacade, WifiScoreCard wifiScoreCard) {
         mContext = context;
         mClock = clock;
         mUserManager = userManager;
@@ -344,6 +345,7 @@ public class WifiConfigManager {
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mWifiPermissionsWrapper = wifiPermissionsWrapper;
         mWifiInjector = wifiInjector;
+        mWifiScoreCard = wifiScoreCard;
 
         mConfiguredNetworks = new ConfigurationMap(userManager);
         mScanDetailCaches = new HashMap<>(16, 0.75f);
@@ -1052,6 +1054,7 @@ public class WifiConfigManager {
         // Copy over macRandomizationSetting
         internalConfig.macRandomizationSetting = externalConfig.macRandomizationSetting;
         internalConfig.carrierId = externalConfig.carrierId;
+        internalConfig.isHomeProviderNetwork = externalConfig.isHomeProviderNetwork;
 
         // Copy over the DPP configuration parameters if set.
         if (externalConfig.dppConnector != null) {
@@ -1141,6 +1144,7 @@ public class WifiConfigManager {
         newInternalConfig.useExternalScores = externalConfig.useExternalScores;
         newInternalConfig.shared = externalConfig.shared;
         newInternalConfig.updateIdentifier = externalConfig.updateIdentifier;
+        newInternalConfig.setPasspointUniqueId(externalConfig.getPasspointUniqueId());
 
         // Add debug information for network addition.
         newInternalConfig.creatorUid = newInternalConfig.lastUpdateUid = uid;
@@ -2284,6 +2288,8 @@ public class WifiConfigManager {
             WifiConfiguration config, ScanDetail scanDetail) {
         ScanResult scanResult = scanDetail.getScanResult();
 
+        WifiScoreCard.PerNetwork network = mWifiScoreCard.lookupNetwork(config.SSID);
+        network.addFrequency(scanResult.frequency);
         ScanDetailCache scanDetailCache = getOrCreateScanDetailCacheForNetwork(config);
         if (scanDetailCache == null) {
             Log.e(TAG, "Could not allocate scan cache for " + config.getPrintableSsid());
@@ -2828,7 +2834,7 @@ public class WifiConfigManager {
         Iterator<WifiConfiguration> iter = networks.iterator();
         while (iter.hasNext()) {
             WifiConfiguration config = iter.next();
-            if (config.ephemeral || config.isPasspoint()
+            if (config.ephemeral || config.isPasspoint() || !config.allowAutojoin
                     || config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()
                     || config.getNetworkSelectionStatus().isNetworkTemporaryDisabled()) {
                 iter.remove();

@@ -49,6 +49,7 @@ import android.util.Pair;
 import androidx.test.filters.SmallTest;
 
 import com.android.dx.mockito.inline.extended.ExtendedMockito;
+import com.android.server.wifi.WifiScoreCard.PerNetwork;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -139,6 +140,8 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     @Mock private MacAddressUtil mMacAddressUtil;
     @Mock private BssidBlocklistMonitor mBssidBlocklistMonitor;
     @Mock private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
+    @Mock private WifiScoreCard mWifiScoreCard;
+    @Mock private PerNetwork mPerNetwork;
 
     private MockResources mResources;
     private InOrder mContextConfigStoreMockOrder;
@@ -217,6 +220,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 .thenReturn(false);
         when(mWifiInjector.getMacAddressUtil()).thenReturn(mMacAddressUtil);
         when(mMacAddressUtil.calculatePersistentMac(any(), any())).thenReturn(TEST_RANDOMIZED_MAC);
+        when(mWifiScoreCard.lookupNetwork(any())).thenReturn(mPerNetwork);
 
         mTelephonyUtil = new TelephonyUtil(mTelephonyManager, mSubscriptionManager,
                 mock(FrameworkFacade.class), mock(Context.class), mock(Handler.class));
@@ -661,16 +665,11 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         assertEquals(ephemeralNetwork.networkId, wifiConfigCaptor.getValue().networkId);
     }
 
-    /**
-     * Verifies the addition of a single passpoint network using
-     * {@link WifiConfigManager#addOrUpdateNetwork(WifiConfiguration, int)} and verifies that
-     * the {@link WifiConfigManager#getSavedNetworks(int)} ()} does not return this network.
-     */
-    @Test
-    public void testAddSinglePasspointNetwork() throws Exception {
+    private void addSinglePasspointNetwork(boolean isHomeProviderNetwork) throws Exception {
         ArgumentCaptor<WifiConfiguration> wifiConfigCaptor =
                 ArgumentCaptor.forClass(WifiConfiguration.class);
         WifiConfiguration passpointNetwork = WifiConfigurationTestUtil.createPasspointNetwork();
+        passpointNetwork.isHomeProviderNetwork = isHomeProviderNetwork;
 
         verifyAddPasspointNetworkToWifiConfigManager(passpointNetwork);
         // Ensure that configured network list is not empty.
@@ -680,6 +679,28 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         assertTrue(mWifiConfigManager.getSavedNetworks(Process.WIFI_UID).isEmpty());
         verify(mWcmListener).onNetworkAdded(wifiConfigCaptor.capture());
         assertEquals(passpointNetwork.networkId, wifiConfigCaptor.getValue().networkId);
+        assertEquals(passpointNetwork.isHomeProviderNetwork,
+                wifiConfigCaptor.getValue().isHomeProviderNetwork);
+    }
+
+    /**
+     * Verifies the addition of a single home Passpoint network using
+     * {@link WifiConfigManager#addOrUpdateNetwork(WifiConfiguration, int)} and verifies that
+     * the {@link WifiConfigManager#getSavedNetworks(int)} ()} does not return this network.
+     */
+    @Test
+    public void testAddSingleHomePasspointNetwork() throws Exception {
+        addSinglePasspointNetwork(true);
+    }
+
+    /**
+     * Verifies the addition of a single roaming Passpoint network using
+     * {@link WifiConfigManager#addOrUpdateNetwork(WifiConfiguration, int)} and verifies that
+     * the {@link WifiConfigManager#getSavedNetworks(int)} ()} does not return this network.
+     */
+    @Test
+    public void testAddSingleRoamingPasspointNetwork() throws Exception {
+        addSinglePasspointNetwork(false);
     }
 
     /**
@@ -2398,6 +2419,13 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         assertEquals(2, pnoNetworks.size());
         assertEquals(network1.SSID, pnoNetworks.get(0).ssid);
         assertEquals(network2.SSID, pnoNetworks.get(1).ssid);
+
+        // Now set network1 autojoin disabled. This should remove network 1 from the list.
+        assertTrue(mWifiConfigManager.allowAutojoin(network1.networkId, false));
+        // Retrieve the Pno network list again & verify the order of the networks returned.
+        pnoNetworks = mWifiConfigManager.retrievePnoNetworkList();
+        assertEquals(1, pnoNetworks.size());
+        assertEquals(network2.SSID, pnoNetworks.get(0).ssid);
     }
 
     /**
@@ -3116,6 +3144,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
             assertNotNull(
                     mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(
                             networkScanDetail));
+            verify(mPerNetwork).addFrequency(TEST_FREQ_LIST[i]);
 
         }
         // Ensure that the fetched list size is limited.
@@ -5043,7 +5072,8 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                         mWifiPermissionsUtil, mWifiPermissionsWrapper, mWifiInjector,
                         mNetworkListSharedStoreData, mNetworkListUserStoreData,
                         mRandomizedMacStoreData,
-                        mFrameworkFacade, new Handler(mLooper.getLooper()), mDeviceConfigFacade);
+                        mFrameworkFacade, new Handler(mLooper.getLooper()), mDeviceConfigFacade,
+                        mWifiScoreCard);
         mWifiConfigManager.enableVerboseLogging(1);
     }
 

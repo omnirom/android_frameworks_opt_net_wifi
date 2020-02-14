@@ -1365,7 +1365,7 @@ public class WifiAwareDataPathStateManager {
             }
 
             // validate UID
-            if (ns.requestorUid != uid) {
+            if (request.getRequestorUid() != uid) {
                 Log.e(TAG, "processNetworkSpecifier: networkSpecifier=" + ns.toString()
                         + " -- UID mismatch to clientId's uid=" + uid);
                 return null;
@@ -1513,6 +1513,7 @@ public class WifiAwareDataPathStateManager {
                 return false;
             }
 
+            networkCapabilities.setRequestorUid(nnri.uid);
             networkCapabilities.setNetworkSpecifier(new WifiAwareAgentNetworkSpecifier(
                     networkRequests.stream()
                             .map(NetworkRequest::getNetworkSpecifier)

@@ -63,7 +63,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
 import android.net.wifi.hotspot2.pps.Credential;
-import android.net.wifi.wificond.WifiCondManager;
+import android.net.wifi.wificond.WifiNl80211Manager;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
@@ -75,15 +75,19 @@ import android.util.SparseIntArray;
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
 
+import com.android.dx.mockito.inline.extended.ExtendedMockito;
 import com.android.server.wifi.aware.WifiAwareMetrics;
 import com.android.server.wifi.hotspot2.NetworkDetail;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointMatch;
 import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.p2p.WifiP2pMetrics;
+import com.android.server.wifi.proto.WifiStatsLog;
 import com.android.server.wifi.proto.nano.WifiMetricsProto;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.HealthMonitorFailureStats;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.HealthMonitorMetrics;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.HistogramBucketInt32;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.Int32Count;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats;
@@ -109,6 +113,8 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.MockitoSession;
+import org.mockito.quality.Strictness;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileDescriptor;
@@ -136,6 +142,7 @@ public class WifiMetricsTest extends WifiBaseTest {
     Random mRandom = new Random();
     private static final int TEST_WIFI_USABILITY_STATS_LISTENER_IDENTIFIER = 2;
     private static final int TEST_NETWORK_ID = 42;
+    private MockitoSession mSession;
     @Mock Context mContext;
     MockResources mResources;
     @Mock FrameworkFacade mFacade;
@@ -147,6 +154,7 @@ public class WifiMetricsTest extends WifiBaseTest {
     @Mock WifiNetworkSelector mWns;
     @Mock WifiPowerMetrics mWifiPowerMetrics;
     @Mock WifiDataStall mWifiDataStall;
+    @Mock WifiHealthMonitor mWifiHealthMonitor;
     @Mock IBinder mAppBinder;
     @Mock IOnWifiUsabilityStatsListener mOnWifiUsabilityStatsListener;
     @Mock ExternalCallbackTracker<IOnWifiUsabilityStatsListener> mListenerTracker;
@@ -170,6 +178,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         mWifiMetrics.setScoringParams(mScoringParams);
         mWifiMetrics.setWifiNetworkSelector(mWns);
         mWifiMetrics.setWifiDataStall(mWifiDataStall);
+        mWifiMetrics.setWifiHealthMonitor(mWifiHealthMonitor);
     }
 
     /**
@@ -409,6 +418,9 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_ADD_OR_UPDATE_NETWORK_CALLS = 5;
     private static final int NUM_ENABLE_NETWORK_CALLS = 6;
     private static final long NUM_IP_RENEWAL_FAILURE = 7;
+    private static final int NUM_NETWORK_ABNORMAL_ASSOC_REJECTION = 2;
+    private static final int NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY = 4;
+    private static final int NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS = 5;
 
     /** Number of notifications per "Connect to Network" notification type. */
     private static final int[] NUM_CONNECT_TO_NETWORK_NOTIFICATIONS = {0, 10, 20, 30, 40};
@@ -878,6 +890,8 @@ public class WifiMetricsTest extends WifiBaseTest {
 
         addWifiPowerMetrics();
 
+        addWifiHealthMetrics();
+
         mResources.setBoolean(R.bool.config_wifiIsUnusableEventMetricsEnabled,
                 WIFI_IS_UNUSABLE_EVENT_LOGGING_SETTING);
         mResources.setBoolean(R.bool.config_wifiLinkSpeedMetricsEnabled,
@@ -893,6 +907,17 @@ public class WifiMetricsTest extends WifiBaseTest {
         wifiRadioUsage.loggingDurationMs = WIFI_POWER_METRICS_LOGGING_DURATION;
         wifiRadioUsage.scanTimeMs = WIFI_POWER_METRICS_SCAN_TIME;
         when(mWifiPowerMetrics.buildWifiRadioUsageProto()).thenReturn(wifiRadioUsage);
+    }
+
+    private void addWifiHealthMetrics() {
+        HealthMonitorMetrics metrics = new HealthMonitorMetrics();
+        metrics.failureStatsIncrease = new HealthMonitorFailureStats();
+        metrics.failureStatsDecrease = new HealthMonitorFailureStats();
+        metrics.failureStatsHigh = new HealthMonitorFailureStats();
+        metrics.failureStatsIncrease.cntAssocRejection = NUM_NETWORK_ABNORMAL_ASSOC_REJECTION;
+        metrics.numNetworkSufficientRecentStatsOnly = NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY;
+        metrics.numNetworkSufficientRecentPrevStats = NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS;
+        when(mWifiHealthMonitor.buildProto()).thenReturn(metrics);
     }
 
     private void addSoftApEventsToMetrics() {
@@ -1217,6 +1242,14 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertEquals(NUM_ADD_OR_UPDATE_NETWORK_CALLS, mDecodedProto.numAddOrUpdateNetworkCalls);
         assertEquals(NUM_ENABLE_NETWORK_CALLS, mDecodedProto.numEnableNetworkCalls);
         assertEquals(NUM_IP_RENEWAL_FAILURE, mDecodedProto.numIpRenewalFailure);
+        assertEquals(NUM_NETWORK_ABNORMAL_ASSOC_REJECTION,
+                mDecodedProto.healthMonitorMetrics.failureStatsIncrease.cntAssocRejection);
+        assertEquals(0,
+                mDecodedProto.healthMonitorMetrics.failureStatsIncrease.cntAssocTimeout);
+        assertEquals(NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY,
+                mDecodedProto.healthMonitorMetrics.numNetworkSufficientRecentStatsOnly);
+        assertEquals(NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS,
+                mDecodedProto.healthMonitorMetrics.numNetworkSufficientRecentPrevStats);
     }
 
     /**
@@ -1590,6 +1623,40 @@ public class WifiMetricsTest extends WifiBaseTest {
         dumpProtoAndDeserialize();
         //Check there are only 2 connection events
         assertEquals(2, mDecodedProto.connectionEvent.length);
+    }
+
+    /**
+     * Test logging to WestWorld when a connection event finishes.
+     */
+    @Test
+    public void testLogWifiConnectionResultWestworld() throws Exception {
+        // static mocking for WifiStatsLog
+        mSession = ExtendedMockito.mockitoSession()
+                .strictness(Strictness.LENIENT)
+                .mockStatic(WifiStatsLog.class)
+                .startMocking();
+
+        WifiConfiguration network = WifiConfigurationTestUtil.createOpenNetwork();
+        WifiConfiguration.NetworkSelectionStatus networkSelectionStatus =
+                mock(WifiConfiguration.NetworkSelectionStatus.class);
+        ScanResult scanResult = mock(ScanResult.class);
+        scanResult.level = -55;
+        when(networkSelectionStatus.getCandidate()).thenReturn(scanResult);
+        network.setNetworkSelectionStatus(networkSelectionStatus);
+
+        // Start and end Connection event
+        mWifiMetrics.startConnectionEvent(network, "RED",
+                WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE);
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE,
+                WifiMetricsProto.ConnectionEvent.HLF_DHCP,
+                WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
+
+        ExtendedMockito.verify(() -> WifiStatsLog.write(
+                WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED, false,
+                WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_AUTHENTICATION_GENERAL,
+                -55));
+        mSession.finishMocking();
     }
 
     /**
@@ -3440,13 +3507,13 @@ public class WifiMetricsTest extends WifiBaseTest {
     public void testLogLinkProbeMetrics() throws Exception {
         mWifiMetrics.logLinkProbeSuccess(10000, -75, 50, 5);
         mWifiMetrics.logLinkProbeFailure(30000, -80, 10,
-                WifiCondManager.SEND_MGMT_FRAME_ERROR_NO_ACK);
+                WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_NO_ACK);
         mWifiMetrics.logLinkProbeSuccess(3000, -71, 160, 12);
         mWifiMetrics.logLinkProbeFailure(40000, -80, 6,
-                WifiCondManager.SEND_MGMT_FRAME_ERROR_NO_ACK);
+                WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_NO_ACK);
         mWifiMetrics.logLinkProbeSuccess(5000, -73, 160, 10);
         mWifiMetrics.logLinkProbeFailure(2000, -78, 6,
-                WifiCondManager.SEND_MGMT_FRAME_ERROR_TIMEOUT);
+                WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_TIMEOUT);
 
         dumpProtoAndDeserialize();
 

@@ -115,6 +115,11 @@ public class WifiConfigurationTestUtil {
                 : WifiConfiguration.Status.DISABLED;
         config.FQDN = fqdn;
         config.providerFriendlyName = providerFriendlyName;
+        if (config.FQDN != null) {
+            int uniqueId = config.FQDN.hashCode() + config.networkId + config.creatorUid;
+            // Generate a Passpoint unique id locally for the test
+            config.setPasspointUniqueId(config.FQDN + "_" + uniqueId);
+        }
         return config;
     }
 
@@ -521,6 +526,10 @@ public class WifiConfigurationTestUtil {
             caps = "[RSN-OWE-CCMP]";
         } else if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SUITE_B_192)) {
             caps = "[RSN-SUITE-B-192-CCMP]";
+        } else if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_PSK)) {
+            caps = "[WAPI-WAPI-PSK-SMS4]";
+        } else if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_CERT)) {
+            caps = "[WAPI-WAPI-CERT-SMS4]";
         } else {
             caps = "[]";
         }

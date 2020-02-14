@@ -38,7 +38,6 @@ import org.junit.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.BitSet;
 
 /**
  * Unit tests for {@link com.android.server.wifi.util.InformationElementUtil}.
@@ -311,9 +310,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                 (byte) 0xAC, (byte) 0x02, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -337,9 +334,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x00, (byte) 0x0F, (byte) 0xAC };
 
         InformationElement[] ies = new InformationElement[] { ie };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -366,9 +361,8 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                 (byte) 0xF2, (byte) 0x02, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
+        int beaconCap = 0x1 << 4;
 
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
         capabilities.from(ies, beaconCap, false);
@@ -390,9 +384,8 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x01, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
+        int beaconCap = 0x1 << 4;
 
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
         capabilities.from(ies, beaconCap, false);
@@ -427,9 +420,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                    (byte) 0xF2, (byte) 0x02, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ieWpa, ieRsn };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -466,9 +457,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ieRsn };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -505,9 +494,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ieRsn };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -542,9 +529,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ieRsn };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -570,8 +555,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
 
         InformationElement[] ies = new InformationElement[] { ieOwe };
 
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(0);
+        int beaconCap = 0x1 << 0;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -597,8 +581,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
 
         InformationElement[] ies = new InformationElement[] { ieOwe };
 
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(0);
+        int beaconCap = 0x1 << 0;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -633,9 +616,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ieRsn };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -665,9 +646,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 (byte) 0x00, (byte) 0x50 };
 
         InformationElement[] ies = new InformationElement[] { ieWpa, ieRsn };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -698,9 +677,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
         ieWps.bytes = new byte[] { (byte) 0x00, (byte) 0x50, (byte) 0xF2, (byte) 0x04 };
 
         InformationElement[] ies = new InformationElement[] { ieWpa, ieWps };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
 
         InformationElementUtil.Capabilities capabilities =
@@ -727,9 +704,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                 (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(4);
+        int beaconCap = 0x1 << 4;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -756,9 +731,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                 (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.clear(4);
+        int beaconCap = 0;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -784,9 +757,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                 (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(0);
+        int beaconCap = 0x1 << 0;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -813,15 +784,12 @@ public class InformationElementUtilTest extends WifiBaseTest {
                                 (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00 };
 
         InformationElement[] ies = new InformationElement[] { ie };
-
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.clear(0);
+        int beaconCap = 0;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
         capabilities.from(ies, beaconCap, false);
         String result = capabilities.generateCapabilitiesString();
-
 
         assertEquals("", result);
     }
@@ -833,8 +801,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
      */
     @Test
     public void buildCapabilities_IbssCapabilitySet() {
-        BitSet beaconCap = new BitSet(16);
-        beaconCap.set(1);
+        int beaconCap = 0x1 << 1;
 
         InformationElementUtil.Capabilities capabilities =
                 new InformationElementUtil.Capabilities();
@@ -980,7 +947,7 @@ public class InformationElementUtilTest extends WifiBaseTest {
      * @throws Exception
      */
     @Test
-    public void getHS2VendorSpecificIE() throws Exception {
+    public void getHS2VendorSpecificIEWithDomainIdOnly() throws Exception {
         InformationElement ie = new InformationElement();
         ie.id = InformationElement.EID_VSA;
         /**
@@ -1000,6 +967,65 @@ public class InformationElementUtilTest extends WifiBaseTest {
                 InformationElementUtil.getHS2VendorSpecificIE(new InformationElement[] {ie});
         assertEquals(NetworkDetail.HSRelease.R2, vsa.hsRelease);
         assertEquals(0x2211, vsa.anqpDomainID);
+    }
+
+    /**
+     * Verify that the expected Hotspot 2.0 Vendor Specific information element is parsed and
+     * retrieved from the list of IEs.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void getHS2VendorSpecificIEWithDomainIdAndPpsMoId() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_VSA;
+        /**
+         * Vendor Specific OI Format:
+         * | OI | Type | Hotspot Configuration | PPS MO ID (optional) | ANQP Domain ID (optional)
+         *    3    1              1                    2                        2
+         *
+         * With OI=0x506F9A and Type=0x10 for Hotspot 2.0
+         *
+         * The Format of Hotspot Configuration:
+         *        B0               B1                   B2             B3    B4              B7
+         * | DGAF Disabled | PPS MO ID Flag | ANQP Domain ID Flag | reserved | Release Number |
+         */
+        ie.bytes = new byte[] { (byte) 0x50, (byte) 0x6F, (byte) 0x9A, (byte) 0x10,
+                (byte) 0x16 /* Hotspot Configuration */, (byte) 0x44, (byte) 0x33 /* PPS MO */,
+                (byte) 0x11, (byte) 0x22 /* ANQP Domain */};
+        InformationElementUtil.Vsa vsa =
+                InformationElementUtil.getHS2VendorSpecificIE(new InformationElement[] {ie});
+        assertEquals(NetworkDetail.HSRelease.R2, vsa.hsRelease);
+        assertEquals(0x2211, vsa.anqpDomainID);
+    }
+
+    /**
+     * Verify that the expected Hotspot 2.0 Vendor Specific information element is parsed and
+     * retrieved from the list of IEs.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testHS2VendorSpecificIEWithDomainIdAndPpsMoIdBitsIncorrectSize() throws Exception {
+        InformationElement ie = new InformationElement();
+        ie.id = InformationElement.EID_VSA;
+        /**
+         * Vendor Specific OI Format:
+         * | OI | Type | Hotspot Configuration | PPS MO ID (optional) | ANQP Domain ID (optional)
+         *    3    1              1                    2                        2
+         *
+         * With OI=0x506F9A and Type=0x10 for Hotspot 2.0
+         *
+         * The Format of Hotspot Configuration:
+         *        B0               B1                   B2             B3    B4              B7
+         * | DGAF Disabled | PPS MO ID Flag | ANQP Domain ID Flag | reserved | Release Number |
+         */
+        ie.bytes = new byte[] { (byte) 0x50, (byte) 0x6F, (byte) 0x9A, (byte) 0x10,
+                (byte) 0x16 /* Hotspot Configuration */, (byte) 0x44, (byte) 0x33 /* PPS MO */
+                /* ANQP Domain missing */};
+        InformationElementUtil.Vsa vsa =
+                InformationElementUtil.getHS2VendorSpecificIE(new InformationElement[] {ie});
+        assertEquals(0, vsa.anqpDomainID);
     }
 
     /**

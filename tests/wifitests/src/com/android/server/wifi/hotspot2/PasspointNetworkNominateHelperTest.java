@@ -16,6 +16,8 @@
 
 package com.android.server.wifi.hotspot2;
 
+import static com.android.server.wifi.WifiConfigurationTestUtil.SECURITY_EAP;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -98,9 +100,11 @@ public class PasspointNetworkNominateHelperTest {
      * @return {@link WifiConfiguration}
      */
     private static WifiConfiguration generateWifiConfig(String fqdn) {
-        WifiConfiguration config = new WifiConfiguration();
-        config.FQDN = fqdn;
-        return config;
+        WifiConfiguration wifiConfiguration = WifiConfigurationTestUtil.generateWifiConfig(-1,
+                TEST_UID, "\"PasspointTestSSID\"", true, true,
+                fqdn, fqdn, SECURITY_EAP);
+
+        return wifiConfiguration;
     }
 
     /**
@@ -118,7 +122,7 @@ public class PasspointNetworkNominateHelperTest {
         when(provider.getConfig()).thenReturn(passpointConfig);
         when(provider.getWifiConfig()).thenReturn(config);
         when(provider.isFromSuggestion()).thenReturn(false);
-        when(provider.isAutoJoinEnabled()).thenReturn(true);
+        when(provider.isAutojoinEnabled()).thenReturn(true);
         return provider;
     }
 
@@ -325,7 +329,7 @@ public class PasspointNetworkNominateHelperTest {
                 generateScanDetail(TEST_SSID2, TEST_BSSID2));
 
         // Setup matching providers for ScanDetail with TEST_SSID1.
-        when(sTestProvider1.isAutoJoinEnabled()).thenReturn(false); // disable auto-join on provider
+        when(sTestProvider1.isAutojoinEnabled()).thenReturn(false); // disable auto-join on provider
         List<Pair<PasspointProvider, PasspointMatch>> homeProvider = new ArrayList<>();
         homeProvider.add(Pair.create(sTestProvider1, PasspointMatch.HomeProvider));
         List<Pair<PasspointProvider, PasspointMatch>> roamingProvider = new ArrayList<>();
@@ -358,8 +362,8 @@ public class PasspointNetworkNominateHelperTest {
                 generateScanDetail(TEST_SSID2, TEST_BSSID2));
 
         // Setup matching providers for ScanDetail with TEST_SSID1.
-        when(sTestProvider1.isAutoJoinEnabled()).thenReturn(false); // disable auto-join on provider
-        when(sTestProvider2.isAutoJoinEnabled()).thenReturn(false); // disable auto-join on provider
+        when(sTestProvider1.isAutojoinEnabled()).thenReturn(false); // disable auto-join on provider
+        when(sTestProvider2.isAutojoinEnabled()).thenReturn(false); // disable auto-join on provider
         List<Pair<PasspointProvider, PasspointMatch>> homeProvider = new ArrayList<>();
         homeProvider.add(Pair.create(sTestProvider1, PasspointMatch.HomeProvider));
         List<Pair<PasspointProvider, PasspointMatch>> roamingProvider = new ArrayList<>();

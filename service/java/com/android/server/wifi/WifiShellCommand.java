@@ -16,9 +16,10 @@
 
 package com.android.server.wifi;
 
+import android.content.Context;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiScanner;
-import android.net.wifi.wificond.WifiCondManager;
+import android.net.wifi.wificond.WifiNl80211Manager;
 import android.os.BasicShellCommandHandler;
 import android.os.Binder;
 
@@ -53,8 +54,9 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     private final WifiCountryCode mWifiCountryCode;
     private final WifiLastResortWatchdog mWifiLastResortWatchdog;
     private final WifiServiceImpl mWifiService;
+    private final Context mContext;
 
-    WifiShellCommand(WifiInjector wifiInjector, WifiServiceImpl wifiService) {
+    WifiShellCommand(WifiInjector wifiInjector, WifiServiceImpl wifiService, Context context) {
         mClientModeImpl = wifiInjector.getClientModeImpl();
         mWifiLockManager = wifiInjector.getWifiLockManager();
         mWifiNetworkSuggestionsManager = wifiInjector.getWifiNetworkSuggestionsManager();
@@ -64,6 +66,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         mWifiCountryCode = wifiInjector.getWifiCountryCode();
         mWifiLastResortWatchdog = wifiInjector.getWifiLastResortWatchdog();
         mWifiService = wifiService;
+        mContext = context;
     }
 
     @Override
@@ -361,6 +364,15 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     mWifiService.setWifiEnabled("com.android.shell", enabled);
                     return 0;
                 }
+                case "get-softap-supported-features":
+                    // This command is used for vts to check softap supported features.
+                    if (ApConfigUtil.isAcsSupported(mContext)) {
+                        pw.println("wifi_softap_acs_supported");
+                    }
+                    if (ApConfigUtil.isWpa3SaeSupported(mContext)) {
+                        pw.println("wifi_softap_wpa3_sae_supported");
+                    }
+                    break;
                 default:
                     return handleDefaultCommands(cmd);
             }
@@ -372,11 +384,11 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     }
 
     private int sendLinkProbe(PrintWriter pw) throws InterruptedException {
-        // Note: should match WifiCondManager#SEND_MGMT_FRAME_TIMEOUT_MS
+        // Note: should match WifiNl80211Manager#SEND_MGMT_FRAME_TIMEOUT_MS
         final int sendMgmtFrameTimeoutMs = 1000;
 
         ArrayBlockingQueue<String> queue = new ArrayBlockingQueue<>(1);
-        mClientModeImpl.probeLink(new WifiCondManager.SendMgmtFrameCallback() {
+        mClientModeImpl.probeLink(new WifiNl80211Manager.SendMgmtFrameCallback() {
             @Override
             public void onAck(int elapsedTimeMs) {
                 queue.offer("Link probe succeeded after " + elapsedTimeMs + " ms");
@@ -480,6 +492,9 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Gets setting of wifi watchdog trigger recovery.");
         pw.println("  set-wifi-enabled enabled|disabled");
         pw.println("    Enables/disables Wifi on this device.");
+        pw.println("  get-softap-supported-features");
+        pw.println("    Gets softap supported features. Will print 'wifi_softap_acs_supported'");
+        pw.println("    and/or 'wifi_softap_wpa3_sae_supported', each on a separate line.");
         pw.println();
     }
 }
