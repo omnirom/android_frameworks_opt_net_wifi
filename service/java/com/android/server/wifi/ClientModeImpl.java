@@ -51,6 +51,7 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
 import android.net.NetworkProvider;
+import android.net.NetworkScore;
 import android.net.SocketKeepalive;
 import android.net.StaticIpConfiguration;
 import android.net.TcpKeepalivePacketData;
@@ -71,9 +72,11 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiNetworkAgentSpecifier;
+import android.net.wifi.WifiScanner;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.wificond.DeviceWiphyCapabilities;
 import android.net.wifi.wificond.WifiCondManager;
 import android.net.wifi.WifiDppConfig;
 import android.net.wifi.WifiDppConfig.DppResult;
@@ -123,6 +126,7 @@ import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStats;
 import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.RssiUtil;
+import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.TelephonyUtil.SimAuthRequestData;
 import com.android.server.wifi.util.TelephonyUtil.SimAuthResponseData;
@@ -177,7 +181,8 @@ public class ClientModeImpl extends StateMachine {
     private static final String EXTRA_UID = "uid";
     private static final String EXTRA_PACKAGE_NAME = "PackageName";
     private static final String EXTRA_PASSPOINT_CONFIGURATION = "PasspointConfiguration";
-    private static final int IPCLIENT_TIMEOUT_MS = 60_000;
+    private static final int IPCLIENT_STARTUP_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes!
+    private static final int IPCLIENT_SHUTDOWN_TIMEOUT_MS = 60_000; // 60 seconds
 
     private boolean mVerboseLoggingEnabled = false;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
@@ -577,9 +582,6 @@ public class ClientModeImpl extends StateMachine {
 
     /* used to indicated RSSI threshold breach in hw */
     static final int CMD_RSSI_THRESHOLD_BREACHED                        = BASE + 164;
-
-    /* Enable/Disable WifiConnectivityManager */
-    static final int CMD_ENABLE_WIFI_CONNECTIVITY_MANAGER               = BASE + 166;
 
     /**
      * Used to handle messages bounced between ClientModeImpl and IpClient.
@@ -1060,11 +1062,11 @@ public class ClientModeImpl extends StateMachine {
         }
 
         boolean awaitCreation() {
-            return mWaitForCreationCv.block(IPCLIENT_TIMEOUT_MS);
+            return mWaitForCreationCv.block(IPCLIENT_STARTUP_TIMEOUT_MS);
         }
 
         boolean awaitShutdown() {
-            return mWaitForStopCv.block(IPCLIENT_TIMEOUT_MS);
+            return mWaitForStopCv.block(IPCLIENT_SHUTDOWN_TIMEOUT_MS);
         }
     }
 
@@ -1200,7 +1202,7 @@ public class ClientModeImpl extends StateMachine {
         mIpClientCallbacks = new IpClientCallbacksImpl();
         mFacade.makeIpClient(mContext, mDataInterfaceName, mIpClientCallbacks);
         if (!mIpClientCallbacks.awaitCreation()) {
-            loge("Timeout waiting for IpClient");
+            Log.wtf(getName(), "Timeout waiting for IpClient");
         }
 
         setMulticastFilter(true);
@@ -1341,19 +1343,57 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
+     * Check if a Wi-Fi band is supported
+     *
+     * @param band A value from {@link WifiScanner.WIFI_BAND_5_GHZ} or
+     *        {@link WifiScanner.WIFI_BAND_6_GHZ}
+     * @return {@code true} if band is supported, {@code false} otherwise.
+     */
+    public boolean isWifiBandSupported(int band) {
+        if (band == WifiScanner.WIFI_BAND_5_GHZ) {
+            // In some cases, devices override the value by the overlay configs
+            if (mContext.getResources().getBoolean(R.bool.config_wifi5ghzSupport)) {
+                return true;
+            }
+            return (mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ).length > 0);
+        }
+
+        if (band == WifiScanner.WIFI_BAND_6_GHZ) {
+            if (mContext.getResources().getBoolean(R.bool.config_wifi6ghzSupport)) {
+                return true;
+            }
+            return (mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_6_GHZ).length > 0);
+        }
+
+        return false;
+    }
+
+    /**
+     * Update interface capabilities
+     * This method is used to update some of interface capabilities defined in overlay
+     *
+     * @param ifaceName name of interface to update
+     */
+    private void updateInterfaceCapabilities(@NonNull String ifaceName) {
+        DeviceWiphyCapabilities cap = mWifiNative.getDeviceWiphyCapabilities(ifaceName);
+        if (cap != null) {
+            // Some devices don't have support of 11ax indicated by the chip,
+            // so an override config value is used
+            if (mContext.getResources().getBoolean(R.bool.config_wifi11axSupportOverride)) {
+                cap.setWifiStandardSupport(ScanResult.WIFI_STANDARD_11AX, true);
+            }
+
+            mWifiNative.setDeviceWiphyCapabilities(ifaceName, cap);
+        }
+    }
+
+    /**
      * Check if a Wi-Fi standard is supported
      *
      * @param standard A value from {@link ScanResult}'s {@code WIFI_STANDARD_}
      * @return {@code true} if standard is supported, {@code false} otherwise.
      */
     public boolean isWifiStandardSupported(@ScanResult.WifiStandard int standard) {
-        // Some devices don't have support of 11ax indicated by the chip,
-        // so an override config value is checked first
-        if (standard == ScanResult.WIFI_STANDARD_11AX
-                && mContext.getResources().getBoolean(R.bool.config_wifi11axSupportOverride)) {
-            return true;
-        }
-
         return mWifiNative.isWifiStandardSupported(mInterfaceName, standard);
     }
 
@@ -1571,6 +1611,7 @@ public class ClientModeImpl extends StateMachine {
             // do a quick sanity check on the iface name, make sure it isn't null
             if (ifaceName != null) {
                 mInterfaceName = ifaceName;
+                updateInterfaceCapabilities(ifaceName);
                 transitionTo(mDisconnectedState);
             } else {
                 Log.e(TAG, "supposed to enter connect mode, but iface is null -> DefaultState");
@@ -1709,30 +1750,6 @@ public class ClientModeImpl extends StateMachine {
         if (messageIsNull(resultMsg)) return 0;
         long supportedFeatureSet = ((Long) resultMsg.obj).longValue();
         resultMsg.recycle();
-
-        // Mask the feature set against system properties.
-        boolean rttSupported = mContext.getPackageManager().hasSystemFeature(
-                PackageManager.FEATURE_WIFI_RTT);
-        if (!rttSupported) {
-            // flags filled in by vendor HAL, remove if overlay disables it.
-            supportedFeatureSet &=
-                    ~(WifiManager.WIFI_FEATURE_D2D_RTT | WifiManager.WIFI_FEATURE_D2AP_RTT);
-        }
-        if (!mContext.getResources().getBoolean(
-                R.bool.config_wifi_p2p_mac_randomization_supported)) {
-            // flags filled in by vendor HAL, remove if overlay disables it.
-            supportedFeatureSet &= ~WifiManager.WIFI_FEATURE_P2P_RAND_MAC;
-        }
-        if (mContext.getResources().getBoolean(
-                R.bool.config_wifi_connected_mac_randomization_supported)) {
-            // no corresponding flags in vendor HAL, set if overlay enables it.
-            supportedFeatureSet |= WifiManager.WIFI_FEATURE_CONNECTED_RAND_MAC;
-        }
-        if (mContext.getResources().getBoolean(
-                R.bool.config_wifi_ap_mac_randomization_supported)) {
-            // no corresponding flags in vendor HAL, set if overlay enables it.
-            supportedFeatureSet |= WifiManager.WIFI_FEATURE_AP_RAND_MAC;
-        }
         return supportedFeatureSet;
     }
 
@@ -2033,10 +2050,10 @@ public class ClientModeImpl extends StateMachine {
                 sb.append(" f=").append(mWifiInfo.getFrequency());
                 sb.append(" sc=").append(mWifiInfo.getScore());
                 sb.append(" link=").append(mWifiInfo.getLinkSpeed());
-                sb.append(String.format(" tx=%.1f,", mWifiInfo.getTxSuccessRate()));
-                sb.append(String.format(" %.1f,", mWifiInfo.getTxRetriesRate()));
-                sb.append(String.format(" %.1f ", mWifiInfo.getTxBadRate()));
-                sb.append(String.format(" rx=%.1f", mWifiInfo.getRxSuccessRate()));
+                sb.append(String.format(" tx=%.1f,", mWifiInfo.getSuccessfulTxPacketsPerSecond()));
+                sb.append(String.format(" %.1f,", mWifiInfo.getRetriedTxPacketsPerSecond()));
+                sb.append(String.format(" %.1f ", mWifiInfo.getLostTxPacketsPerSecond()));
+                sb.append(String.format(" rx=%.1f", mWifiInfo.getSuccessfulRxPacketsPerSecond()));
                 sb.append(String.format(" bcn=%d", mRunningBeaconCount));
                 report = reportOnTime();
                 if (report != null) {
@@ -2474,10 +2491,10 @@ public class ClientModeImpl extends StateMachine {
 
     // Polling has completed, hence we won't have a score anymore
     private void cleanWifiScore() {
-        mWifiInfo.setTxBadRate(0);
-        mWifiInfo.setTxSuccessRate(0);
-        mWifiInfo.setTxRetriesRate(0);
-        mWifiInfo.setRxSuccessRate(0);
+        mWifiInfo.setLostTxPacketsPerSecond(0);
+        mWifiInfo.setSuccessfulTxPacketsPerSecond(0);
+        mWifiInfo.setRetriedTxPacketsRate(0);
+        mWifiInfo.setSuccessfulRxPacketsPerSecond(0);
         mWifiScoreReport.reset();
         mLastLinkLayerStats = null;
     }
@@ -2528,7 +2545,7 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void sendRssiChangeBroadcast(final int newRssi) {
-        mBatteryStatsManager.noteWifiRssiChanged(newRssi);
+        mBatteryStatsManager.reportWifiRssiChanged(newRssi);
         WifiStatsLog.write(WifiStatsLog.WIFI_SIGNAL_STRENGTH_CHANGED,
                 RssiUtil.calculateSignalLevel(mContext, newRssi));
 
@@ -2648,7 +2665,7 @@ public class ClientModeImpl extends StateMachine {
             mWifiInfo.setTrusted(config.trusted);
             mWifiInfo.setOsuAp(config.osu);
             if (config.fromWifiNetworkSpecifier || config.fromWifiNetworkSuggestion) {
-                mWifiInfo.setAppPackageName(config.creatorName);
+                mWifiInfo.setRequestingPackageName(config.creatorName);
             }
 
             // Set meteredHint if scan result says network is expensive
@@ -3212,7 +3229,7 @@ public class ClientModeImpl extends StateMachine {
             return false;
         }
         WifiConfiguration network = mWifiConfigManager.getConfiguredNetwork(networkId);
-        if (network != null && network.getNetworkSelectionStatus().getHasEverConnected()) {
+        if (network != null && network.getNetworkSelectionStatus().hasEverConnected()) {
             return false;
         }
         return true;
@@ -3316,6 +3333,24 @@ public class ClientModeImpl extends StateMachine {
     public void failureDetected(int reason) {
         // report a failure
         mWifiInjector.getSelfRecovery().trigger(SelfRecovery.REASON_STA_IFACE_DOWN);
+    }
+
+    /**
+     * Helper method to check if WPA2 network upgrade feature is enabled in the framework
+     *
+     * @return boolean true if feature is enabled.
+     */
+    private boolean isWpa3SaeUpgradeEnabled() {
+        return mContext.getResources().getBoolean(R.bool.config_wifiSaeUpgradeEnabled);
+    }
+
+    /**
+     * Helper method to check if WPA2 network upgrade offload is enabled in the driver/fw
+     *
+     * @return boolean true if feature is enabled.
+     */
+    private boolean isWpa3SaeUpgradeOffloadEnabled() {
+        return mContext.getResources().getBoolean(R.bool.config_wifiSaeUpgradeOffloadEnabled);
     }
 
     /********************************************************
@@ -4073,6 +4108,11 @@ public class ClientModeImpl extends StateMachine {
                         config.enterpriseConfig.setAnonymousIdentity(anonAtRealm);
                     }
 
+                    if (isWpa3SaeUpgradeEnabled() && config.allowedKeyManagement.get(
+                            WifiConfiguration.KeyMgmt.WPA_PSK)) {
+                        config = upgradeToWpa3IfPossible(config);
+                    }
+
                     if (mWifiNative.connectToNetwork(mInterfaceName, config)) {
                         mWifiInjector.getWifiLastResortWatchdog().noteStartConnectTime();
                         mWifiMetrics.logStaEvent(StaEvent.TYPE_CMD_START_CONNECT, config);
@@ -4354,9 +4394,6 @@ public class ClientModeImpl extends StateMachine {
                     final boolean enabled = (message.arg1 > 0);
                     mWifiNative.configureNeighborDiscoveryOffload(mInterfaceName, enabled);
                     break;
-                case CMD_ENABLE_WIFI_CONNECTIVITY_MANAGER:
-                    mWifiConnectivityManager.enable(message.arg1 == 1 ? true : false);
-                    break;
                 case CMD_DPP_GENERATE_BOOTSTRAP:
                     int id = mWifiNative.dppBootstrapGenerate(mInterfaceName, (WifiDppConfig)message.obj);
                     replyToMessage(message, message.what, id);
@@ -4517,7 +4554,7 @@ public class ClientModeImpl extends StateMachine {
 
     private class WifiNetworkAgent extends NetworkAgent {
         WifiNetworkAgent(Context c, Looper l, String tag, NetworkCapabilities nc, LinkProperties lp,
-                int score, NetworkAgentConfig config, NetworkProvider provider) {
+                NetworkScore score, NetworkAgentConfig config, NetworkProvider provider) {
             super(c, l, tag, nc, lp, score, config, provider);
             register();
         }
@@ -4695,9 +4732,11 @@ public class ClientModeImpl extends StateMachine {
                     .setPartialConnectivityAcceptable(config.noInternetAccessExpected)
                     .build();
             final NetworkCapabilities nc = getCapabilities(getCurrentWifiConfiguration());
+            // STOPSHIP (b/148055573) : use a real NetworkScore when it's done
+            final NetworkScore ns = mWifiScoreReport.getNetworkScoreForLegacyInt(60);
             synchronized (mNetworkAgentLock) {
                 mNetworkAgent = new WifiNetworkAgent(mContext, getHandler().getLooper(),
-                        "WifiNetworkAgent", nc, mLinkProperties, 60, naConfig,
+                        "WifiNetworkAgent", nc, mLinkProperties, ns, naConfig,
                         mNetworkFactory.getProvider());
             }
 
@@ -5461,7 +5500,7 @@ public class ClientModeImpl extends StateMachine {
                             mWifiConfigManager.updateNetworkSelectionStatus(
                                     config.networkId,
                                     WifiConfiguration.NetworkSelectionStatus
-                                            .NETWORK_SELECTION_ENABLE);
+                                            .DISABLED_NONE);
                             mWifiConfigManager.setNetworkValidatedInternetAccess(
                                     config.networkId, true);
                         }
@@ -6027,10 +6066,10 @@ public class ClientModeImpl extends StateMachine {
     /**
      * Dynamically turn on/off WifiConnectivityManager
      *
-     * @param enabled true-enable; false-disable
+     * @param choice true-enable; false-disable
      */
-    public void enableWifiConnectivityManager(boolean enabled) {
-        sendMessage(CMD_ENABLE_WIFI_CONNECTIVITY_MANAGER, enabled ? 1 : 0);
+    public void allowAutoJoinGlobal(boolean choice) {
+        mWifiConnectivityManager.setAutoJoinEnabledExternal(choice);
     }
 
     /**
@@ -6599,5 +6638,70 @@ public class ClientModeImpl extends StateMachine {
             // Trigger the network selection and re-connect to new network if available.
             mWifiConnectivityManager.forceConnectivityScan(ClientModeImpl.WIFI_WORK_SOURCE);
         }
+    }
+
+    private WifiConfiguration upgradeToWpa3IfPossible(@NonNull WifiConfiguration config) {
+        if (isWpa3SaeUpgradeOffloadEnabled()) {
+            // Driver offload of upgrading legacy WPA/WPA2 connection to WPA3
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "Driver upgrade legacy WPA/WPA2 connection to WPA3");
+            }
+            config.allowedAuthAlgorithms.clear();
+            // Note: KeyMgmt.WPA2_PSK is already enabled, enable SAE as well
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SAE);
+            return config;
+        }
+
+        boolean canUpgradePskToSae = false;
+
+        // Check if network selection selected a good WPA3 candidate AP for a WPA2
+        // saved network.
+        ScanResult scanResultCandidate = config.getNetworkSelectionStatus().getCandidate();
+        if (scanResultCandidate != null) {
+            ScanResultMatchInfo scanResultMatchInfo = ScanResultMatchInfo
+                    .fromScanResult(scanResultCandidate);
+            if ((scanResultMatchInfo.networkType == WifiConfiguration.SECURITY_TYPE_SAE)) {
+                canUpgradePskToSae = true;
+            } else {
+                // No SAE candidate
+                return config;
+            }
+        }
+
+        // Now check if there are any additional legacy WPA2 only APs in range.
+        ScanRequestProxy scanRequestProxy = mWifiInjector.getScanRequestProxy();
+        for (ScanResult scanResult : scanRequestProxy.getScanResults()) {
+            if (!config.SSID.equals(ScanResultUtil.createQuotedSSID(scanResult.SSID))) {
+                continue;
+            }
+            if (ScanResultUtil.isScanResultForPskNetwork(scanResult)
+                    && !ScanResultUtil.isScanResultForSaeNetwork(scanResult)) {
+                // Found a legacy WPA2 AP in range. Do not upgrade the connection to WPA3 to
+                // allow seamless roaming within the ESS.
+                if (mVerboseLoggingEnabled) {
+                    Log.d(TAG, "Found legacy WPA2 AP, do not upgrade to WPA3");
+                }
+                canUpgradePskToSae = false;
+                break;
+            }
+            if (ScanResultUtil.isScanResultForSaeNetwork(scanResult)
+                    && scanResultCandidate == null) {
+                // When the user manually selected a network from the Wi-Fi picker, evaluate
+                // if to upgrade based on the scan results. The most typical use case during
+                // the WPA3 transition mode is to have a WPA2/WPA3 AP in transition mode. In
+                // this case, we would like to upgrade the connection.
+                canUpgradePskToSae = true;
+            }
+        }
+
+        if (canUpgradePskToSae) {
+            // Upgrade legacy WPA/WPA2 connection to WPA3
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "Upgrade legacy WPA/WPA2 connection to WPA3");
+            }
+            config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_SAE);
+        }
+
+        return config;
     }
 }

@@ -2071,7 +2071,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             } else {
                                 ret = false;
                             }
-                        } else if (netId == WifiP2pGroup.PERSISTENT_NET_ID) {
+                        } else if (netId == WifiP2pGroup.NETWORK_ID_PERSISTENT) {
                             // check if the go persistent group is present.
                             netId = mGroups.getNetworkId(mThisDevice.deviceAddress);
                             if (netId != -1) {
@@ -2114,7 +2114,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             mGroup.getOwner().deviceAddress = mThisDevice.deviceAddress;
                         }
                         // We hit this scenario when a persistent group is reinvoked
-                        if (mGroup.getNetworkId() == WifiP2pGroup.PERSISTENT_NET_ID) {
+                        if (mGroup.getNetworkId() == WifiP2pGroup.NETWORK_ID_PERSISTENT) {
                             mAutonomousGroup = false;
                             deferMessage(message);
                             transitionTo(mGroupNegotiationState);
@@ -2493,7 +2493,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             // wpa_supplicant doesn't set own device address to go_dev_addr.
                             mGroup.getOwner().deviceAddress = mThisDevice.deviceAddress;
                         }
-                        if (mGroup.getNetworkId() == WifiP2pGroup.PERSISTENT_NET_ID) {
+                        if (mGroup.getNetworkId() == WifiP2pGroup.NETWORK_ID_PERSISTENT) {
                              // update cache information and set network id to mGroup.
                             updatePersistentNetworks(RELOAD);
                             String devAddr = mGroup.getOwner().deviceAddress;
@@ -2584,7 +2584,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             }
 
                             // Reinvocation has failed, try group negotiation
-                            mSavedPeerConfig.netId = WifiP2pGroup.PERSISTENT_NET_ID;
+                            mSavedPeerConfig.netId = WifiP2pGroup.NETWORK_ID_PERSISTENT;
                             p2pConnectWithPinDisplay(mSavedPeerConfig);
                         } else if (status == P2pStatus.INFORMATION_IS_CURRENTLY_UNAVAILABLE) {
 
@@ -2592,7 +2592,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             // always defer the invocation request and return
                             // "information is currently unavailable" error.
                             // So, try another way to connect for interoperability.
-                            mSavedPeerConfig.netId = WifiP2pGroup.PERSISTENT_NET_ID;
+                            mSavedPeerConfig.netId = WifiP2pGroup.NETWORK_ID_PERSISTENT;
                             p2pConnectWithPinDisplay(mSavedPeerConfig);
                         } else if (status == P2pStatus.NO_COMMON_CHANNEL) {
                             transitionTo(mFrequencyConflictState);
@@ -3599,7 +3599,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             }
 
             if (!join && dev.isInvitationCapable()) {
-                int netId = WifiP2pGroup.PERSISTENT_NET_ID;
+                int netId = WifiP2pGroup.NETWORK_ID_PERSISTENT;
                 if (config.netId >= 0) {
                     if (config.deviceAddress.equals(mGroups.getOwnerAddr(config.netId))) {
                         netId = config.netId;

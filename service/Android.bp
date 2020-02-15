@@ -26,43 +26,6 @@ java_defaults {
     },
 }
 
-// Make the JNI part
-// ============================================================
-cc_library_shared {
-    name: "libwifi-jni",
-
-    cflags: [
-        "-Wall",
-        "-Werror",
-        "-Wextra",
-        "-Wno-unused-parameter",
-        "-Wno-unused-function",
-        "-Wunused-variable",
-        "-Winit-self",
-        "-Wwrite-strings",
-        "-Wshadow",
-    ],
-
-    shared_libs: [
-        "liblog",
-        "libnativehelper",
-        "libcutils",
-        "libutils",
-        "libdl",
-    ],
-
-    srcs: [
-        "jni/com_android_server_wifi_WifiNative.cpp",
-        "jni/jni_helper.cpp",
-    ],
-
-    product_variables: {
-        pdk: {
-            enabled: false,
-        },
-    },
-}
-
 filegroup {
     name: "wifi-service-srcs",
     srcs: [
@@ -96,7 +59,7 @@ java_library {
         // need pre-jarjar symbols so that wifi-service can reference the original class names at
         // compile time
         "framework-wifi-pre-jarjar",
-        "framework_module_lib_stubs_current",
+        "android_module_lib_stubs_current",
         "unsupportedappusage",
     ],
 
@@ -146,7 +109,7 @@ java_library {
     // need to include `libs` so that Soong doesn't complain about missing classes after jarjaring
     libs: [
         "framework-wifi",
-        "framework_module_lib_stubs_current",
+        "android_module_lib_stubs_current",
         "services-stubs",
     ],
 
@@ -155,8 +118,6 @@ java_library {
     sdk_version: "core_platform",
 
     required: [
-        "cacerts_wfa",
-        "libwifi-jni",
         "services",
         "wifi-service-resources",
     ],

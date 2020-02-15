@@ -25,7 +25,6 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.net.IpConfiguration;
 import android.net.MacAddress;
 import android.net.ProxyInfo;
@@ -103,12 +102,6 @@ public class WifiConfigManager {
      */
     @VisibleForTesting
     public static final String PASSWORD_MASK = "*";
-    /**
-     * Package name for SysUI. This is used to lookup the UID of SysUI which is used to allow
-     * Quick settings to modify network configurations.
-     */
-    @VisibleForTesting
-    public static final String SYSUI_PACKAGE_NAME = "com.android.systemui";
 
     /**
      * Interface for other modules to listen to the network updated
@@ -311,11 +304,6 @@ public class WifiConfigManager {
      */
     private int mNextNetworkId = 0;
     /**
-     * UID of system UI. This uid is allowed to modify network configurations regardless of which
-     * user is logged in.
-     */
-    private int mSystemUiUid = -1;
-    /**
      * This is used to remember which network was selected successfully last by an app. This is set
      * when an app invokes {@link #enableNetwork(int, boolean, int)} with |disableOthers| flag set.
      * This is the only way for an app to request connection to a specific network using the
@@ -376,16 +364,6 @@ public class WifiConfigManager {
 
         mLocalLog = new LocalLog(
                 context.getSystemService(ActivityManager.class).isLowRamDevice() ? 128 : 256);
-
-        try {
-            // TODO(b/141890172): do not hardcode SYSUI_PACKAGE_NAME
-            mSystemUiUid = mContext
-                    .createPackageContextAsUser(SYSUI_PACKAGE_NAME, 0, UserHandle.SYSTEM)
-                    .getPackageManager()
-                    .getPackageUid(SYSUI_PACKAGE_NAME, PackageManager.MATCH_SYSTEM_ONLY);
-        } catch (PackageManager.NameNotFoundException e) {
-            Log.e(TAG, "Unable to resolve SystemUI's UID.");
-        }
         mMacAddressUtil = mWifiInjector.getMacAddressUtil();
     }
 
@@ -936,7 +914,10 @@ public class WifiConfigManager {
      *         otherwise false.
      */
     private boolean doesUidBelongToCurrentUser(int uid) {
-        if (uid == android.os.Process.SYSTEM_UID || uid == mSystemUiUid) {
+        if (uid == android.os.Process.SYSTEM_UID
+                // UIDs with the NETWORK_SETTINGS permission are always allowed since they are
+                // acting on behalf of the user.
+                || mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
             return true;
         } else {
             UserHandle currentUser = UserHandle.of(mCurrentUserId);
@@ -1255,10 +1236,12 @@ public class WifiConfigManager {
 
         if (WifiConfigurationUtil.hasMacRandomizationSettingsChanged(existingInternalConfig,
                 newInternalConfig) && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)
-                && !mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid)) {
+                && !mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid)
+                && !(newInternalConfig.isPasspoint() && uid == newInternalConfig.creatorUid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to modify MAC randomization "
                     + "Settings " + config.getKey() + ". Must have "
-                    + "NETWORK_SETTINGS or NETWORK_SETUP_WIZARD.");
+                    + "NETWORK_SETTINGS or NETWORK_SETUP_WIZARD or be the creator adding or "
+                    + "updating a passpoint network.");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
 
@@ -1299,7 +1282,7 @@ public class WifiConfigManager {
 
         if (mDeletedEphemeralSsidsToTimeMap.remove(config.SSID) != null) {
             updateNetworkSelectionStatus(
-                    newInternalConfig, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
+                    newInternalConfig, NetworkSelectionStatus.DISABLED_NONE);
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Removed from ephemeral blacklist: " + config.SSID);
             }
@@ -1613,7 +1596,7 @@ public class WifiConfigManager {
                 NetworkSelectionStatus.NETWORK_SELECTION_ENABLED);
         status.setDisableTime(
                 NetworkSelectionStatus.INVALID_NETWORK_SELECTION_DISABLE_TIMESTAMP);
-        status.setNetworkSelectionDisableReason(NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
+        status.setNetworkSelectionDisableReason(NetworkSelectionStatus.DISABLED_NONE);
 
         // Clear out all the disable reason counters.
         status.clearDisableReasonCounter();
@@ -1684,7 +1667,7 @@ public class WifiConfigManager {
             Log.e(TAG, "Invalid Network disable reason " + reason);
             return false;
         }
-        if (reason == NetworkSelectionStatus.NETWORK_SELECTION_ENABLE) {
+        if (reason == NetworkSelectionStatus.DISABLED_NONE) {
             setNetworkSelectionEnabled(config);
             setNetworkStatus(config, WifiConfiguration.Status.ENABLED);
         } else if (reason < NetworkSelectionStatus.PERMANENTLY_DISABLED_STARTING_INDEX) {
@@ -1710,7 +1693,7 @@ public class WifiConfigManager {
      */
     private boolean updateNetworkSelectionStatus(WifiConfiguration config, int reason) {
         NetworkSelectionStatus networkStatus = config.getNetworkSelectionStatus();
-        if (reason != NetworkSelectionStatus.NETWORK_SELECTION_ENABLE) {
+        if (reason != NetworkSelectionStatus.DISABLED_NONE) {
 
             // Do not update SSID blacklist with information if this is the only
             // SSID be observed. By ignoring it we will cause additional failures
@@ -1798,7 +1781,7 @@ public class WifiConfigManager {
             }
             if (timeDifferenceMs >= disableTimeoutMs) {
                 return updateNetworkSelectionStatus(
-                        config, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
+                        config, NetworkSelectionStatus.DISABLED_NONE);
             }
         }
         return false;
@@ -1856,7 +1839,7 @@ public class WifiConfigManager {
             return false;
         }
         if (!updateNetworkSelectionStatus(
-                networkId, WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE)) {
+                networkId, WifiConfiguration.NetworkSelectionStatus.DISABLED_NONE)) {
             return false;
         }
         saveToStore(true);
@@ -2648,6 +2631,72 @@ public class WifiConfigManager {
     }
 
     /**
+     * Find the most recently connected network from a list of networks, and place it at top
+     */
+    private void putMostRecentlyConnectedNetworkAtTop(List<WifiConfiguration> networks) {
+        WifiConfiguration lastConnectedNetwork =
+                networks.stream()
+                        .max(Comparator.comparing(
+                                (WifiConfiguration config) -> config.lastConnected))
+                        .get();
+        if (lastConnectedNetwork.lastConnected != 0) {
+            int lastConnectedNetworkIdx = networks.indexOf(lastConnectedNetwork);
+            networks.remove(lastConnectedNetworkIdx);
+            networks.add(0, lastConnectedNetwork);
+        }
+    }
+
+    /**
+     * Retrieves a list of channels for partial single scans
+     *
+     * @param ageInMillis only consider scan details whose timestamps are more recent than this.
+     * @param maxCount maximum number of channels in the set
+     * @return Set containing the frequeincies which were used for connection recently.
+     */
+    public Set<Integer> fetchChannelSetForPartialScan(long ageInMillis, int maxCount) {
+        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
+
+        // Remove any permanently or temporarily disabled networks.
+        Iterator<WifiConfiguration> iter = networks.iterator();
+        while (iter.hasNext()) {
+            WifiConfiguration config = iter.next();
+            if (config.ephemeral || config.isPasspoint()
+                    || config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()
+                    || config.getNetworkSelectionStatus().isNetworkTemporaryDisabled()) {
+                iter.remove();
+            }
+        }
+
+        if (networks.isEmpty()) {
+            return null;
+        }
+
+        // Sort the networks with the most frequent ones at the front of the network list.
+        Collections.sort(networks, sScanListComparator);
+
+        // Find the most recently connected network and move it to the front of the network list.
+        putMostRecentlyConnectedNetworkAtTop(networks);
+
+        Set<Integer> channelSet = new HashSet<>();
+        long nowInMillis = mClock.getWallClockMillis();
+
+        for (WifiConfiguration config : networks) {
+            ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(config.networkId);
+            if (scanDetailCache == null) {
+                continue;
+            }
+
+            // Add channels for the network to the output, and exit when it reaches max size
+            if (!addToChannelSetForNetworkFromScanDetailCache(channelSet, scanDetailCache,
+                    nowInMillis, ageInMillis, maxCount)) {
+                break;
+            }
+        }
+
+        return channelSet;
+    }
+
+    /**
      * Retrieve a set of channels on which AP's for the provided network was seen using the
      * internal ScanResult's cache {@link #mScanDetailCaches}. This is used for initiating partial
      * scans for the currently connected network.
@@ -2792,17 +2841,8 @@ public class WifiConfigManager {
         // Sort the networks with the most frequent ones at the front of the network list.
         Collections.sort(networks, sScanListComparator);
         if (mContext.getResources().getBoolean(R.bool.config_wifiPnoRecencySortingEnabled)) {
-            // Find the most recently connected network and add it to the front of the network list.
-            WifiConfiguration lastConnectedNetwork =
-                    networks.stream()
-                            .max(Comparator.comparing(
-                                    (WifiConfiguration config) -> config.lastConnected))
-                            .get();
-            if (lastConnectedNetwork.lastConnected != 0) {
-                int lastConnectedNetworkIdx = networks.indexOf(lastConnectedNetwork);
-                networks.remove(lastConnectedNetworkIdx);
-                networks.add(0, lastConnectedNetwork);
-            }
+            // Find the most recently connected network and move it to the front of the list.
+            putMostRecentlyConnectedNetworkAtTop(networks);
         }
         for (WifiConfiguration config : networks) {
             WifiScanner.PnoSettings.PnoNetwork pnoNetwork =
@@ -2881,7 +2921,7 @@ public class WifiConfigManager {
             WifiConfiguration foundConfig = getInternalEphemeralConfiguredNetwork(ssid);
             if (foundConfig != null) {
                 updateNetworkSelectionStatus(
-                        foundConfig, NetworkSelectionStatus.NETWORK_SELECTION_ENABLE);
+                        foundConfig, NetworkSelectionStatus.DISABLED_NONE);
             }
             return false;
         }

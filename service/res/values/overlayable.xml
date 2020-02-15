@@ -23,8 +23,6 @@
           <item type="bool" name="config_wifi5ghzSupport" />
           <item type="bool" name="config_wifi6ghzSupport" />
           <item type="bool" name="config_wifi11axSupportOverride" />
-          <item type="integer" name="config_wifi_max_ap_interfaces" />
-          <item type="bool" name="config_wifi_convert_apband_5ghz_to_any" />
           <item type="bool" name="config_wifi_fast_bss_transition_enabled" />
           <item type="string" name="config_wifi_p2p_device_type" />
           <item type="bool" name="config_wifi_background_scan_support" />
@@ -63,6 +61,9 @@
           <item type="integer" name="config_wifi_framework_associated_partial_scan_max_num_active_channels" />
           <item type="integer" name="config_wifi_framework_recovery_timeout_delay" />
           <item type="bool" name="config_wifi_framework_enable_associated_network_selection" />
+          <item type="bool" name="config_wifiEnablePartialInitialScan" />
+          <item type="integer" name="config_wifiInitialPartialScanChannelMaxCount" />
+          <item type="integer" name="config_wifiInitialPartialScanChannelCacheAgeMins" />
           <item type="bool" name="config_wifi_framework_use_single_radio_chain_scan_results_network_selection" />
           <item type="bool" name="config_wifi_only_link_same_credential_configurations" />
           <item type="bool" name="config_wifi_framework_enable_sar_tx_power_limit" />
@@ -85,8 +86,6 @@
           <item type="array" name="config_wifi_aggressive_randomization_ssid_allowlist" />
           <item type="array" name="config_wifi_aggressive_randomization_ssid_blocklist" />
           <item type="bool" name="config_wifi_link_probing_supported" />
-         <item type="bool" name="config_wifi_contiguous_160mhz_supported" />
-          <item type="integer" name="config_wifi_max_num_spatial_stream_supported" />
           <item type="string" name="config_wifi_tcp_buffers" />
           <item type="string" name="wifi_tether_configure_ssid_default" />
           <item type="string" name="wifi_localhotspot_configure_ssid_default" />
@@ -95,6 +94,20 @@
           <item type="array" name="config_wifiRssiLevelThresholds" />
           <item type="array" name="config_wifiDisconnectedScanIntervalScheduleSec" />
           <item type="array" name="config_wifiConnectedScanIntervalScheduleSec" />
+          <item type="array" name="config_wifiSingleSavedNetworkConnectedScanIntervalScheduleSec" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorApUnableToHandleNewStaThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorNetworkValidationFailureThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorWrongPasswordThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorEapFailureThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorAssociationRejectionThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorAssociationTimeoutThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorAuthenticationFailureThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorDhcpFailureThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorAbnormalDisconnectThreshold" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorBaseBlockDurationMs" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorFailureStreakCap" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorMaxBlockDurationMs" />
+          <item type="integer" name="config_wifiBssidBlocklistAbnormalDisconnectTimeWindowMs" />
           <item type="bool" name="config_wifiScanHiddenNetworksScanOnlyMode" />
           <item type="integer" name="config_wifiHardwareSoftapMaxClientCount" />
           <item type="bool" name="config_wifiIsUnusableEventMetricsEnabled" />
@@ -106,13 +119,11 @@
           <item type="bool" name="config_wifiSuspendOptimizationsEnabled" />
           <item type="integer" name="config_wifiRttBackgroundExecGapMs" />
           <item type="integer" name="config_wifiPollRssiIntervalMilliseconds" />
+          <item type="bool" name="config_wifiSaeUpgradeEnabled" />
+          <item type="bool" name="config_wifiSaeUpgradeOffloadEnabled" />
           <!-- Params from config.xml that can be overlayed -->
 
           <!-- Params from strings.xml that can be overlayed -->
-          <!-- Not supported by compiler.
-          <item type="plurals" name="wifi_available" />
-          <item type="plurals" name="wifi_available_detailed" />
-          -->
           <item type="string" name="wifi_available_title" />
           <item type="string" name="wifi_available_title_connecting" />
           <item type="string" name="wifi_available_title_connected" />
@@ -124,6 +135,10 @@
           <item type="string" name="wifi_suggestion_content" />
           <item type="string" name="wifi_suggestion_action_allow_app" />
           <item type="string" name="wifi_suggestion_action_disallow_app" />
+          <item type="string" name="wifi_suggestion_imsi_privacy_title" />
+          <item type="string" name="wifi_suggestion_imsi_privacy_content" />
+          <item type="string" name="wifi_suggestion_action_allow_imsi_privacy_exemption_carrier" />
+          <item type="string" name="wifi_suggestion_action_disallow_imsi_privacy_exemption_carrier" />
           <item type="string" name="wifi_wakeup_onboarding_title" />
           <item type="string" name="wifi_wakeup_onboarding_subtext" />
           <item type="string" name="wifi_wakeup_onboarding_action_disable" />
@@ -175,10 +190,15 @@
           <item type="style" name="wifi_section" />
           <!-- Params from styles.xml that can be overlayed -->
 
-          <!-- Params from styles.xml that can be overlayed -->
+          <!-- Params from drawable/ that can be overlayed -->
           <item type="drawable" name="stat_notify_wifi_in_range" />
           <item type="drawable" name="ic_wifi_settings" />
-          <!-- Params from styles.xml that can be overlayed -->
+          <!-- Params from drawable/ that can be overlayed -->
+
+          <!-- Params from layout/ that can be overlayed -->
+          <item type="layout" name="wifi_p2p_dialog" />
+          <item type="layout" name="wifi_p2p_dialog_row" />
+          <!-- Params from layout/ that can be overlayed -->
 
         </policy>
         <!-- END VENDOR CUSTOMIZATION -->

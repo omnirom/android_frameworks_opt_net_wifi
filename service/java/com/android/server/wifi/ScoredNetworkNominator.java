@@ -104,9 +104,7 @@ public class ScoredNetworkNominator implements WifiNetworkSelector.NetworkNomina
 
         // Kick the score manager if there are any unscored network.
         if (!unscoredNetworks.isEmpty() && activeScorerAllowedtoSeeScanResults()) {
-            NetworkKey[] unscoredNetworkKeys =
-                    unscoredNetworks.toArray(new NetworkKey[unscoredNetworks.size()]);
-            mNetworkScoreManager.requestScores(unscoredNetworkKeys);
+            mNetworkScoreManager.requestScores(unscoredNetworks);
         }
     }
 
@@ -312,7 +310,7 @@ public class ScoredNetworkNominator implements WifiNetworkSelector.NetworkNomina
                         break;
                     }
                     if (!mWifiConfigManager.updateNetworkSelectionStatus(result.getNetworkId(),
-                            WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE)) {
+                            WifiConfiguration.NetworkSelectionStatus.DISABLED_NONE)) {
                         mLocalLog.log("Failed to make ephemeral network selectable");
                         break;
                     }
