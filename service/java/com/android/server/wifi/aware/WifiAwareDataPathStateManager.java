@@ -51,6 +51,8 @@ import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.Log;
 import android.util.Pair;
+import com.android.server.net.BaseNetworkObserver;
+import android.net.InterfaceConfiguration;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.Clock;
@@ -570,12 +572,6 @@ public class WifiAwareDataPathStateManager {
             nnri.peerDataMac = mac;
             nnri.channelInfo = channelInfo;
 
-            NetworkInfo networkInfo = new NetworkInfo(ConnectivityManager.TYPE_NONE, 0,
-                    NETWORK_TAG, "");
-            NetworkCapabilities networkCapabilities = new NetworkCapabilities(
-                    sNetworkCapabilitiesFilter);
-            LinkProperties linkProperties = new LinkProperties();
-
             boolean interfaceUsedByAnotherNdp = isInterfaceUpAndUsedByAnotherNdp(nnri);
             if (!interfaceUsedByAnotherNdp) {
                 try {
@@ -614,56 +610,24 @@ public class WifiAwareDataPathStateManager {
             }
 
             try {
-                if (nnri.peerIpv6Override == null) {
-                    nnri.peerIpv6 = Inet6Address.getByAddress(null,
-                            MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress(),
-                            NetworkInterface.getByName(nnri.interfaceName));
+                InterfaceConfiguration ifcg = mNwService.getInterfaceConfig(nnri.interfaceName);
+                if(!(ifcg.isActive())) {
+                    AwareNetworkObserver awareNwObserver = new AwareNetworkObserver();
+                    awareNwObserver.setInfo(nnri.interfaceName, ndpId, accept, mac);
+                    if (VDBG) Log.v(TAG, "onDataPathConfirm:  link is not active");
+                    mNwService.registerObserver(awareNwObserver);
+                    // return null as we are waiting for callback on observer
+                    networkSpecifier = null;
                 } else {
-                    byte[] addr = new byte[16];
-
-                    addr[0] = (byte) 0xfe;
-                    addr[1] = (byte) 0x80;
-                    addr[8] = nnri.peerIpv6Override[0];
-                    addr[9] = nnri.peerIpv6Override[1];
-                    addr[10] = nnri.peerIpv6Override[2];
-                    addr[11] = nnri.peerIpv6Override[3];
-                    addr[12] = nnri.peerIpv6Override[4];
-                    addr[13] = nnri.peerIpv6Override[5];
-                    addr[14] = nnri.peerIpv6Override[6];
-                    addr[15] = nnri.peerIpv6Override[7];
-
-                    nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
-                            NetworkInterface.getByName(nnri.interfaceName));
+                    if (VDBG || mVerboseLoggingEnabled) Log.v(TAG,
+                                   "onDataPathConfirm:link is active");
+                    handleAddressUpdated(ndpId, null, accept, mac);
                 }
-            } catch (SocketException | UnknownHostException e) {
-                Log.e(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
-                nnri.peerIpv6 = null;
+            } catch (android.os.RemoteException e) {
+                Log.e(TAG, "onDataPathConfirm:  RemoteException getInterfaceConfig");
+                if (accept) mMgr.endDataPath(ndpId);
             }
 
-            if (nnri.peerIpv6 != null) {
-                networkCapabilities.setTransportInfo(
-                        new WifiAwareNetworkInfo(nnri.peerIpv6, nnri.peerPort,
-                                nnri.peerTransportProtocol));
-            }
-            if (VDBG || mVerboseLoggingEnabled) {
-                Log.v(TAG, "onDataPathConfirm: AwareNetworkInfo="
-                        + networkCapabilities.getTransportInfo());
-            }
-
-            if (!mNiWrapper.configureAgentProperties(nnri, nnri.equivalentRequests, ndpId,
-                    networkInfo, networkCapabilities, linkProperties)) {
-                declareUnfullfillableAndEndDp(nnri, ndpId);
-                return networkSpecifier;
-            }
-
-            nnri.networkAgent = new WifiAwareNetworkAgent(mLooper, mContext,
-                    AGENT_TAG_PREFIX + nnri.ndpId,
-                    new NetworkInfo(ConnectivityManager.TYPE_NONE, 0, NETWORK_TAG, ""),
-                    networkCapabilities, linkProperties, NETWORK_FACTORY_SCORE_AVAIL,
-                    nnri);
-            nnri.startValidationTimestamp = mClock.getElapsedSinceBootMillis();
-            handleAddressValidation(nnri, linkProperties, networkInfo, ndpId,
-                    networkSpecifier.isOutOfBand());
         } else {
             if (VDBG || mVerboseLoggingEnabled) {
                 Log.v(TAG, "onDataPathConfirm: data-path for networkSpecifier=" + networkSpecifier
@@ -674,8 +638,94 @@ public class WifiAwareDataPathStateManager {
             mAwareMetrics.recordNdpStatus(reason, networkSpecifier.isOutOfBand(),
                     nnri.startTimestamp);
         }
-
         return networkSpecifier;
+    }
+
+    private void handleAddressUpdated(int ndpId, AwareNetworkObserver obs,
+                 boolean accept, byte[] mac) {
+
+        if(obs != null) {
+            try {
+                // no need for this obs
+                mNwService.unregisterObserver(obs);
+            } catch (android.os.RemoteException e) {
+                Log.v(TAG, "onDataPathConfirm:  RemoteException Observer");
+            }
+        }
+
+        Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation> nnriE =
+                getNetworkRequestByNdpId(ndpId);
+        if (nnriE == null) {
+            Log.w(TAG, "handleAddressUpdated: network request not found for ndpId=" + ndpId);
+            if (accept) {
+                mMgr.endDataPath(ndpId);
+            }
+            return;
+        }
+
+        NetworkInfo networkInfo = new NetworkInfo(ConnectivityManager.TYPE_NONE, 0,
+                    NETWORK_TAG, "");
+        NetworkCapabilities networkCapabilities = new NetworkCapabilities(
+                sNetworkCapabilitiesFilter);
+        LinkProperties linkProperties = new LinkProperties();
+
+        WifiAwareNetworkSpecifier networkSpecifier = nnriE.getKey();
+        AwareNetworkRequestInformation nnri = nnriE.getValue();
+
+        try {
+            if (nnri.peerIpv6Override == null) {
+                nnri.peerIpv6 = Inet6Address.getByAddress(null,
+                        MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress(),
+                        NetworkInterface.getByName(nnri.interfaceName));
+            } else {
+                byte[] addr = new byte[16];
+
+                addr[0] = (byte) 0xfe;
+                addr[1] = (byte) 0x80;
+                addr[8] = nnri.peerIpv6Override[0];
+                addr[9] = nnri.peerIpv6Override[1];
+                addr[10] = nnri.peerIpv6Override[2];
+                addr[11] = nnri.peerIpv6Override[3];
+                addr[12] = nnri.peerIpv6Override[4];
+                addr[13] = nnri.peerIpv6Override[5];
+                addr[14] = nnri.peerIpv6Override[6];
+                addr[15] = nnri.peerIpv6Override[7];
+
+                nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
+                        NetworkInterface.getByName(nnri.interfaceName));
+            }
+        } catch (SocketException | UnknownHostException e) {
+            Log.e(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
+            nnri.peerIpv6 = null;
+        }
+
+        if (nnri.peerIpv6 != null) {
+            networkCapabilities.setTransportInfo(
+                    new WifiAwareNetworkInfo(nnri.peerIpv6, nnri.peerPort,
+                            nnri.peerTransportProtocol));
+        }
+        if (VDBG || mVerboseLoggingEnabled) {
+            Log.v(TAG, "onDataPathConfirm: AwareNetworkInfo="
+                    + networkCapabilities.getTransportInfo());
+        }
+
+        if (!mNiWrapper.configureAgentProperties(nnri, nnri.equivalentRequests, ndpId,
+                networkInfo, networkCapabilities, linkProperties)) {
+            declareUnfullfillableAndEndDp(nnri, ndpId);
+            return;
+        }
+
+        nnri.networkAgent = new WifiAwareNetworkAgent(mLooper, mContext,
+                AGENT_TAG_PREFIX + nnri.ndpId,
+                new NetworkInfo(ConnectivityManager.TYPE_NONE, 0, NETWORK_TAG, ""),
+                networkCapabilities, linkProperties, NETWORK_FACTORY_SCORE_AVAIL,
+                nnri);
+        nnri.startValidationTimestamp = mClock.getElapsedSinceBootMillis();
+        handleAddressValidation(nnri, linkProperties, networkInfo, ndpId,
+                networkSpecifier.isOutOfBand());
+        //notify manager of this nw specifier
+        mMgr.onDataPathCreationSucess(networkSpecifier);
+
     }
 
     private void handleAddressValidation(AwareNetworkRequestInformation nnri,
@@ -1758,4 +1808,46 @@ public class WifiAwareDataPathStateManager {
         pw.println("  mNetworkFactory:");
         mNetworkFactory.dump(fd, pw, args);
     }
+
+    class AwareNetworkObserver extends BaseNetworkObserver {
+        private String mIface;
+        private int mNdpId;
+        private boolean accept;
+        private byte[] mac;
+
+        public void setInfo(String ifaceName, int ndpId, boolean accept, byte[] mac) {
+            if (VDBG) Log.v(TAG, "mNwObserver:  setInfo received ifaceName["
+                            +ifaceName+"]");
+            mIface = ifaceName;
+            mNdpId = ndpId;
+            this.accept = accept;
+            this.mac = mac;
+        }
+
+        @Override
+        public void interfaceStatusChanged(String iface, boolean up) {
+            if (VDBG) Log.v(TAG, "mNwObserver:  interfaceStatusChanged received iface["
+                        +iface+"], isUp?["+up+"]");
+            if(iface.equals(mIface) && !up) {
+                mHandler.post(() -> {
+                    try {
+                        mNwService.unregisterObserver(this);
+                    } catch (android.os.RemoteException e) {
+                        Log.e(TAG, "mNwObserver: Remote Exception on NwService");
+                    }
+                });
+            }
+        }
+
+        @Override
+        public void addressUpdated(String iface, LinkAddress address) {
+            if (VDBG) Log.v(TAG, "mNwObserver:  addressUpdated received iface["+iface
+                          +"], address[" +address.toString()+"]");
+            if(iface.equals(mIface)) {
+                mHandler.post(() -> {
+                    handleAddressUpdated(mNdpId, this,accept,mac);
+                });
+            }
+        }
+    };
 }
