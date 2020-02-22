@@ -206,7 +206,7 @@ public class WifiConnectivityManager {
     }
 
     // A periodic/PNO scan will be rescheduled up to MAX_SCAN_RESTART_ALLOWED times
-    // if the start scan command failed. An timer is used here to make it a deferred retry.
+    // if the start scan command failed. A timer is used here to make it a deferred retry.
     private final AlarmManager.OnAlarmListener mRestartScanListener =
             new AlarmManager.OnAlarmListener() {
                 public void onAlarm() {
@@ -257,7 +257,7 @@ public class WifiConnectivityManager {
      */
     private boolean handleScanResults(List<ScanDetail> scanDetails, String listenerName) {
         mWifiChannelUtilization.refreshChannelStatsAndChannelUtilization(
-                mStateMachine.getWifiLinkLayerStats());
+                mStateMachine.getWifiLinkLayerStats(), WifiChannelUtilization.UNKNOWN_FREQ);
 
         // Check if any blocklisted BSSIDs can be freed.
         Set<String> bssidBlocklist = mBssidBlocklistMonitor.updateAndGetBssidBlocklist();
@@ -626,7 +626,7 @@ public class WifiConnectivityManager {
         // Listen to WifiConfigManager network update events
         mConfigManager.addOnNetworkUpdateListener(new OnNetworkUpdateListener());
         mBssidBlocklistMonitor = mWifiInjector.getBssidBlocklistMonitor();
-        mWifiChannelUtilization = mWifiInjector.getWifiChannelUtilization();
+        mWifiChannelUtilization = mWifiInjector.getWifiChannelUtilizationScan();
         mNetworkSelector.setWifiChannelUtilization(mWifiChannelUtilization);
     }
 
@@ -870,9 +870,9 @@ public class WifiConnectivityManager {
 
         // If current network link quality is sufficient or has active stream,
         // skip scan (with firmware roaming) or do partial scan only (without firmware roaming).
-        if (mWifiState == WIFI_STATE_CONNECTED
-                && (mNetworkSelector.hasSufficientLinkQuality(mWifiInfo, mScoringParams)
-                || mNetworkSelector.hasActiveStream(mWifiInfo, mScoringParams))) {
+        if (mWifiState == WIFI_STATE_CONNECTED && (
+                mNetworkSelector.isNetworkSufficient(mWifiInfo)
+                || mNetworkSelector.hasActiveStream(mWifiInfo))) {
             // If only partial scan is proposed and firmware roaming control is supported,
             // we will not issue any scan because firmware roaming will take care of
             // intra-SSID roam.
@@ -991,11 +991,7 @@ public class WifiConnectivityManager {
     }
 
     // Start a single scan
-    private void startSingleScan(boolean isFullBandScan, WorkSource workSource) {
-        if (!mWifiEnabled || !mAutoJoinEnabled) {
-            return;
-        }
-
+    private void startForcedSingleScan(boolean isFullBandScan, WorkSource workSource) {
         // Any scans will impact wifi performance including WFD performance,
         // So at least ignore scans triggered internally by ConnectivityManager
         // when WFD session is active. We still allow connectivity scans initiated
@@ -1034,6 +1030,13 @@ public class WifiConnectivityManager {
         mScanner.startScan(
                 settings, new HandlerExecutor(mEventHandler), singleScanListener, workSource);
         mWifiMetrics.incrementConnectivityOneshotScanCount();
+    }
+
+    private void startSingleScan(boolean isFullBandScan, WorkSource workSource) {
+        if (!mWifiEnabled || !mAutoJoinEnabled) {
+            return;
+        }
+        startForcedSingleScan(isFullBandScan, workSource);
     }
 
     // Start a periodic scan when screen is on
@@ -1454,10 +1457,11 @@ public class WifiConnectivityManager {
      * Handler for on-demand connectivity scan
      */
     public void forceConnectivityScan(WorkSource workSource) {
+        if (!mWifiEnabled) return;
         localLog("forceConnectivityScan in request of " + workSource);
 
         mWaitForFullBandScanResults = true;
-        startSingleScan(true, workSource);
+        startForcedSingleScan(true, workSource);
     }
 
     /**

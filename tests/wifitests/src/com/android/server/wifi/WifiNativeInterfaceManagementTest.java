@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
 import android.app.test.MockAnswerUtil;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiScanner;
-import android.net.wifi.wificond.WifiCondManager;
+import android.net.wifi.wificond.WifiNl80211Manager;
 import android.os.Handler;
 import android.os.test.TestLooper;
 
@@ -70,7 +70,7 @@ public class WifiNativeInterfaceManagementTest extends WifiBaseTest {
     private static final String IFACE_NAME_1 = "mockWlan1";
 
     @Mock private WifiVendorHal mWifiVendorHal;
-    @Mock private WifiCondManager mWificondControl;
+    @Mock private WifiNl80211Manager mWificondControl;
     @Mock private SupplicantStaIfaceHal mSupplicantStaIfaceHal;
     @Mock private HostapdHal mHostapdHal;
     @Mock private WifiMonitor mWifiMonitor;
@@ -125,8 +125,6 @@ public class WifiNativeInterfaceManagementTest extends WifiBaseTest {
         when(mWifiVendorHal.removeStaIface(any())).thenReturn(true);
         when(mWifiVendorHal.removeApIface(any())).thenReturn(true);
 
-        when(mWificondControl.initialize(mWificondDeathHandlerCaptor.capture()))
-            .thenReturn(true);
         when(mWificondControl.setupInterfaceForClientMode(any(), any(), any(), any())).thenReturn(
                 true);
         when(mWificondControl.setupInterfaceForSoftApMode(any())).thenReturn(true);
@@ -168,7 +166,9 @@ public class WifiNativeInterfaceManagementTest extends WifiBaseTest {
         mWifiNative.registerStatusListener(mStatusListener);
 
         mInOrder.verify(mWifiVendorHal).initialize(any());
-        mInOrder.verify(mWificondControl).initialize(any());
+        mInOrder.verify(mWificondControl).setOnServiceDeadCallback(
+                mWificondDeathHandlerCaptor.capture());
+        mInOrder.verify(mWificondControl).tearDownInterfaces();
         mInOrder.verify(mWifiVendorHal).registerRadioModeChangeHandler(any());
     }
 
@@ -396,7 +396,7 @@ public class WifiNativeInterfaceManagementTest extends WifiBaseTest {
         verify(mHostapdHal).terminate();
 
         // Verify we stopped HAL & wificond
-        verify(mWificondControl).tearDownInterfaces();
+        verify(mWificondControl, times(2)).tearDownInterfaces(); // first time at initialize
         verify(mWifiVendorHal).stopVendorHal();
         verify(mIfaceCallback0).onDestroyed(IFACE_NAME_0);
 

@@ -31,7 +31,7 @@ import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiUsabilityStatsEntry.ProbeStatus;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
-import android.net.wifi.wificond.WifiCondManager;
+import android.net.wifi.wificond.WifiNl80211Manager;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -54,10 +54,12 @@ import com.android.server.wifi.hotspot2.PasspointMatch;
 import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.hotspot2.Utils;
 import com.android.server.wifi.p2p.WifiP2pMetrics;
+import com.android.server.wifi.proto.WifiStatsLog;
 import com.android.server.wifi.proto.nano.WifiMetricsProto;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.ExperimentValues;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.HealthMonitorMetrics;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats.ExperimentProbeCounts;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.LinkProbeStats.LinkProbeFailureReasonCount;
@@ -201,6 +203,7 @@ public class WifiMetrics {
     private FrameworkFacade mFacade;
     private WifiDataStall mWifiDataStall;
     private WifiLinkLayerStats mLastLinkLayerStats;
+    private WifiHealthMonitor mWifiHealthMonitor;
     private String mLastBssid;
     private int mLastFrequency = -1;
     private int mSeqNumInsideFramework = 0;
@@ -810,6 +813,11 @@ public class WifiMetrics {
         mBssidBlocklistMonitor = bssidBlocklistMonitor;
     }
 
+    /** Sets internal WifiHealthMonitor member */
+    public void setWifiHealthMonitor(WifiHealthMonitor wifiHealthMonitor) {
+        mWifiHealthMonitor = wifiHealthMonitor;
+    }
+
     /**
      * Increment cumulative counters for link layer stats.
      * @param newStats
@@ -1091,12 +1099,51 @@ public class WifiMetrics {
                 mCurrentConnectionEvent.mConnectionEvent.connectivityLevelFailureCode =
                         connectivityFailureCode;
                 mCurrentConnectionEvent.mConnectionEvent.level2FailureReason = level2FailureReason;
+
+                // Write metrics to WestWorld
+                int wwFailureCode = getConnectionResultFailureCode(level2FailureCode,
+                        level2FailureReason);
+                if (wwFailureCode != -1) {
+                    WifiStatsLog.write(WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED, result,
+                            wwFailureCode, mCurrentConnectionEvent.mConnectionEvent.signalStrength);
+                }
                 // ConnectionEvent already added to ConnectionEvents List. Safe to null current here
                 mCurrentConnectionEvent = null;
                 if (!result) {
                     mScanResultRssiTimestampMillis = -1;
                 }
             }
+        }
+    }
+
+    private int getConnectionResultFailureCode(int level2FailureCode, int level2FailureReason) {
+        switch (level2FailureCode) {
+            case ConnectionEvent.FAILURE_NONE:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_UNKNOWN;
+            case ConnectionEvent.FAILURE_ASSOCIATION_TIMED_OUT:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_ASSOCIATION_TIMEOUT;
+            case ConnectionEvent.FAILURE_ASSOCIATION_REJECTION:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_ASSOCIATION_REJECTION;
+            case ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE:
+                switch (level2FailureReason) {
+                    case WifiMetricsProto.ConnectionEvent.AUTH_FAILURE_EAP_FAILURE:
+                        return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_AUTHENTICATION_EAP;
+                    case WifiMetricsProto.ConnectionEvent.AUTH_FAILURE_WRONG_PSWD:
+                        return -1;
+                    default:
+                        return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_AUTHENTICATION_GENERAL;
+                }
+            case ConnectionEvent.FAILURE_DHCP:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_DHCP;
+            case ConnectionEvent.FAILURE_NETWORK_DISCONNECTION:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_NETWORK_DISCONNECTION;
+            case ConnectionEvent.FAILURE_ROAM_TIMEOUT:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_ROAM_TIMEOUT;
+            case ConnectionEvent.FAILURE_NEW_CONNECTION_ATTEMPT:
+            case ConnectionEvent.FAILURE_REDUNDANT_CONNECTION_ATTEMPT:
+                return -1;
+            default:
+                return WifiStatsLog.WIFI_CONNECTION_RESULT_REPORTED__FAILURE_CODE__FAILURE_UNKNOWN;
         }
     }
 
@@ -3386,18 +3433,22 @@ public class WifiMetrics {
             mWifiLogProto.rxLinkSpeedCount5GLow = mRxLinkSpeedCount5gLow.toProto();
             mWifiLogProto.rxLinkSpeedCount5GMid = mRxLinkSpeedCount5gMid.toProto();
             mWifiLogProto.rxLinkSpeedCount5GHigh = mRxLinkSpeedCount5gHigh.toProto();
+            HealthMonitorMetrics healthMonitorMetrics = mWifiHealthMonitor.buildProto();
+            if (healthMonitorMetrics != null) {
+                mWifiLogProto.healthMonitorMetrics = healthMonitorMetrics;
+            }
         }
     }
 
     private static int linkProbeFailureReasonToProto(int reason) {
         switch (reason) {
-            case WifiCondManager.SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED:
+            case WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_MCS_UNSUPPORTED:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_MCS_UNSUPPORTED;
-            case WifiCondManager.SEND_MGMT_FRAME_ERROR_NO_ACK:
+            case WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_NO_ACK:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_NO_ACK;
-            case WifiCondManager.SEND_MGMT_FRAME_ERROR_TIMEOUT:
+            case WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_TIMEOUT:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_TIMEOUT;
-            case WifiCondManager.SEND_MGMT_FRAME_ERROR_ALREADY_STARTED:
+            case WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_ALREADY_STARTED:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_ALREADY_STARTED;
             default:
                 return LinkProbeStats.LINK_PROBE_FAILURE_REASON_UNKNOWN;
@@ -4710,7 +4761,8 @@ public class WifiMetrics {
      *                                 {@link WifiInfo#txSuccess}).
      * @param rssi The Rx RSSI at {@code startTimestampMs}.
      * @param linkSpeed The Tx link speed in Mbps at {@code startTimestampMs}.
-     * @param reason The error code for the failure. See {@link WifiCondManager.SendMgmtFrameError}.
+     * @param reason The error code for the failure. See
+     * {@link WifiNl80211Manager.SendMgmtFrameError}.
      */
     public void logLinkProbeFailure(long timeSinceLastTxSuccessMs,
             int rssi, int linkSpeed, int reason) {

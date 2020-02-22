@@ -44,17 +44,22 @@ import android.os.test.TestLooper;
 
 import androidx.test.filters.SmallTest;
 
+import com.android.dx.mockito.inline.extended.ExtendedMockito;
 import com.android.server.wifi.WifiConfigManager.OnNetworkUpdateListener;
 import com.android.server.wifi.WifiHealthMonitor.ScanStats;
 import com.android.server.wifi.WifiHealthMonitor.WifiSoftwareBuildInfo;
 import com.android.server.wifi.WifiHealthMonitor.WifiSystemInfoStats;
 import com.android.server.wifi.WifiScoreCard.PerNetwork;
 import com.android.server.wifi.proto.WifiScoreCardProto.SystemInfoStats;
+import com.android.server.wifi.proto.WifiStatsLog;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.HealthMonitorMetrics;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.MockitoSession;
+import org.mockito.quality.Strictness;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -72,6 +77,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
 
     private WifiScoreCard mWifiScoreCard;
     private WifiHealthMonitor mWifiHealthMonitor;
+    private MockitoSession mSession;
 
     @Mock
     Clock mClock;
@@ -160,6 +166,32 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
         when(mWifiNative.getDriverVersion()).thenReturn(mDriverVersion);
         when(mWifiNative.getFirmwareVersion()).thenReturn(mFirmwareVersion);
+        when(mDeviceConfigFacade.getHealthMonitorMinRssiThrDbm()).thenReturn(
+                DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM);
+        when(mDeviceConfigFacade.getConnectionFailureHighThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_CONNECTION_FAILURE_HIGH_THR_PERCENT);
+        when(mDeviceConfigFacade.getConnectionFailureLowThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_CONNECTION_FAILURE_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getAssocRejectionHighThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ASSOC_REJECTION_HIGH_THR_PERCENT);
+        when(mDeviceConfigFacade.getAssocRejectionLowThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ASSOC_REJECTION_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getAssocTimeoutHighThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ASSOC_TIMEOUT_HIGH_THR_PERCENT);
+        when(mDeviceConfigFacade.getAssocTimeoutLowThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ASSOC_TIMEOUT_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getAuthFailureHighThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_AUTH_FAILURE_HIGH_THR_PERCENT);
+        when(mDeviceConfigFacade.getAuthFailureLowThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_AUTH_FAILURE_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getShortConnectionNonlocalHighThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_SHORT_CONNECTION_NONLOCAL_HIGH_THR_PERCENT);
+        when(mDeviceConfigFacade.getShortConnectionNonlocalLowThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_SHORT_CONNECTION_NONLOCAL_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getDisconnectionNonlocalHighThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_DISCONNECTION_NONLOCAL_HIGH_THR_PERCENT);
+        when(mDeviceConfigFacade.getDisconnectionNonlocalLowThrPercent()).thenReturn(
+                DeviceConfigFacade.DEFAULT_DISCONNECTION_NONLOCAL_LOW_THR_PERCENT);
         when(mDeviceConfigFacade.getHealthMonitorMinRssiThrDbm()).thenReturn(
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM);
 
@@ -382,6 +414,69 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
     }
 
     /**
+     * Check proto after one daily detection with high non-local disconnection rate
+     */
+    @Test
+    public void testBuildProto() throws Exception {
+        mWifiHealthMonitor.installMemoryStoreSetUpDetectionAlarm(mMemoryStore);
+        makeRecentStatsWithSufficientConnectionAttempt();
+        mAlarmManager.dispatch(WifiHealthMonitor.DAILY_DETECTION_TIMER_TAG);
+        mLooper.dispatchAll();
+
+        // First call of buildProto
+        HealthMonitorMetrics healthMetrics = mWifiHealthMonitor.buildProto();
+        assertEquals(0, healthMetrics.failureStatsIncrease.cntAssocRejection);
+        assertEquals(0, healthMetrics.failureStatsIncrease.cntAssocTimeout);
+        assertEquals(0, healthMetrics.failureStatsIncrease.cntAuthFailure);
+        assertEquals(0, healthMetrics.failureStatsIncrease.cntConnectionFailure);
+        assertEquals(0, healthMetrics.failureStatsIncrease.cntDisconnectionNonlocal);
+        assertEquals(0, healthMetrics.failureStatsIncrease.cntShortConnectionNonlocal);
+        assertEquals(0, healthMetrics.failureStatsHigh.cntAssocRejection);
+        assertEquals(0, healthMetrics.failureStatsHigh.cntAssocTimeout);
+        assertEquals(0, healthMetrics.failureStatsHigh.cntAuthFailure);
+        assertEquals(0, healthMetrics.failureStatsHigh.cntConnectionFailure);
+        assertEquals(1, healthMetrics.failureStatsHigh.cntDisconnectionNonlocal);
+        assertEquals(1, healthMetrics.failureStatsHigh.cntShortConnectionNonlocal);
+        assertEquals(1, healthMetrics.numNetworkSufficientRecentStatsOnly);
+        assertEquals(0, healthMetrics.numNetworkSufficientRecentPrevStats);
+
+        // Second call of buildProto
+        healthMetrics = mWifiHealthMonitor.buildProto();
+        // Second call should result in an empty proto
+        assertEquals(null, healthMetrics);
+    }
+
+    /**
+     * Check WestWorld logging after one daily detection with high non-local disconnection rate
+     */
+    @Test
+    public void testWifiStatsLogWrite() throws Exception {
+        // static mocking for WifiStatsLog
+        mSession = ExtendedMockito.mockitoSession()
+                .strictness(Strictness.LENIENT)
+                .mockStatic(WifiStatsLog.class)
+                .startMocking();
+
+        mWifiHealthMonitor.installMemoryStoreSetUpDetectionAlarm(mMemoryStore);
+        makeRecentStatsWithSufficientConnectionAttempt();
+        mAlarmManager.dispatch(WifiHealthMonitor.DAILY_DETECTION_TIMER_TAG);
+        mLooper.dispatchAll();
+
+        ExtendedMockito.verify(() -> WifiStatsLog.write(
+                WifiStatsLog.WIFI_FAILURE_STAT_REPORTED,
+                WifiStatsLog.WIFI_FAILURE_STAT_REPORTED__ABNORMALITY_TYPE__SIMPLY_HIGH,
+                WifiStatsLog.WIFI_FAILURE_STAT_REPORTED__FAILURE_TYPE__FAILURE_NON_LOCAL_DISCONNECTION,
+                1));
+
+        ExtendedMockito.verify(() -> WifiStatsLog.write(
+                WifiStatsLog.WIFI_FAILURE_STAT_REPORTED,
+                WifiStatsLog.WIFI_FAILURE_STAT_REPORTED__ABNORMALITY_TYPE__SIMPLY_HIGH,
+                WifiStatsLog.WIFI_FAILURE_STAT_REPORTED__FAILURE_TYPE__FAILURE_SHORT_CONNECTION_DUE_TO_NON_LOCAL_DISCONNECTION,
+                1));
+        mSession.finishMocking();
+    }
+
+    /**
      * test stats after a SW build change
      */
     @Test
@@ -546,5 +641,4 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         perNetwork = mWifiScoreCard.fetchByNetwork(mWifiInfo.getSSID());
         assertNotNull(perNetwork);
     }
-    // TODO: add test for metric report
 }

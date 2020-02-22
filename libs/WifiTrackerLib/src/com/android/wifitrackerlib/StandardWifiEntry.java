@@ -16,6 +16,8 @@
 
 package com.android.wifitrackerlib;
 
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_PERMANENTLY_DISABLED;
 import static android.net.wifi.WifiInfo.sanitizeSsid;
 
 import static androidx.core.util.Preconditions.checkNotNull;
@@ -49,6 +51,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
 
+import com.android.internal.annotations.VisibleForTesting;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
@@ -62,7 +66,8 @@ import java.util.stream.Collectors;
  *
  * This type of WifiEntry can represent both open and saved networks.
  */
-class StandardWifiEntry extends WifiEntry {
+@VisibleForTesting
+public class StandardWifiEntry extends WifiEntry {
     static final String KEY_PREFIX = "StandardWifiEntry:";
 
     @Retention(RetentionPolicy.SOURCE)
@@ -102,16 +107,14 @@ class StandardWifiEntry extends WifiEntry {
     private @EapType int mEapType = EAP_UNKNOWN;
     private @PskType int mPskType = PSK_UNKNOWN;
     @Nullable private WifiConfiguration mWifiConfig;
-    @Nullable private ConnectCallback mConnectCallback;
-    @Nullable private DisconnectCallback mDisconnectCallback;
-    @Nullable private ForgetCallback mForgetCallback;
     @Nullable private String mRecommendationServiceLabel;
 
     StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull String key,
             @NonNull List<ScanResult> scanResults,
-            @NonNull WifiManager wifiManager) throws IllegalArgumentException {
-        this(context, callbackHandler, key, wifiManager, false /* forSavedNetworksPage */);
+            @NonNull WifiManager wifiManager,
+            boolean forSavedNetworksPage) throws IllegalArgumentException {
+        this(context, callbackHandler, key, wifiManager, forSavedNetworksPage);
 
         checkNotNull(scanResults, "Cannot construct with null ScanResult list!");
         if (scanResults.isEmpty()) {
@@ -123,8 +126,9 @@ class StandardWifiEntry extends WifiEntry {
 
     StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull String key, @NonNull WifiConfiguration config,
-            @NonNull WifiManager wifiManager) throws IllegalArgumentException {
-        this(context, callbackHandler, key, wifiManager, false /* forSavedNetworksPage */);
+            @NonNull WifiManager wifiManager,
+            boolean forSavedNetworksPage) throws IllegalArgumentException {
+        this(context, callbackHandler, key, wifiManager, forSavedNetworksPage);
 
         checkNotNull(config, "Cannot construct with null config!");
         checkNotNull(config.SSID, "Supplied config must have an SSID!");
@@ -281,10 +285,13 @@ class StandardWifiEntry extends WifiEntry {
     private String getDisconnectedStateDescription() {
         if (isSaved() && mWifiConfig.hasNoInternetAccess()) {
             final int messageID =
-                    mWifiConfig.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()
+                    mWifiConfig.getNetworkSelectionStatus().getNetworkSelectionStatus()
+                            == NETWORK_SELECTION_PERMANENTLY_DISABLED
                     ? R.string.wifi_no_internet_no_reconnect : R.string.wifi_no_internet;
             return mContext.getString(messageID);
-        } else if (isSaved() && !mWifiConfig.getNetworkSelectionStatus().isNetworkEnabled()) {
+        } else if (isSaved()
+                && (mWifiConfig.getNetworkSelectionStatus().getNetworkSelectionStatus()
+                        != NETWORK_SELECTION_ENABLED)) {
             final WifiConfiguration.NetworkSelectionStatus networkStatus =
                     mWifiConfig.getNetworkSelectionStatus();
             switch (networkStatus.getNetworkSelectionDisableReason()) {
@@ -538,15 +545,14 @@ class StandardWifiEntry extends WifiEntry {
             return;
         }
 
-        final WifiConfiguration saveConfig = new WifiConfiguration(mWifiConfig);
         if (meteredChoice == METERED_CHOICE_AUTO) {
-            saveConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NONE;
+            mWifiConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NONE;
         } else if (meteredChoice == METERED_CHOICE_METERED) {
-            saveConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_METERED;
+            mWifiConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_METERED;
         } else if (meteredChoice == METERED_CHOICE_UNMETERED) {
-            saveConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NOT_METERED;
+            mWifiConfig.meteredOverride = WifiConfiguration.METERED_OVERRIDE_NOT_METERED;
         }
-        mWifiManager.save(saveConfig, null /* listener */);
+        mWifiManager.save(mWifiConfig, null /* listener */);
     }
 
     @Override

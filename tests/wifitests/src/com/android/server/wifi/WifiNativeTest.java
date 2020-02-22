@@ -37,8 +37,8 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.wificond.NativeScanResult;
 import android.net.wifi.wificond.RadioChainInfo;
-import android.net.wifi.wificond.WifiCondManager;
-import android.net.wifi.wificond.WifiCondManager.SendMgmtFrameCallback;
+import android.net.wifi.wificond.WifiNl80211Manager;
+import android.net.wifi.wificond.WifiNl80211Manager.SendMgmtFrameCallback;
 import android.os.Handler;
 
 import androidx.test.filters.SmallTest;
@@ -55,7 +55,6 @@ import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.BitSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
@@ -129,10 +128,10 @@ public class WifiNativeTest extends WifiBaseTest {
             new FateMapping(WifiLoggerHal.RX_PKT_FATE_DRV_DROP_OTHER, "driver dropped (other)"),
             new FateMapping((byte) 42, "42")
     };
-    private static final WifiCondManager.SignalPollResult SIGNAL_POLL_RESULT =
-            new WifiCondManager.SignalPollResult(-60, 12, 6, 5240);
-    private static final WifiCondManager.TxPacketCounters PACKET_COUNTERS_RESULT =
-            new WifiCondManager.TxPacketCounters(2000, 120);
+    private static final WifiNl80211Manager.SignalPollResult SIGNAL_POLL_RESULT =
+            new WifiNl80211Manager.SignalPollResult(-60, 12, 6, 5240);
+    private static final WifiNl80211Manager.TxPacketCounters PACKET_COUNTERS_RESULT =
+            new WifiNl80211Manager.TxPacketCounters(2000, 120);
 
     private static final Set<Integer> SCAN_FREQ_SET =
             new HashSet<Integer>() {{
@@ -204,7 +203,7 @@ public class WifiNativeTest extends WifiBaseTest {
     private static final int TEST_FREQUENCY = 2456;
     private static final int TEST_SIGNAL_MBM = -4500;
     private static final long TEST_TSF = 34455441;
-    private static final BitSet TEST_CAPABILITY = capabilityIntToBitset(0b0000_0000_0010_0100);
+    private static final int TEST_CAPABILITY = 0b0000_0000_0010_0100;
     private static final boolean TEST_ASSOCIATED = true;
     private static final NativeScanResult MOCK_NATIVE_SCAN_RESULT = createMockNativeScanResult();
     private static NativeScanResult createMockNativeScanResult() {
@@ -225,7 +224,7 @@ public class WifiNativeTest extends WifiBaseTest {
     private static final RadioChainInfo MOCK_NATIVE_RADIO_CHAIN_INFO_2 = new RadioChainInfo(0, -78);
 
     @Mock private WifiVendorHal mWifiVendorHal;
-    @Mock private WifiCondManager mWificondControl;
+    @Mock private WifiNl80211Manager mWificondControl;
     @Mock private SupplicantStaIfaceHal mStaIfaceHal;
     @Mock private HostapdHal mHostapdHal;
     @Mock private WifiMonitor mWifiMonitor;
@@ -237,15 +236,14 @@ public class WifiNativeTest extends WifiBaseTest {
     @Mock private WifiInjector mWifiInjector;
     @Mock private NetdWrapper mNetdWrapper;
 
-    ArgumentCaptor<WifiCondManager.ScanEventCallback> mScanCallbackCaptor =
-            ArgumentCaptor.forClass(WifiCondManager.ScanEventCallback.class);
+    ArgumentCaptor<WifiNl80211Manager.ScanEventCallback> mScanCallbackCaptor =
+            ArgumentCaptor.forClass(WifiNl80211Manager.ScanEventCallback.class);
 
     private WifiNative mWifiNative;
 
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
-        when(mWificondControl.initialize(any())).thenReturn(true);
 
         when(mWifiVendorHal.initialize(any())).thenReturn(true);
         when(mWifiVendorHal.isVendorHalSupported()).thenReturn(true);
@@ -710,7 +708,7 @@ public class WifiNativeTest extends WifiBaseTest {
         when(mWificondControl.signalPoll(WIFI_IFACE_NAME))
                 .thenReturn(SIGNAL_POLL_RESULT);
 
-        WifiCondManager.SignalPollResult pollResult = mWifiNative.signalPoll(WIFI_IFACE_NAME);
+        WifiNl80211Manager.SignalPollResult pollResult = mWifiNative.signalPoll(WIFI_IFACE_NAME);
         assertEquals(SIGNAL_POLL_RESULT.currentRssiDbm, pollResult.currentRssiDbm);
         assertEquals(SIGNAL_POLL_RESULT.txBitrateMbps, pollResult.txBitrateMbps);
         assertEquals(SIGNAL_POLL_RESULT.associationFrequencyMHz,
@@ -754,8 +752,8 @@ public class WifiNativeTest extends WifiBaseTest {
     public void testStartPnoScanOnRequestProcessed() throws Exception {
         mWifiNative.startPnoScan(WIFI_IFACE_NAME, TEST_PNO_SETTINGS);
 
-        ArgumentCaptor<WifiCondManager.PnoScanRequestCallback> captor = ArgumentCaptor.forClass(
-                WifiCondManager.PnoScanRequestCallback.class);
+        ArgumentCaptor<WifiNl80211Manager.PnoScanRequestCallback> captor =
+                ArgumentCaptor.forClass(WifiNl80211Manager.PnoScanRequestCallback.class);
         verify(mWificondControl).startPnoScan(eq(WIFI_IFACE_NAME),
                 eq(TEST_PNO_SETTINGS.toNativePnoSettings()), any(), captor.capture());
         captor.getValue().onPnoRequestSucceeded();
@@ -769,8 +767,8 @@ public class WifiNativeTest extends WifiBaseTest {
     public void testStartPnoScanOnRequestFailed() throws Exception {
         mWifiNative.startPnoScan(WIFI_IFACE_NAME, TEST_PNO_SETTINGS);
 
-        ArgumentCaptor<WifiCondManager.PnoScanRequestCallback> captor = ArgumentCaptor.forClass(
-                WifiCondManager.PnoScanRequestCallback.class);
+        ArgumentCaptor<WifiNl80211Manager.PnoScanRequestCallback> captor =
+                ArgumentCaptor.forClass(WifiNl80211Manager.PnoScanRequestCallback.class);
         verify(mWificondControl).startPnoScan(eq(WIFI_IFACE_NAME),
                 eq(TEST_PNO_SETTINGS.toNativePnoSettings()), any(), captor.capture());
         captor.getValue().onPnoRequestFailed();
@@ -1017,7 +1015,8 @@ public class WifiNativeTest extends WifiBaseTest {
         mWifiNative.probeLink(WIFI_IFACE_NAME, MacAddress.fromString(TEST_BSSID_STR),
                 mSendMgmtFrameCallback, TEST_MCS_RATE);
 
-        verify(mSendMgmtFrameCallback).onFailure(WifiCondManager.SEND_MGMT_FRAME_ERROR_UNKNOWN);
+        verify(mSendMgmtFrameCallback).onFailure(
+                WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_UNKNOWN);
         verify(mWificondControl, never()).sendMgmtFrame(any(), any(), anyInt(), any(), any());
     }
 
@@ -1030,21 +1029,8 @@ public class WifiNativeTest extends WifiBaseTest {
 
         mWifiNative.probeLink(WIFI_IFACE_NAME, null, mSendMgmtFrameCallback, TEST_MCS_RATE);
 
-        verify(mSendMgmtFrameCallback).onFailure(WifiCondManager.SEND_MGMT_FRAME_ERROR_UNKNOWN);
+        verify(mSendMgmtFrameCallback).onFailure(
+                WifiNl80211Manager.SEND_MGMT_FRAME_ERROR_UNKNOWN);
         verify(mWificondControl, never()).sendMgmtFrame(any(), any(), anyInt(), any(), any());
     }
-
-    private static final int CAPABILITY_SIZE = 16;
-
-    private static BitSet capabilityIntToBitset(int capabilityInt) {
-        BitSet capabilityBitSet = new BitSet(CAPABILITY_SIZE);
-        for (int i = 0; i < CAPABILITY_SIZE; i++) {
-            if ((capabilityInt & (1 << i)) != 0) {
-                capabilityBitSet.set(i);
-            }
-        }
-        return capabilityBitSet;
-    }
-
-
 }
