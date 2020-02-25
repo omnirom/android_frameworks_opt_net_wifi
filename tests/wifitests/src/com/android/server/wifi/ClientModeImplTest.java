@@ -76,6 +76,7 @@ import android.net.wifi.IActionListener;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.KeyMgmt;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
@@ -84,8 +85,8 @@ import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
+import android.net.wifi.nl80211.WifiNl80211Manager;
 import android.net.wifi.p2p.WifiP2pManager;
-import android.net.wifi.wificond.WifiNl80211Manager;
 import android.os.BatteryStatsManager;
 import android.os.Binder;
 import android.os.Bundle;
@@ -93,6 +94,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.IPowerManager;
+import android.os.IThermalService;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
@@ -235,7 +237,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         when(context.getContentResolver()).thenReturn(mockContentResolver);
 
         when(context.getSystemService(Context.POWER_SERVICE)).thenReturn(
-                new PowerManager(context, mock(IPowerManager.class), new Handler()));
+                new PowerManager(context, mock(IPowerManager.class), mock(IThermalService.class),
+                    new Handler()));
 
         mAlarmManager = new TestAlarmManager();
         when(context.getSystemService(Context.ALARM_SERVICE)).thenReturn(
@@ -407,6 +410,7 @@ public class ClientModeImplTest extends WifiBaseTest {
     @Mock SubscriptionManager mSubscriptionManager;
     @Mock ConnectionFailureNotifier mConnectionFailureNotifier;
     @Mock EapFailureNotifier mEapFailureNotifier;
+    @Mock SimRequiredNotifier mSimRequiredNotifier;
     @Mock ThroughputPredictor mThroughputPredictor;
     @Mock ScanRequestProxy mScanRequestProxy;
 
@@ -584,7 +588,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
                 mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
                 mLinkProbeManager, mBatteryStatsManager, mSupplicantStateTracker,
-                mMboOceController, mTelephonyUtil, mEapFailureNotifier);
+                mMboOceController, mTelephonyUtil, mEapFailureNotifier, mSimRequiredNotifier);
         mCmi.start();
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
@@ -1021,7 +1025,7 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * When the SIM card was removed, if the current wifi connection is notusing it, the connection
+     * When the SIM card was removed, if the current wifi connection is not using it, the connection
      * should be kept.
      */
     @Test
@@ -1050,8 +1054,10 @@ public class ClientModeImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         doReturn(true).when(mTelephonyUtil).isSimPresent(eq(DATA_SUBID));
-        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, false);
+        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, 0);
         mLooper.dispatchAll();
+
+        verify(mSimRequiredNotifier, never()).showSimRequiredNotification(any(), any());
 
         assertEquals("ObtainingIpState", getCurrentState().getName());
     }
@@ -1086,9 +1092,10 @@ public class ClientModeImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         doReturn(false).when(mTelephonyUtil).isSimPresent(eq(DATA_SUBID));
-        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, false);
+        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, 0);
         mLooper.dispatchAll();
 
+        verify(mSimRequiredNotifier).showSimRequiredNotification(any(), any());
         assertEquals("DisconnectingState", getCurrentState().getName());
     }
 
@@ -1707,6 +1714,7 @@ public class ClientModeImplTest extends WifiBaseTest {
 
         verify(mWifiConfigManager).updateNetworkSelectionStatus(anyInt(),
                 eq(WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD));
+        verify(mWifiScoreCard, never()).detectAbnormalAuthFailure(any());
 
         assertEquals("DisconnectedState", getCurrentState().getName());
     }
@@ -1731,6 +1739,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         WifiConfiguration config = new WifiConfiguration();
         config.SSID = sSSID;
         config.getNetworkSelectionStatus().setHasEverConnected(true);
+        config.allowedKeyManagement.set(KeyMgmt.IEEE8021X);
         config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.SIM);
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
         MockitoSession mockSession = ExtendedMockito.mockitoSession()
@@ -1748,6 +1757,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 WifiNative.EAP_SIM_VENDOR_SPECIFIC_CERT_EXPIRED, config);
         verify(mDataTelephonyManager).resetCarrierKeysForImsiEncryption();
         mockSession.finishMocking();
+        verify(mWifiScoreCard).detectAbnormalAuthFailure(anyString());
     }
 
     /**
@@ -1769,6 +1779,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         WifiConfiguration config = new WifiConfiguration();
         config.getNetworkSelectionStatus().setHasEverConnected(true);
         config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.TLS);
+        config.allowedKeyManagement.set(KeyMgmt.IEEE8021X);
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
 
         mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
@@ -1777,6 +1788,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         verify(mDataTelephonyManager, never()).resetCarrierKeysForImsiEncryption();
+        verify(mWifiScoreCard).detectAbnormalAuthFailure(null);
     }
 
     /**
@@ -1804,6 +1816,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiConfigManager).updateNetworkSelectionStatus(anyInt(),
                 eq(WifiConfiguration.NetworkSelectionStatus
                         .DISABLED_AUTHENTICATION_NO_SUBSCRIPTION));
+        verify(mWifiScoreCard, never()).detectAbnormalAuthFailure(null);
     }
 
     @Test
@@ -3779,7 +3792,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         startSupplicantAndDispatchMessages();
 
         // Indicate that sim is removed.
-        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, false);
+        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, 0);
         mLooper.dispatchAll();
 
         verify(mWifiConfigManager).resetSimNetworks();
@@ -3787,18 +3800,21 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify inserting sim will rest carrier privileged suggestor apps.
+     * Verify inserting sim will reset carrier privileged suggestor apps.
+     * and remove any previous notifications due to sim removal
      */
     @Test
     public void testResetCarrierPrivilegedAppsWhenInsertingSim() throws Exception {
         // Switch to connect mode and verify wifi is reported as enabled
         startSupplicantAndDispatchMessages();
 
-        // Indicate that sim is removed.
-        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, true);
+        // Indicate that sim is inserted.
+        mCmi.sendMessage(ClientModeImpl.CMD_RESET_SIM_NETWORKS, 1);
         mLooper.dispatchAll();
 
+        verify(mWifiConfigManager, never()).resetSimNetworks();
         verify(mWifiNetworkSuggestionsManager).resetCarrierPrivilegedApps();
+        verify(mSimRequiredNotifier).dismissSimRequiredNotification();
     }
 
     /**
@@ -4017,15 +4033,17 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that MboOce initialization/Deinitialization methods are called in ClientMode.
+     * Verify that MboOce/WifiDataStall enable/disable methods are called in ClientMode.
      */
     @Test
-    public void verifyMboOceInitAndDeinitInClientMode() throws Exception {
+    public void verifyMboOceWifiDataStallSetupInClientMode() throws Exception {
         startSupplicantAndDispatchMessages();
         verify(mMboOceController).enable();
+        verify(mWifiDataStall).enablePhoneStateListener();
         mCmi.setOperationalMode(ClientModeImpl.DISABLED_MODE, null);
         mLooper.dispatchAll();
         verify(mMboOceController).disable();
+        verify(mWifiDataStall).disablePhoneStateListener();
     }
 
     /**

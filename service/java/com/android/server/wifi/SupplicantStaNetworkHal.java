@@ -194,9 +194,9 @@ public class SupplicantStaNetworkHal {
                 config.hiddenSSID = mScanSsid;
             }
             /** Require PMF*/
-            config.requirePMF = false;
+            config.requirePmf = false;
             if (getRequirePmf()) {
-                config.requirePMF = mRequirePmf;
+                config.requirePmf = mRequirePmf;
             }
             /** WEP keys **/
             config.wepTxKeyIndex = -1;
@@ -373,8 +373,8 @@ public class SupplicantStaNetworkHal {
             }
 
             /** RequirePMF */
-            if (!setRequirePmf(config.requirePMF)) {
-                Log.e(TAG, config.SSID + ": failed to set requirePMF: " + config.requirePMF);
+            if (!setRequirePmf(config.requirePmf)) {
+                Log.e(TAG, config.SSID + ": failed to set requirePMF: " + config.requirePmf);
                 return false;
             }
             /** Key Management Scheme */

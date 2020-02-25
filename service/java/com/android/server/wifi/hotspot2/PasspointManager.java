@@ -67,6 +67,7 @@ import com.android.server.wifi.util.TelephonyUtil;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -136,6 +137,10 @@ public class PasspointManager {
         @Override
         public void onANQPResponse(long bssid,
                 Map<Constants.ANQPElementType, ANQPElement> anqpElements) {
+            if (mVerboseLoggingEnabled) {
+                Log.d(TAG, "ANQP response received from BSSID "
+                        + Utils.macToString(bssid));
+            }
             // Notify request manager for the completion of a request.
             ANQPNetworkKey anqpKey =
                     mAnqpRequestManager.onRequestCompleted(bssid, anqpElements != null);
@@ -485,14 +490,14 @@ public class PasspointManager {
     public boolean removeProvider(int callingUid, boolean privileged, String uniqueId,
             String fqdn) {
         if (uniqueId == null && fqdn == null) {
+            mWifiMetrics.incrementNumPasspointProviderUninstallation();
             Log.e(TAG, "Cannot remove provider, both FQDN and unique ID are null");
             return false;
         }
 
-        mWifiMetrics.incrementNumPasspointProviderUninstallation();
-
         if (uniqueId != null) {
             // Unique identifier provided
+            mWifiMetrics.incrementNumPasspointProviderUninstallation();
             PasspointProvider provider = mProviders.get(uniqueId);
             if (provider == null) {
                 Log.e(TAG, "Config doesn't exist");
@@ -503,16 +508,26 @@ public class PasspointManager {
 
         // FQDN provided, loop through all profiles with matching FQDN
         ArrayList<PasspointProvider> passpointProviders = new ArrayList<>(mProviders.values());
-        boolean removed = false;
-
+        int removedProviders = 0;
+        int numOfUninstallations = 0;
         for (PasspointProvider provider : passpointProviders) {
             if (!TextUtils.equals(provider.getConfig().getHomeSp().getFqdn(), fqdn)) {
                 continue;
             }
-            removed = removed || removeProviderInternal(provider, callingUid, privileged);
+            mWifiMetrics.incrementNumPasspointProviderUninstallation();
+            numOfUninstallations++;
+            if (removeProviderInternal(provider, callingUid, privileged)) {
+                removedProviders++;
+            }
         }
 
-        return removed;
+        if (numOfUninstallations == 0) {
+            // Update uninstallation requests metrics here to cover the corner case of trying to
+            // uninstall a non-existent provider.
+            mWifiMetrics.incrementNumPasspointProviderUninstallation();
+        }
+
+        return removedProviders > 0;
     }
 
     /**
@@ -1010,9 +1025,12 @@ public class PasspointManager {
      * @return List of {@link WifiConfiguration} converted from {@link PasspointProvider}
      */
     public List<WifiConfiguration> getWifiConfigsForPasspointProfiles(List<String> idList) {
+        if (mProviders.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<WifiConfiguration> configs = new ArrayList<>();
         Set<String> uniqueIdSet = new HashSet<>();
         uniqueIdSet.addAll(idList);
-        List<WifiConfiguration> configs = new ArrayList<>();
         for (String uniqueId : uniqueIdSet) {
             PasspointProvider provider = mProviders.get(uniqueId);
             if (provider == null) {
@@ -1152,7 +1170,7 @@ public class PasspointManager {
      * @return True if the configuration is expired, false if not or expiration is unset
      */
     private boolean isExpired(@NonNull PasspointConfiguration config) {
-        long expirationTime = config.getSubscriptionExpirationTimeInMillis();
+        long expirationTime = config.getSubscriptionExpirationTimeMillis();
 
         if (expirationTime != Long.MIN_VALUE) {
             long curTime = System.currentTimeMillis();
@@ -1191,5 +1209,22 @@ public class PasspointManager {
         }
 
         return filteredScanResults;
+    }
+
+    /**
+     * Check if the providers list is empty
+     *
+     * @return true if the providers list is empty, false otherwise
+     */
+    public boolean isProvidersListEmpty() {
+        return mProviders.isEmpty();
+    }
+
+    /**
+     * Clear ANQP requests and flush ANQP Cache (for factory reset)
+     */
+    public void clearAnqpRequestsAndFlushCache() {
+        mAnqpRequestManager.clear();
+        mAnqpCache.flush();
     }
 }

@@ -63,7 +63,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
 import android.net.wifi.hotspot2.pps.Credential;
-import android.net.wifi.wificond.WifiNl80211Manager;
+import android.net.wifi.nl80211.WifiNl80211Manager;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
@@ -1564,6 +1564,26 @@ public class WifiMetricsTest extends WifiBaseTest {
         //Check the authentication failure reason
         assertEquals(WifiMetricsProto.ConnectionEvent.AUTH_FAILURE_WRONG_PSWD,
                 mDecodedProto.connectionEvent[0].level2FailureReason);
+    }
+
+    /**
+     * Test the logging of BssidBlocklistStats.
+     */
+    @Test
+    public void testBssidBlocklistMetrics() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            mWifiMetrics.incrementNetworkSelectionFilteredBssidCount(i);
+        }
+        mWifiMetrics.incrementNetworkSelectionFilteredBssidCount(2);
+        dumpProtoAndDeserialize();
+
+        Int32Count[] expectedHistogram = {
+                buildInt32Count(0, 1),
+                buildInt32Count(1, 1),
+                buildInt32Count(2, 2),
+        };
+        assertKeyCountsEqual(expectedHistogram,
+                mDecodedProto.bssidBlocklistStats.networkSelectionFilteredBssidCount);
     }
 
     /**
@@ -4136,5 +4156,26 @@ public class WifiMetricsTest extends WifiBaseTest {
 
         dumpProtoAndDeserialize();
         assertEquals(0, mDecodedProto.wifiUsabilityStatsList.length);
+    }
+
+    /**
+     * Test the logging of connection duration stats
+     */
+    @Test
+    public void testConnectionDurationStats() throws Exception {
+        for (int i = 0; i < 2; i++) {
+            mWifiMetrics.incrementConnectionDuration(5000, false, true);
+            mWifiMetrics.incrementConnectionDuration(3000, true, true);
+            mWifiMetrics.incrementConnectionDuration(1000, false, false);
+            mWifiMetrics.incrementConnectionDuration(500, true, false);
+        }
+        dumpProtoAndDeserialize();
+
+        assertEquals(6000,
+                mDecodedProto.connectionDurationStats.totalTimeSufficientThroughputMs);
+        assertEquals(10000,
+                mDecodedProto.connectionDurationStats.totalTimeInsufficientThroughputMs);
+        assertEquals(3000,
+                mDecodedProto.connectionDurationStats.totalTimeCellularDataOffMs);
     }
 }
