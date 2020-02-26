@@ -3000,8 +3000,8 @@ public class WifiNative {
                         }
                         //wifigbk++
                         if (!WifiGbk.isAllAscii(nativeNetwork.getSsid())) {
-                            android.net.wifi.wificond.PnoNetwork nativeNetwork2 =
-                                new android.net.wifi.wificond.PnoNetwork();
+                            android.net.wifi.nl80211.PnoNetwork nativeNetwork2 =
+                                new android.net.wifi.nl80211.PnoNetwork();
                             nativeNetwork2.setHidden(nativeNetwork.isHidden());
                             nativeNetwork2.setSsid(WifiGbk.toGbk(nativeNetwork.getSsid()));
                             nativeNetwork2.setFrequenciesMhz(nativeNetwork.getFrequenciesMhz());
