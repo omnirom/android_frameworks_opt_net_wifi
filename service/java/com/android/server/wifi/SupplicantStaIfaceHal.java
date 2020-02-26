@@ -648,7 +648,12 @@ public class SupplicantStaIfaceHal {
             ifaceInfo.type = IfaceType.STA;
             Mutable<ISupplicantIface> supplicantIface = new Mutable<>();
             try {
-                getSupplicantMockableV1_1().addInterface(ifaceInfo,
+                android.hardware.wifi.supplicant.V1_1.ISupplicant ISupplicantV1_1 = getSupplicantMockableV1_1();
+                if(ISupplicantV1_1 == null) {
+                    Log.e(TAG, "Cannot add network, ISupplicant is null");
+                    return null;
+                }
+                ISupplicantV1_1.addInterface(ifaceInfo,
                         (SupplicantStatus status, ISupplicantIface iface) -> {
                             if (status.code != SupplicantStatusCode.SUCCESS
                                     && status.code != SupplicantStatusCode.FAILURE_IFACE_EXISTS) {
@@ -712,7 +717,12 @@ public class SupplicantStaIfaceHal {
                 ISupplicant.IfaceInfo ifaceInfo = new ISupplicant.IfaceInfo();
                 ifaceInfo.name = ifaceName;
                 ifaceInfo.type = IfaceType.STA;
-                SupplicantStatus status = getSupplicantMockableV1_1().removeInterface(ifaceInfo);
+                android.hardware.wifi.supplicant.V1_1.ISupplicant ISupplicantV1_1 = getSupplicantMockableV1_1();
+                if(ISupplicantV1_1 == null) {
+                    Log.e(TAG, "Failed to remove iface, ISupplicant is null");
+                    return false;
+		}
+                SupplicantStatus status = ISupplicantV1_1.removeInterface(ifaceInfo);
                 if (status.code != SupplicantStatusCode.SUCCESS) {
                     Log.e(TAG, "Failed to remove iface " + status.code);
                     return false;
@@ -862,7 +872,11 @@ public class SupplicantStaIfaceHal {
             final String methodStr = "terminate";
             if (!checkSupplicantAndLogFailure(methodStr)) return;
             try {
-                getSupplicantMockableV1_1().terminate();
+                android.hardware.wifi.supplicant.V1_1.ISupplicant ISupplicantV1_1 = getSupplicantMockableV1_1();
+                if(ISupplicantV1_1 != null)
+                    ISupplicantV1_1.terminate();
+                else
+                    Log.e(TAG, "Cannot terminate ISupplicant. ISupplicant is Null.");
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
             } catch (NoSuchElementException e) {
