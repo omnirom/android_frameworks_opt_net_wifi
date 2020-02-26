@@ -442,27 +442,11 @@ public class WifiController extends StateMachine {
 
     class StaEnabledState extends State {
 
-        private final BroadcastReceiver br = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                 log("delayed disconnect cancelled. disconnecting...");
-                 if (hasMessages(CMD_DELAY_DISCONNECT)) {
-                     removeMessages(CMD_DELAY_DISCONNECT);
-                     sendMessage(CMD_DELAY_DISCONNECT);
-                 }
-            }
-        };
-
         private boolean checkAndHandleDelayDisconnectDuration() {
             int delay = Settings.Secure.getInt(mContext.getContentResolver(),
                             Settings.Secure.WIFI_DISCONNECT_DELAY_DURATION, 0);
             if (delay > 0) {
                 log("DISCONNECT_DELAY_DURATION set. Delaying disconnection by: " +delay+ " seconds");
-                Intent intent = new Intent(WifiManager.ACTION_WIFI_DISCONNECT_IN_PROGRESS);
-                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-                mContext.sendOrderedBroadcastAsUser(intent,
-                         UserHandle.ALL, null, br, mClientModeImpl.getHandler(), 0, null, null);
-
                 sendMessageDelayed(obtainMessage(CMD_DELAY_DISCONNECT), delay * 1000);
                 transitionTo(mQcStaDisablingState);
             }
@@ -762,10 +746,28 @@ public class WifiController extends StateMachine {
      *                      delay is expected.
      */
     class QcStaDisablingState extends State {
+
+       private final BroadcastReceiver br = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                 log("delayed disconnect cancelled. disconnecting...");
+                 if (hasMessages(CMD_DELAY_DISCONNECT)) {
+                     removeMessages(CMD_DELAY_DISCONNECT);
+                     sendMessage(CMD_DELAY_DISCONNECT);
+                 }
+            }
+        };
+
         @Override
         public void enter() {
             log("QcStaDisablingState.enter()");
+
+            Intent intent = new Intent(WifiManager.ACTION_WIFI_DISCONNECT_IN_PROGRESS);
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+            mContext.sendOrderedBroadcastAsUser(intent,
+                     UserHandle.ALL, null, br, mClientModeImpl.getHandler(), 0, null, null);
         }
+
 
         @Override
         public boolean processMessage(Message msg) {
