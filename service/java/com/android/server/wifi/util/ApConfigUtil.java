@@ -33,6 +33,7 @@ import com.android.wifi.resources.R;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
 
 /**
@@ -448,6 +449,9 @@ public class ApConfigUtil {
         } catch (IllegalArgumentException iae) {
             Log.e(TAG, "Invalid WifiConfiguration" + iae);
             return null;
+        } catch (IllegalStateException ise) {
+            Log.e(TAG, "Invalid WifiConfiguration" + ise);
+            return null;
         }
         return configBuilder.build();
     }
@@ -529,10 +533,10 @@ public class ApConfigUtil {
      */
     public static boolean checkConfigurationChangeNeedToRestart(
             SoftApConfiguration currentConfig, SoftApConfiguration newConfig) {
-        return currentConfig.getSsid() != newConfig.getSsid()
+        return !Objects.equals(currentConfig.getSsid(), newConfig.getSsid())
                 || currentConfig.getBssid() != newConfig.getBssid()
                 || currentConfig.getSecurityType() != newConfig.getSecurityType()
-                || currentConfig.getPassphrase() != newConfig.getPassphrase()
+                || !Objects.equals(currentConfig.getPassphrase(), newConfig.getPassphrase())
                 || currentConfig.isHiddenSsid() != newConfig.isHiddenSsid()
                 || currentConfig.getBand() != newConfig.getBand()
                 || currentConfig.getChannel() != newConfig.getChannel();

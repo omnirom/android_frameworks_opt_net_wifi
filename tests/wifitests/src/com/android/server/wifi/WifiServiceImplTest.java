@@ -37,6 +37,7 @@ import static android.net.wifi.WifiManager.WIFI_STATE_DISABLED;
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.server.wifi.LocalOnlyHotspotRequestInfo.HOTSPOT_NO_ERROR;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_VERBOSE_LOGGING_ENABLED;
 
 import static com.google.common.truth.Truth.assertThat;
 
@@ -131,6 +132,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.IPowerManager;
+import android.os.IThermalService;
 import android.os.Message;
 import android.os.PowerManager;
 import android.os.Process;
@@ -305,6 +307,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Mock ISuggestionConnectionStatusListener mSuggestionConnectionStatusListener;
     @Mock IOnWifiActivityEnergyInfoListener mOnWifiActivityEnergyInfoListener;
     @Mock IWifiConnectedNetworkScorer mWifiConnectedNetworkScorer;
+    @Mock WifiSettingsConfigStore mWifiSettingsConfigStore;
 
     WifiLog mLog = new LogcatLog(TAG);
 
@@ -341,7 +344,9 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mContext.getSystemService(Context.ACTIVITY_SERVICE)).thenReturn(mActivityManager);
         when(mContext.getSystemService(Context.APP_OPS_SERVICE)).thenReturn(mAppOpsManager);
         IPowerManager powerManagerService = mock(IPowerManager.class);
-        mPowerManager = new PowerManager(mContext, powerManagerService, new Handler());
+        IThermalService thermalService = mock(IThermalService.class);
+        mPowerManager =
+                new PowerManager(mContext, powerManagerService, thermalService, new Handler());
         when(mContext.getSystemServiceName(PowerManager.class)).thenReturn(Context.POWER_SERVICE);
         when(mContext.getSystemService(PowerManager.class)).thenReturn(mPowerManager);
         WifiAsyncChannel wifiAsyncChannel = new WifiAsyncChannel("WifiServiceImplTest");
@@ -375,6 +380,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 .thenReturn(mock(WifiNetworkScoreCache.class));
         when(mWifiInjector.getWifiThreadRunner())
                 .thenReturn(new WifiThreadRunner(new Handler(mLooper.getLooper())));
+        when(mWifiInjector.getSettingsConfigStore()).thenReturn(mWifiSettingsConfigStore);
         when(mClientModeImpl.syncStartSubscriptionProvisioning(anyInt(),
                 any(OsuProvider.class), any(IProvisioningCallback.class), any())).thenReturn(true);
         // Create an OSU provider that can be provisioned via an open OSU AP
@@ -1198,6 +1204,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
         mLooper.dispatchAll();
+        verify(mWifiConfigManager).loadFromStore();
         verify(mActiveModeWarden).start();
         verify(mActiveModeWarden, never()).wifiToggled();
     }
@@ -1215,6 +1222,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         mWifiServiceImpl.checkAndStartWifi();
         mLooper.dispatchAll();
+        verify(mWifiConfigManager).loadFromStore();
         verify(mActiveModeWarden).start();
     }
 
@@ -3378,6 +3386,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         // before invocation.
         reset(mClientModeImpl);
         mWifiServiceImpl.enableVerboseLogging(1);
+        verify(mWifiSettingsConfigStore).putBoolean(WIFI_VERBOSE_LOGGING_ENABLED, true);
         verify(mClientModeImpl).enableVerboseLogging(anyInt());
     }
 
@@ -3394,6 +3403,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         // before invocation.
         reset(mClientModeImpl);
         mWifiServiceImpl.enableVerboseLogging(1);
+        verify(mWifiSettingsConfigStore, never()).putBoolean(
+                WIFI_VERBOSE_LOGGING_ENABLED, anyBoolean());
         verify(mClientModeImpl, never()).enableVerboseLogging(anyInt());
     }
 
@@ -4012,8 +4023,9 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         verify(mWifiConfigManager).removeNetwork(
                 network.networkId, Binder.getCallingUid(), TEST_PACKAGE_NAME);
-        verify(mPasspointManager).removeProvider(anyInt(), anyBoolean(), isNull(),
-                eq(config.getUniqueId()));
+        verify(mPasspointManager).removeProvider(anyInt(), anyBoolean(), eq(config.getUniqueId()),
+                isNull());
+        verify(mPasspointManager).clearAnqpRequestsAndFlushCache();
         verify(mWifiConfigManager).clearDeletedEphemeralNetworks();
         verify(mClientModeImpl).clearNetworkRequestUserApprovedAccessPoints();
         verify(mWifiNetworkSuggestionsManager).clear();
@@ -5040,7 +5052,6 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mWifiServiceImpl.handleBootCompleted();
         mLooper.dispatchAll();
 
-        verify(mWifiConfigManager).loadFromStore();
         verify(mPasspointManager).initializeProvisioner(any());
         verify(mClientModeImpl).handleBootCompleted();
     }
@@ -5583,5 +5594,30 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertTrue(mWifiServiceImpl.isAutoWakeupEnabled());
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         verify(mWakeupController).isEnabled();
+    }
+
+    @Test
+    public void testSetScanAlwaysAvailableWithNetworkSettingsPermission() {
+        doNothing().when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+        mWifiServiceImpl.setScanAlwaysAvailable(true);
+        verify(mSettingsStore).handleWifiScanAlwaysAvailableToggled(true);
+        verify(mActiveModeWarden).scanAlwaysModeChanged();
+
+        mWifiServiceImpl.setScanAlwaysAvailable(false);
+        verify(mSettingsStore).handleWifiScanAlwaysAvailableToggled(false);
+        verify(mActiveModeWarden, times(2)).scanAlwaysModeChanged();
+    }
+
+    @Test(expected = SecurityException.class)
+    public void testSetScanAlwaysAvailableWithNoNetworkSettingsPermission() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingOrSelfPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                        eq("WifiService"));
+
+        mWifiServiceImpl.setScanAlwaysAvailable(true);
+        verify(mSettingsStore, never()).handleWifiScanAlwaysAvailableToggled(anyBoolean());
+        verify(mActiveModeWarden, never()).scanAlwaysModeChanged();
     }
 }
