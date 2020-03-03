@@ -711,6 +711,21 @@ public class PasspointProvider {
             return PasspointMatch.HomeProvider;
         }
 
+        // Other Home Partners matching.
+        if (mConfig.getHomeSp().getOtherHomePartners() != null) {
+            for (String otherHomePartner : mConfig.getHomeSp().getOtherHomePartners()) {
+                if (ANQPMatcher.matchDomainName(
+                        (DomainNameElement) anqpElements.get(ANQPElementType.ANQPDomName),
+                        otherHomePartner, null, null)) {
+                    if (mVerboseLoggingEnabled) {
+                        Log.d(TAG, "Other Home Partner " + otherHomePartner
+                                + " match: HomeProvider");
+                    }
+                    return PasspointMatch.HomeProvider;
+                }
+            }
+        }
+
         // ANQP Roaming Consortium OI matching.
         long[] providerOIs = mConfig.getHomeSp().getRoamingConsortiumOis();
         if (ANQPMatcher.matchRoamingConsortium(
@@ -751,11 +766,17 @@ public class PasspointProvider {
      */
     private void buildEnterpriseConfigForUserCredential(WifiEnterpriseConfig config,
             Credential.UserCredential credential) {
-        byte[] pwOctets = Base64.decode(credential.getPassword(), Base64.DEFAULT);
-        String decodedPassword = new String(pwOctets, StandardCharsets.UTF_8);
+        String password;
+        try {
+            byte[] pwOctets = Base64.decode(credential.getPassword(), Base64.DEFAULT);
+            password = new String(pwOctets, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "Failed to decode password");
+            password = credential.getPassword();
+        }
         config.setEapMethod(WifiEnterpriseConfig.Eap.TTLS);
         config.setIdentity(credential.getUsername());
-        config.setPassword(decodedPassword);
+        config.setPassword(password);
         if (!ArrayUtils.isEmpty(mCaCertificateAliases)) {
             config.setCaCertificateAliases(mCaCertificateAliases.toArray(new String[0]));
         } else {

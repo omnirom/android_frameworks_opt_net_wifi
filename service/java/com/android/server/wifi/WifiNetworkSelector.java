@@ -29,6 +29,7 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.text.TextUtils;
 import android.util.ArrayMap;
+import android.util.ArraySet;
 import android.util.LocalLog;
 import android.util.Log;
 import android.util.Pair;
@@ -224,9 +225,10 @@ public class WifiNetworkSelector {
     }
 
     /**
-     * Check if one of following conditions is met to avoid a new network selection
-     * 1) current network is in OSU process
-     * 2) current network has internet access, sufficient link quality and active traffic
+     * Determines whether the currently connected network is sufficient.
+     *
+     * If the network is good enough, or if switching to a new network is likely to
+     * be disruptive, we should avoid doing a network selection.
      *
      * @param wifiInfo info of currently connected network
      * @return true if the network is sufficient
@@ -245,6 +247,18 @@ public class WifiNetworkSelector {
         if (network == null) {
             localLog("Current network was removed");
             return false;
+        }
+
+        // Skip autojoin for the first few seconds of a user-initiated connection.
+        // This delays network selection during the time that connectivity service may be posting
+        // a dialog about a no-internet network.
+        if (mWifiConfigManager.getLastSelectedNetwork() == network.networkId
+                && (mClock.getElapsedSinceBootMillis()
+                    - mWifiConfigManager.getLastSelectedTimeStamp())
+                <= mContext.getResources().getInteger(
+                    R.integer.config_wifiSufficientDurationAfterUserSelectionMilliseconds)) {
+            localLog("Current network is recently user-selected");
+            return true;
         }
 
         // Set OSU (Online Sign Up) network for Passpoint Release 2 to sufficient
@@ -596,7 +610,7 @@ public class WifiNetworkSelector {
                     if (count > 0) {
                         sbuf.append("reason=")
                                 .append(WifiConfiguration.NetworkSelectionStatus
-                                        .getNetworkDisableReasonString(index))
+                                        .getNetworkSelectionDisableReasonString(index))
                                 .append(", count=").append(count).append("; ");
                     }
                 }
@@ -649,15 +663,54 @@ public class WifiNetworkSelector {
         return candidate;
     }
 
+
+    /**
+     * Indicates whether we have ever seen the network to be metered since wifi was enabled.
+     *
+     * This is sticky to prevent continuous flip-flopping between networks, when the metered
+     * status is learned after association.
+     */
+    private boolean isEverMetered(@NonNull WifiConfiguration config, @Nullable WifiInfo info) {
+        // If info does not match config, don't use it.
+        // TODO(b/149988649) Metrics
+        if (info != null && info.getNetworkId() != config.networkId) info = null;
+        boolean metered = WifiConfiguration.isMetered(config, info);
+        if (config.meteredOverride != WifiConfiguration.METERED_OVERRIDE_NONE) {
+            // User override is in effect; we should trust it
+            if (mKnownMeteredNetworkIds.remove(config.networkId)) {
+                localLog("KnownMeteredNetworkIds = " + mKnownMeteredNetworkIds);
+            }
+        } else if (mKnownMeteredNetworkIds.contains(config.networkId)) {
+            // Use the saved information
+            metered = true;
+        } else if (metered) {
+            // Update the saved information
+            mKnownMeteredNetworkIds.add(config.networkId);
+            localLog("KnownMeteredNetworkIds = " + mKnownMeteredNetworkIds);
+        }
+        return metered;
+    }
+
+    /**
+     * Returns the set of known metered network ids (for tests. dumpsys, and metrics).
+     */
+    public Set<Integer> getKnownMeteredNetworkIds() {
+        return new ArraySet<>(mKnownMeteredNetworkIds);
+    }
+
+    private final ArraySet<Integer> mKnownMeteredNetworkIds = new ArraySet<>();
+
+
     /**
      * Cleans up state that should go away when wifi is disabled.
      */
     public void resetOnDisable() {
         mWifiConfigManager.clearLastSelectedNetwork();
+        mKnownMeteredNetworkIds.clear();
     }
 
     /**
-     * Select the best network from the ones in range. Scan detail cache is also updated here.
+     * Returns the list of Candidates from networks in range.
      *
      * @param scanDetails             List of ScanDetail for all the APs in range
      * @param bssidBlacklist          Blacklisted BSSIDs
@@ -665,11 +718,10 @@ public class WifiNetworkSelector {
      * @param connected               True if the device is connected
      * @param disconnected            True if the device is disconnected
      * @param untrustedNetworkAllowed True if untrusted networks are allowed for connection
-     * @return Configuration of the selected network, or Null if nothing
+     * @return list of valid Candidate(s)
      */
-    @Nullable
-    public WifiConfiguration selectNetwork(List<ScanDetail> scanDetails,
-            Set<String> bssidBlacklist, WifiInfo wifiInfo,
+    public List<WifiCandidates.Candidate> getCandidatesFromScan(
+            List<ScanDetail> scanDetails, Set<String> bssidBlacklist, WifiInfo wifiInfo,
             boolean connected, boolean disconnected, boolean untrustedNetworkAllowed) {
         mFilteredNetworks.clear();
         mConnectableNetworks.clear();
@@ -739,13 +791,14 @@ public class WifiNetworkSelector {
                         WifiCandidates.Key key = wifiCandidates.keyFromScanDetailAndConfig(
                                 scanDetail, config);
                         if (key != null) {
+                            boolean metered = isEverMetered(config, wifiInfo);
                             boolean added = wifiCandidates.add(key, config,
                                     registeredNominator.getId(),
                                     scanDetail.getScanResult().level,
                                     scanDetail.getScanResult().frequency,
                                     (config.networkId == lastUserSelectedNetworkId)
                                             ? lastSelectionWeight : 0.0,
-                                    WifiConfiguration.isMetered(config, wifiInfo),
+                                    metered,
                                     predictThroughput(scanDetail));
                             if (added) {
                                 mConnectableNetworks.add(Pair.create(scanDetail, config));
@@ -757,18 +810,31 @@ public class WifiNetworkSelector {
                         }
                     });
         }
-
         if (mConnectableNetworks.size() != wifiCandidates.size()) {
             localLog("Connectable: " + mConnectableNetworks.size()
                     + " Candidates: " + wifiCandidates.size());
         }
+        return wifiCandidates.getCandidates();
+    }
+
+    /**
+     * Using the registered Scorers, choose the best network from the list of Candidate(s).
+     * The ScanDetailCache is also updated here.
+     * @param candidates - Candidates to perferm network selection on.
+     * @return WifiConfiguration - the selected network, or null.
+     */
+    @NonNull
+    public WifiConfiguration selectNetwork(List<WifiCandidates.Candidate> candidates) {
+        if (candidates == null || candidates.size() == 0) {
+            return null;
+        }
+        WifiCandidates wifiCandidates = new WifiCandidates(mWifiScoreCard, mContext, candidates);
         final WifiCandidates.CandidateScorer activeScorer = getActiveCandidateScorer();
         // Update the NetworkSelectionStatus in the configs for the current candidates
         // This is needed for the legacy user connect choice, at least
         Collection<Collection<WifiCandidates.Candidate>> groupedCandidates =
                 wifiCandidates.getGroupedCandidates();
         for (Collection<WifiCandidates.Candidate> group : groupedCandidates) {
-
             WifiCandidates.ScoredCandidate choice = activeScorer.scoreCandidates(group);
             if (choice == null) continue;
             ScanDetail scanDetail = getScanDetailForCandidateKey(choice.candidateKey);

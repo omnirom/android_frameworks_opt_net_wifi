@@ -16,8 +16,6 @@
 
 package com.android.wifitrackerlib;
 
-import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED;
-import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_PERMANENTLY_DISABLED;
 import static android.net.wifi.WifiInfo.sanitizeSsid;
 
 import static androidx.core.util.Preconditions.checkNotNull;
@@ -26,7 +24,10 @@ import static com.android.wifitrackerlib.Utils.getAppLabel;
 import static com.android.wifitrackerlib.Utils.getAppLabelForSavedNetwork;
 import static com.android.wifitrackerlib.Utils.getAutoConnectDescription;
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
+import static com.android.wifitrackerlib.Utils.getCurrentNetworkCapabilitiesInformation;
+import static com.android.wifitrackerlib.Utils.getDisconnectedStateDescription;
 import static com.android.wifitrackerlib.Utils.getMeteredDescription;
+import static com.android.wifitrackerlib.Utils.getNetworkDetailedState;
 import static com.android.wifitrackerlib.Utils.getSecurityTypeFromWifiConfiguration;
 import static com.android.wifitrackerlib.Utils.getSpeedDescription;
 import static com.android.wifitrackerlib.Utils.getVerboseLoggingDescription;
@@ -35,7 +36,6 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
-import android.net.NetworkInfo.DetailedState;
 import android.net.NetworkScoreManager;
 import android.net.NetworkScorerAppData;
 import android.net.wifi.ScanResult;
@@ -109,6 +109,8 @@ public class StandardWifiEntry extends WifiEntry {
     @Nullable private WifiConfiguration mWifiConfig;
     @Nullable private String mRecommendationServiceLabel;
 
+    private boolean mShouldAutoOpenCaptivePortal = false;
+
     StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull String key,
             @NonNull List<ScanResult> scanResults,
@@ -167,11 +169,6 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
-    public String getSummary() {
-        return getSummary(true /* concise */);
-    }
-
-    @Override
     public String getSummary(boolean concise) {
         StringJoiner sj = new StringJoiner(mContext.getString(R.string.summary_separator));
 
@@ -188,7 +185,7 @@ public class StandardWifiEntry extends WifiEntry {
         }
 
         if (getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
-            String disconnectDescription = getDisconnectedStateDescription();
+            String disconnectDescription = getDisconnectedStateDescription(mContext, this);
             if (TextUtils.isEmpty(disconnectDescription)) {
                 if (concise) {
                     sj.add(mContext.getString(R.string.wifi_disconnected));
@@ -244,77 +241,14 @@ public class StandardWifiEntry extends WifiEntry {
                 return mContext.getString(R.string.connected_via_network_scorer_default);
             }
 
-            // Check NetworkCapabilities.
-            final ConnectivityManager cm =
-                    (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
-            final NetworkCapabilities nc =
-                    cm.getNetworkCapabilities(mWifiManager.getCurrentNetwork());
-            if (nc != null) {
-                if (nc.hasCapability(nc.NET_CAPABILITY_CAPTIVE_PORTAL)) {
-                    return mContext.getString(mContext.getResources()
-                            .getIdentifier("network_available_sign_in", "string", "android"));
-                }
-
-                if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_PARTIAL_CONNECTIVITY)) {
-                    return mContext.getString(R.string.wifi_limited_connection);
-                }
-
-                if (!nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                    if (nc.isPrivateDnsBroken()) {
-                        return mContext.getString(R.string.private_dns_broken);
-                    }
-                    return mContext.getString(R.string.wifi_connected_no_internet);
-                }
+            String networkCapabilitiesinformation =
+                    getCurrentNetworkCapabilitiesInformation(mContext, mNetworkCapabilities);
+            if (!TextUtils.isEmpty(networkCapabilitiesinformation)) {
+                return networkCapabilitiesinformation;
             }
         }
 
-        if (mNetworkInfo == null) {
-            return "";
-        }
-        final DetailedState detailState = mNetworkInfo.getDetailedState();
-        if (detailState == null) {
-            return "";
-        }
-
-        final String[] wifiStatusArray = mContext.getResources()
-                .getStringArray(R.array.wifi_status);
-        final int index = detailState.ordinal();
-        return index >= wifiStatusArray.length ? "" : wifiStatusArray[index];
-    }
-
-    private String getDisconnectedStateDescription() {
-        if (isSaved() && mWifiConfig.hasNoInternetAccess()) {
-            final int messageID =
-                    mWifiConfig.getNetworkSelectionStatus().getNetworkSelectionStatus()
-                            == NETWORK_SELECTION_PERMANENTLY_DISABLED
-                    ? R.string.wifi_no_internet_no_reconnect : R.string.wifi_no_internet;
-            return mContext.getString(messageID);
-        } else if (isSaved()
-                && (mWifiConfig.getNetworkSelectionStatus().getNetworkSelectionStatus()
-                        != NETWORK_SELECTION_ENABLED)) {
-            final WifiConfiguration.NetworkSelectionStatus networkStatus =
-                    mWifiConfig.getNetworkSelectionStatus();
-            switch (networkStatus.getNetworkSelectionDisableReason()) {
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE:
-                    return mContext.getString(R.string.wifi_disabled_password_failure);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD:
-                    return mContext.getString(R.string.wifi_check_password_try_again);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_DHCP_FAILURE:
-                    return mContext.getString(R.string.wifi_disabled_network_failure);
-                case WifiConfiguration.NetworkSelectionStatus.DISABLED_ASSOCIATION_REJECTION:
-                    return mContext.getString(R.string.wifi_disabled_generic);
-                default:
-                    break;
-            }
-        } else if (getLevel() == WIFI_LEVEL_UNREACHABLE) {
-            // Do nothing because users know it by signal icon.
-        } else { // In range, not disabled.
-            if (mWifiConfig != null && mWifiConfig.getRecentFailureReason()
-                    == WifiConfiguration.RECENT_FAILURE_AP_UNABLE_TO_HANDLE_NEW_STA) {
-                return mContext.getString(R.string.wifi_ap_unable_to_handle_new_sta);
-            }
-        }
-        return "";
+        return getNetworkDetailedState(mContext, mNetworkInfo);
     }
 
     @Override
@@ -383,6 +317,9 @@ public class StandardWifiEntry extends WifiEntry {
     @Override
     public void connect(@Nullable ConnectCallback callback) {
         mConnectCallback = callback;
+        // We should flag this network to auto-open captive portal since this method represents
+        // the user manually connecting to a network (i.e. not auto-join).
+        mShouldAutoOpenCaptivePortal = true;
         if (mWifiConfig == null) {
             // Unsaved network
             if (mSecurity == SECURITY_NONE
@@ -448,13 +385,19 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canSignIn() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return mNetworkCapabilities != null
+                && mNetworkCapabilities.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL);
     }
 
     @Override
     public void signIn(@Nullable SignInCallback callback) {
-        // TODO(b/70983952): Fill this method in
+        if (canSignIn()) {
+            // canSignIn() implies that this WifiEntry is the currently connected network, so use
+            // getCurrentNetwork() to start the captive portal app.
+            ((ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+                    .startCaptivePortalApp(mWifiManager.getCurrentNetwork());
+        }
     }
 
     /**
@@ -685,6 +628,18 @@ public class StandardWifiEntry extends WifiEntry {
         }
 
         notifyOnUpdated();
+    }
+
+    @WorkerThread
+    @Override
+    void updateNetworkCapabilities(@Nullable NetworkCapabilities capabilities) {
+        super.updateNetworkCapabilities(capabilities);
+
+        // Auto-open an available captive portal if the user manually connected to this network.
+        if (canSignIn() && mShouldAutoOpenCaptivePortal) {
+            mShouldAutoOpenCaptivePortal = false;
+            signIn(null /* callback */);
+        }
     }
 
     private void updateEapType(ScanResult result) {

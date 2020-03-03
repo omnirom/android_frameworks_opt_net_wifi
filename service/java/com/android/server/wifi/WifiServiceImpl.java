@@ -40,6 +40,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ResolveInfo;
@@ -357,7 +358,6 @@ public class WifiServiceImpl extends BaseWifiService {
         mWifiPermissionsUtil = mWifiInjector.getWifiPermissionsUtil();
         mLog = mWifiInjector.makeLog(TAG);
         mFrameworkFacade = wifiInjector.getFrameworkFacade();
-        enableVerboseLoggingInternal(getVerboseLoggingLevel());
         mTetheredSoftApTracker = new TetheredSoftApTracker();
         mActiveModeWarden.registerSoftApCallback(mTetheredSoftApTracker);
         mLohsSoftApTracker = new LohsSoftApTracker();
@@ -388,11 +388,14 @@ public class WifiServiceImpl extends BaseWifiService {
             if (!mWifiConfigManager.loadFromStore()) {
                 Log.e(TAG, "Failed to load from config store");
             }
+            // config store is read, check if verbose logging is enabled.
+            enableVerboseLoggingInternal(getVerboseLoggingLevel());
             // Check if wi-fi needs to be enabled
             boolean wifiEnabled = mSettingsStore.isWifiToggleEnabled();
             Log.i(TAG,
                     "WifiService starting up with Wi-Fi " + (wifiEnabled ? "enabled" : "disabled"));
 
+            mWifiInjector.getWifiScanAlwaysAvailableSettingsCompatibility().initialize();
             mContext.registerReceiver(
                     new BroadcastReceiver() {
                         @Override
@@ -408,21 +411,29 @@ public class WifiServiceImpl extends BaseWifiService {
                     new BroadcastReceiver() {
                         @Override
                         public void onReceive(Context context, Intent intent) {
-                            if (intent.getBooleanExtra(
-                                    Intent.EXTRA_REBROADCAST_ON_UNLOCK, false)) {
-                                return;
-                            }
-                            String state = intent.getStringExtra(Intent.EXTRA_SIM_STATE);
-                            if (Intent.SIM_STATE_ABSENT.equals(state)) {
+                            int state = intent.getIntExtra(TelephonyManager.EXTRA_SIM_STATE,
+                                    TelephonyManager.SIM_STATE_UNKNOWN);
+                            if (TelephonyManager.SIM_STATE_ABSENT == state) {
                                 Log.d(TAG, "resetting networks because SIM was removed");
                                 mClientModeImpl.resetSimAuthNetworks(false);
-                            } else if (Intent.SIM_STATE_LOADED.equals(state)) {
+                            }
+                        }
+                    },
+                    new IntentFilter(TelephonyManager.ACTION_SIM_CARD_STATE_CHANGED));
+
+            mContext.registerReceiver(
+                    new BroadcastReceiver() {
+                        @Override
+                        public void onReceive(Context context, Intent intent) {
+                            int state = intent.getIntExtra(TelephonyManager.EXTRA_SIM_STATE,
+                                    TelephonyManager.SIM_STATE_UNKNOWN);
+                            if (TelephonyManager.SIM_STATE_LOADED == state) {
                                 Log.d(TAG, "resetting networks because SIM was loaded");
                                 mClientModeImpl.resetSimAuthNetworks(true);
                             }
                         }
                     },
-                    new IntentFilter(Intent.ACTION_SIM_STATE_CHANGED));
+                    new IntentFilter(TelephonyManager.ACTION_SIM_APPLICATION_STATE_CHANGED));
 
             // Adding optimizations of only receiving broadcasts when wifi is enabled
             // can result in race conditions when apps toggle wifi in the background
@@ -2032,6 +2043,8 @@ public class WifiServiceImpl extends BaseWifiService {
         enforceNetworkSettingsPermission();
         mLog.info("setScanAlwaysAvailable uid=%").c(Binder.getCallingUid()).flush();
         mSettingsStore.handleWifiScanAlwaysAvailableToggled(isAvailable);
+        mWifiInjector.getWifiScanAlwaysAvailableSettingsCompatibility()
+                .handleWifiScanAlwaysAvailableToggled(isAvailable);
         mActiveModeWarden.scanAlwaysModeChanged();
     }
 
@@ -2688,19 +2701,19 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
-     * See {@link android.net.wifi.WifiManager#setMeteredOverridePasspoint(String, boolean)}
+     * See {@link android.net.wifi.WifiManager#setPasspointMeteredOverride(String, boolean)}
      * @param fqdn the FQDN that identifies the passpoint configuration
      * @param meteredOverride One of the values in {@link MeteredOverride}
      */
     @Override
-    public void setMeteredOverridePasspoint(String fqdn, int meteredOverride) {
+    public void setPasspointMeteredOverride(String fqdn, int meteredOverride) {
         enforceNetworkSettingsPermission();
         if (fqdn == null) {
             throw new IllegalArgumentException("FQDN cannot be null");
         }
 
         int callingUid = Binder.getCallingUid();
-        mLog.info("setMeteredOverridePasspoint=% uid=%")
+        mLog.info("setPasspointMeteredOverride=% uid=%")
                 .c(meteredOverride).c(callingUid).flush();
         mWifiThreadRunner.post(
                 () -> mPasspointManager.setMeteredOverride(fqdn, meteredOverride));
@@ -3192,36 +3205,50 @@ public class WifiServiceImpl extends BaseWifiService {
     private void registerForBroadcasts() {
         IntentFilter intentFilter = new IntentFilter();
         intentFilter.addAction(Intent.ACTION_PACKAGE_FULLY_REMOVED);
+        intentFilter.addAction(Intent.ACTION_PACKAGE_CHANGED);
+        intentFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         intentFilter.addDataScheme("package");
         mContext.registerReceiver(new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                if (action.equals(Intent.ACTION_PACKAGE_FULLY_REMOVED)) {
-                    int uid = intent.getIntExtra(Intent.EXTRA_UID, -1);
-                    Uri uri = intent.getData();
-                    if (uid == -1 || uri == null) {
-                        return;
-                    }
-                    String pkgName = uri.getSchemeSpecificPart();
-
-                    // Call the method in the main Wifi thread.
-                    mWifiThreadRunner.post(() -> {
-                        ApplicationInfo ai = new ApplicationInfo();
-                        ai.packageName = pkgName;
-                        ai.uid = uid;
-                        mWifiConfigManager.removeNetworksForApp(ai);
-                        mScanRequestProxy.clearScanRequestTimestampsForApp(pkgName, uid);
-
-                        // Remove all suggestions from the package.
-                        mWifiNetworkSuggestionsManager.removeApp(pkgName);
-                        mClientModeImpl.removeNetworkRequestUserApprovedAccessPointsForApp(pkgName);
-
-                        // Remove all Passpoint profiles from package.
-                        mWifiInjector.getPasspointManager().removePasspointProviderWithPackage(
-                                pkgName);
-                    });
+                int uid = intent.getIntExtra(Intent.EXTRA_UID, -1);
+                Uri uri = intent.getData();
+                if (uid == -1 || uri == null) {
+                    Log.e(TAG, "Uid or Uri is missing for action:" + intent.getAction());
+                    return;
                 }
+                String pkgName = uri.getSchemeSpecificPart();
+                PackageManager pm = context.getPackageManager();
+                PackageInfo packageInfo = null;
+                try {
+                    packageInfo = pm.getPackageInfo(pkgName, 0);
+                } catch (PackageManager.NameNotFoundException e) {
+                    Log.e(TAG, "Couldn't get PackageInfo for package:" + pkgName);
+                    return;
+                }
+                // If package is not removed or disabled, just ignore.
+                if (packageInfo != null
+                        && packageInfo.applicationInfo != null
+                        && packageInfo.applicationInfo.enabled) {
+                    return;
+                }
+                Log.d(TAG, "Remove settings for package:" + pkgName);
+                // Call the method in the main Wifi thread.
+                mWifiThreadRunner.post(() -> {
+                    ApplicationInfo ai = new ApplicationInfo();
+                    ai.packageName = pkgName;
+                    ai.uid = uid;
+                    mWifiConfigManager.removeNetworksForApp(ai);
+                    mScanRequestProxy.clearScanRequestTimestampsForApp(pkgName, uid);
+
+                    // Remove all suggestions from the package.
+                    mWifiNetworkSuggestionsManager.removeApp(pkgName);
+                    mClientModeImpl.removeNetworkRequestUserApprovedAccessPointsForApp(pkgName);
+
+                    // Remove all Passpoint profiles from package.
+                    mWifiInjector.getPasspointManager().removePasspointProviderWithPackage(
+                            pkgName);
+                });
             }
         }, intentFilter);
     }
@@ -3428,8 +3455,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("enableVerboseLogging uid=% verbose=%")
                 .c(Binder.getCallingUid())
                 .c(verbose).flush();
-        mWifiInjector.getSettingsConfigStore().putBoolean(
-                WIFI_VERBOSE_LOGGING_ENABLED, verbose > 0);
+        mWifiInjector.getSettingsConfigStore().put(WIFI_VERBOSE_LOGGING_ENABLED, verbose > 0);
         enableVerboseLoggingInternal(verbose);
     }
 
@@ -3446,8 +3472,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (mVerboseLoggingEnabled) {
             mLog.info("getVerboseLoggingLevel uid=%").c(Binder.getCallingUid()).flush();
         }
-        return mWifiInjector.getSettingsConfigStore().getBoolean(
-                WIFI_VERBOSE_LOGGING_ENABLED, false) ? 1 : 0;
+        return mWifiInjector.getSettingsConfigStore().get(WIFI_VERBOSE_LOGGING_ENABLED) ? 1 : 0;
     }
 
     @Override
@@ -3491,6 +3516,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mWifiThreadRunner.post(() -> {
             mPasspointManager.clearAnqpRequestsAndFlushCache();
             mWifiConfigManager.clearDeletedEphemeralNetworks();
+            mWifiConfigManager.removeAllEphemeralOrPasspointConfiguredNetworks();
             mClientModeImpl.clearNetworkRequestUserApprovedAccessPoints();
             mWifiNetworkSuggestionsManager.clear();
             mWifiInjector.getWifiScoreCard().clear();
@@ -4347,9 +4373,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())) {
             throw new SecurityException(TAG + ": Permission denied");
         }
-        if (mVerboseLoggingEnabled) {
-            mLog.info("connect uid=%").c(Binder.getCallingUid()).flush();
-        }
+        mLog.info("connect uid=%").c(Binder.getCallingUid()).flush();
         mClientModeImpl.connect(
                 config, netId, binder, callback, callbackIdentifier, Binder.getCallingUid());
     }
@@ -4364,9 +4388,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())) {
             throw new SecurityException(TAG + ": Permission denied");
         }
-        if (mVerboseLoggingEnabled) {
-            mLog.info("connect uid=%").c(Binder.getCallingUid()).flush();
-        }
+        mLog.info("save uid=%").c(Binder.getCallingUid()).flush();
         mClientModeImpl.save(
                 config, binder, callback, callbackIdentifier, Binder.getCallingUid());
     }
@@ -4380,9 +4402,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())) {
             throw new SecurityException(TAG + ": Permission denied");
         }
-        if (mVerboseLoggingEnabled) {
-            mLog.info("connect uid=%").c(Binder.getCallingUid()).flush();
-        }
+        mLog.info("forget uid=%").c(Binder.getCallingUid()).flush();
         mClientModeImpl.forget(
                 netId, binder, callback, callbackIdentifier, Binder.getCallingUid());
     }

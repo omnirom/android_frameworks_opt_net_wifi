@@ -63,7 +63,6 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
 import java.util.Collections;
@@ -198,7 +197,7 @@ public class WifiConfigManager {
      * have the same |numAssociation|, place the configurations with
      * |lastSeenInQualifiedNetworkSelection| set first.
      */
-    private static final WifiConfigurationUtil.WifiConfigurationComparator sScanListComparator =
+    public static final WifiConfigurationUtil.WifiConfigurationComparator sScanListComparator =
             new WifiConfigurationUtil.WifiConfigurationComparator() {
                 @Override
                 public int compareNetworksWithSameStatus(WifiConfiguration a, WifiConfiguration b) {
@@ -1594,7 +1593,7 @@ public class WifiConfigManager {
                 != NetworkSelectionStatus.NETWORK_SELECTION_ENABLED) {
             localLog("setNetworkSelectionEnabled: configKey=" + config.getKey()
                     + " old networkStatus=" + status.getNetworkStatusString()
-                    + " disableReason=" + status.getNetworkDisableReasonString());
+                    + " disableReason=" + status.getNetworkSelectionDisableReasonString());
         }
         status.setNetworkSelectionStatus(
                 NetworkSelectionStatus.NETWORK_SELECTION_ENABLED);
@@ -1682,7 +1681,7 @@ public class WifiConfigManager {
         }
         localLog("setNetworkSelectionStatus: configKey=" + config.getKey()
                 + " networkStatus=" + networkStatus.getNetworkStatusString() + " disableReason="
-                + networkStatus.getNetworkDisableReasonString());
+                + networkStatus.getNetworkSelectionDisableReasonString());
         saveToStore(false);
         return true;
     }
@@ -1723,9 +1722,9 @@ public class WifiConfigManager {
                 if (mVerboseLoggingEnabled) {
                     Log.v(TAG, "Disable counter for network " + config.getPrintableSsid()
                             + " for reason "
-                            + NetworkSelectionStatus.getNetworkDisableReasonString(reason) + " is "
-                            + networkStatus.getDisableReasonCounter(reason) + " and threshold is "
-                            + disableReasonThreshold);
+                            + NetworkSelectionStatus.getNetworkSelectionDisableReasonString(reason)
+                            + " is " + networkStatus.getDisableReasonCounter(reason)
+                            + " and threshold is " + disableReasonThreshold);
                 }
                 return true;
             }
@@ -2081,7 +2080,7 @@ public class WifiConfigManager {
         if (connectChoiceConfigKey == null) {
             return;
         }
-        for (WifiConfiguration config : mConfiguredNetworks.valuesForCurrentUser()) {
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
             WifiConfiguration.NetworkSelectionStatus status = config.getNetworkSelectionStatus();
             String connectChoice = status.getConnectChoice();
             if (TextUtils.equals(connectChoice, connectChoiceConfigKey)) {
@@ -2660,7 +2659,7 @@ public class WifiConfigManager {
      * @return Set containing the frequeincies which were used for connection recently.
      */
     public Set<Integer> fetchChannelSetForPartialScan(long ageInMillis, int maxCount) {
-        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
+        List<WifiConfiguration> networks = getConfiguredNetworks();
 
         // Remove any permanently or temporarily disabled networks.
         Iterator<WifiConfiguration> iter = networks.iterator();
@@ -2781,58 +2780,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Retrieves a list of all the saved networks before enabling disconnected/connected PNO.
-     *
-     * PNO network list sent to the firmware has limited size. If there are a lot of saved
-     * networks, this list will be truncated and we might end up not sending the networks
-     * with the highest chance of connecting to the firmware.
-     * So, re-sort the network list based on the frequency of connection to those networks
-     * and whether it was last seen in the scan results.
-     *
-     * @return list of networks in the order of priority.
-     */
-    public List<WifiScanner.PnoSettings.PnoNetwork> retrievePnoNetworkList() {
-        List<WifiScanner.PnoSettings.PnoNetwork> pnoList = new ArrayList<>();
-        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
-        // Remove any permanently or temporarily disabled networks.
-        Iterator<WifiConfiguration> iter = networks.iterator();
-        while (iter.hasNext()) {
-            WifiConfiguration config = iter.next();
-            if (config.ephemeral || config.isPasspoint() || !config.allowAutojoin
-                    || config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()
-                    || config.getNetworkSelectionStatus().isNetworkTemporaryDisabled()) {
-                iter.remove();
-            }
-        }
-        if (networks.isEmpty()) {
-            return pnoList;
-        }
-
-        // Sort the networks with the most frequent ones at the front of the network list.
-        Collections.sort(networks, sScanListComparator);
-        if (mContext.getResources().getBoolean(R.bool.config_wifiPnoRecencySortingEnabled)) {
-            // Find the most recently connected network and move it to the front of the list.
-            putMostRecentlyConnectedNetworkAtTop(networks);
-        }
-        for (WifiConfiguration config : networks) {
-            WifiScanner.PnoSettings.PnoNetwork pnoNetwork =
-                    WifiConfigurationUtil.createPnoNetwork(config);
-            pnoList.add(pnoNetwork);
-            if (!mContext.getResources().getBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled)) {
-                continue;
-            }
-            WifiScoreCard.PerNetwork network = mWifiScoreCard.lookupNetwork(config.SSID);
-            List<Integer> channelList = network.getFrequencies();
-            pnoNetwork.frequencies = channelList.stream().mapToInt(Integer::intValue).toArray();
-            if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "retrievePnoNetworkList " + pnoNetwork.ssid + ":"
-                        + Arrays.toString(pnoNetwork.frequencies));
-            }
-        }
-        return pnoList;
-    }
-
-    /**
      * Retrieves a list of all the saved hidden networks for scans
      *
      * Hidden network list sent to the firmware has limited size. If there are a lot of saved
@@ -2845,7 +2792,7 @@ public class WifiConfigManager {
      */
     public List<WifiScanner.ScanSettings.HiddenNetwork> retrieveHiddenNetworkList() {
         List<WifiScanner.ScanSettings.HiddenNetwork> hiddenList = new ArrayList<>();
-        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
+        List<WifiConfiguration> networks = getConfiguredNetworks();
         // Remove any non hidden networks.
         networks.removeIf(config -> !config.hiddenSSID);
         networks.sort(sScanListComparator);
@@ -3120,7 +3067,7 @@ public class WifiConfigManager {
         localLog("clearInternalUserData: Clearing user internal data for " + mCurrentUserId);
         Set<Integer> removedNetworkIds = new HashSet<>();
         // Remove any private networks of the old user before switching the userId.
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+        for (WifiConfiguration config : getConfiguredNetworks()) {
             if (!config.shared && doesUidBelongToCurrentUser(config.creatorUid)) {
                 removedNetworkIds.add(config.networkId);
                 localLog("clearInternalUserData: removed config."
