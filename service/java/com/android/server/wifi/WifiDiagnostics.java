@@ -115,6 +115,9 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     /** Minimum dump period with same error code */
     public static final long MIN_DUMP_TIME_WINDOW_MILLIS = 10 * 60 * 1000; // 10 mins
 
+    private long mLastBugReportTime;
+    static final long MIN_BUG_REPORT_TIME_WINDOW_MILLIS = 60 * 60 * 1000; // 60 mins
+
     @VisibleForTesting public static final String FIRMWARE_DUMP_SECTION_HEADER =
             "FW Memory dump";
     @VisibleForTesting public static final String DRIVER_DUMP_SECTION_HEADER =
@@ -296,7 +299,8 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     }
 
     /**
-     * Initiates a system-level bugreport, in a non-blocking fashion.
+     * Initiates a system-level bug report if there is no bug report taken recently.
+     * This is done in a non-blocking fashion.
      */
     @Override
     public void takeBugReport(String bugTitle, String bugDetail) {
@@ -305,6 +309,12 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
                         R.bool.config_wifi_diagnostics_bugreport_enabled)) {
             return;
         }
+        long currentTime = mClock.getWallClockMillis();
+        if ((currentTime - mLastBugReportTime) < MIN_BUG_REPORT_TIME_WINDOW_MILLIS
+                && mLastBugReportTime > 0) {
+            return;
+        }
+        mLastBugReportTime = currentTime;
         BugreportManager bugreportManager = mContext.getSystemService(BugreportManager.class);
         BugreportParams params = new BugreportParams(BugreportParams.BUGREPORT_MODE_WIFI);
         try {
