@@ -16,12 +16,9 @@
 
 package com.android.server.wifi;
 
-import static com.android.server.wifi.WifiConfigStore.ZEROED_ENCRYPTED_DATA;
-
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
-import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.app.test.TestAlarmManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -34,11 +31,8 @@ import androidx.test.filters.SmallTest;
 import com.android.internal.util.ArrayUtils;
 import com.android.server.wifi.WifiConfigStore.StoreData;
 import com.android.server.wifi.WifiConfigStore.StoreFile;
-import com.android.server.wifi.util.DataIntegrityChecker;
-<<<<<<< HEAD
-=======
 import com.android.server.wifi.util.EncryptedData;
->>>>>>> 0793c09e7bbd0bda98df2d1cb6236f7b49926900
+import com.android.server.wifi.util.WifiConfigStoreEncryptionUtil;
 import com.android.server.wifi.util.XmlUtil;
 
 import libcore.util.HexEncoding;
@@ -46,7 +40,6 @@ import libcore.util.HexEncoding;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.xmlpull.v1.XmlPullParser;
@@ -76,13 +69,7 @@ public class WifiConfigStoreTest {
     private static final String TEST_DATA_XML_STRING_FORMAT =
             "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
                     + "<WifiConfigStoreData>\n"
-                    + "<int name=\"Version\" value=\"2\" />\n"
-                    + "<Integrity>\n"
-                    + "<byte-array name=\"EncryptedData\" num=\"48\">000000000000000000000000000000"
-                    + "000000000000000000000000000000000000000000000000000000000000000000"
-                    + "</byte-array>\n"
-                    + "<byte-array name=\"IV\" num=\"12\">000000000000000000000000</byte-array>\n"
-                    + "</Integrity>\n"
+                    + "<int name=\"Version\" value=\"3\" />\n"
                     + "<NetworkList>\n"
                     + "<Network>\n"
                     + "<WifiConfiguration>\n"
@@ -175,7 +162,7 @@ public class WifiConfigStoreTest {
     private TestLooper mLooper;
     @Mock private Clock mClock;
     @Mock private WifiMetrics mWifiMetrics;
-    @Mock private DataIntegrityChecker mDataIntegrityChecker;
+    @Mock private WifiConfigStoreEncryptionUtil mEncryptionUtil;
     private MockStoreFile mSharedStore;
     private MockStoreFile mUserStore;
     private MockStoreFile mUserNetworkSuggestionsStore;
@@ -199,10 +186,10 @@ public class WifiConfigStoreTest {
                 .thenReturn(mAlarmManager.getAlarmManager());
         when(mContext.getPackageManager()).thenReturn(mPackageManager);
         when(mPackageManager.getNameForUid(anyInt())).thenReturn(TEST_CREATOR_NAME);
-        when(mDataIntegrityChecker.compute(any(byte[].class)))
-                .thenReturn(ZEROED_ENCRYPTED_DATA);
-        when(mDataIntegrityChecker.isOk(any(byte[].class), any(EncryptedData.class)))
-                .thenReturn(true);
+        when(mEncryptionUtil.encrypt(any(byte[].class)))
+                .thenReturn(new EncryptedData(new byte[0], new byte[0]));
+        when(mEncryptionUtil.decrypt(any(EncryptedData.class)))
+                .thenReturn(new byte[0]);
         mSharedStore = new MockStoreFile(WifiConfigStore.STORE_FILE_SHARED_GENERAL);
         mUserStore = new MockStoreFile(WifiConfigStore.STORE_FILE_USER_GENERAL);
         mUserNetworkSuggestionsStore =
@@ -412,48 +399,6 @@ public class WifiConfigStoreTest {
     }
 
     /**
-     * Tests the read API behaviour after a write to the store files (with no integrity checks).
-     * Expected behaviour: The read should return the same data that was last written.
-     */
-    @Test
-    public void testReadAfterWriteWithNoIntegrityCheck() throws Exception {
-        // Recreate the mock store files with no data integrity checking.
-        mUserStores.clear();
-        mSharedStore = new MockStoreFile(WifiConfigStore.STORE_FILE_SHARED_GENERAL, null);
-        mUserStore = new MockStoreFile(WifiConfigStore.STORE_FILE_USER_GENERAL, null);
-        mUserNetworkSuggestionsStore =
-                new MockStoreFile(WifiConfigStore.STORE_FILE_USER_NETWORK_SUGGESTIONS, null);
-        mUserStores.add(mUserStore);
-        mUserStores.add(mUserNetworkSuggestionsStore);
-        mWifiConfigStore = new WifiConfigStore(mContext, mLooper.getLooper(), mClock, mWifiMetrics,
-                mSharedStore);
-
-        // Register data container.
-        mWifiConfigStore.registerStoreData(mSharedStoreData);
-        mWifiConfigStore.registerStoreData(mUserStoreData);
-
-        // Read both share and user config store.
-        mWifiConfigStore.switchUserStoresAndRead(mUserStores);
-
-        // Verify no data is read.
-        assertNull(mUserStoreData.getData());
-        assertNull(mSharedStoreData.getData());
-
-        // Write share and user data.
-        mUserStoreData.setData(TEST_USER_DATA);
-        mSharedStoreData.setData(TEST_SHARE_DATA);
-        mWifiConfigStore.write(true);
-
-        // Read and verify the data content in the data container.
-        mWifiConfigStore.read();
-        assertEquals(TEST_USER_DATA, mUserStoreData.getData());
-        assertEquals(TEST_SHARE_DATA, mSharedStoreData.getData());
-
-        verify(mWifiMetrics, times(2)).noteWifiConfigStoreReadDuration(anyInt());
-        verify(mWifiMetrics).noteWifiConfigStoreWriteDuration(anyInt());
-    }
-
-    /**
      * Tests the read API behaviour when the shared store file is empty and the user store
      * is not yet visible (user not yet unlocked).
      * Expected behaviour: The read should return an empty store data instance when the file not
@@ -477,9 +422,9 @@ public class WifiConfigStoreTest {
 
         // Ensure that we got the call to deserialize empty shared data, but no user data.
         verify(sharedStoreData).resetData();
-        verify(sharedStoreData).deserializeData(eq(null), anyInt());
+        verify(sharedStoreData).deserializeData(eq(null), anyInt(), anyInt(), any());
         verify(userStoreData, never()).resetData();
-        verify(userStoreData, never()).deserializeData(any(), anyInt());
+        verify(userStoreData, never()).deserializeData(any(), anyInt(), anyInt(), any());
     }
 
     /**
@@ -507,9 +452,9 @@ public class WifiConfigStoreTest {
 
         // Ensure that we got the call to deserialize empty shared & user data.
         verify(userStoreData).resetData();
-        verify(userStoreData).deserializeData(eq(null), anyInt());
+        verify(userStoreData).deserializeData(eq(null), anyInt(), anyInt(), any());
         verify(sharedStoreData).resetData();
-        verify(sharedStoreData).deserializeData(eq(null), anyInt());
+        verify(sharedStoreData).deserializeData(eq(null), anyInt(), anyInt(), any());
     }
 
     /**
@@ -684,9 +629,9 @@ public class WifiConfigStoreTest {
         mUserStore.storeRawDataToWrite(null);
 
         mWifiConfigStore.read();
-        verify(storeData1).deserializeData(notNull(), anyInt());
-        verify(storeData1, never()).deserializeData(eq(null), anyInt());
-        verify(storeData2).deserializeData(eq(null), anyInt());
+        verify(storeData1).deserializeData(notNull(), anyInt(), anyInt(), any());
+        verify(storeData1, never()).deserializeData(eq(null), anyInt(), anyInt(), any());
+        verify(storeData2).deserializeData(eq(null), anyInt(), anyInt(), any());
         reset(storeData1, storeData2);
 
         // Scenario 2: StoreData2 in user store file.
@@ -700,9 +645,9 @@ public class WifiConfigStoreTest {
         mUserStore.storeRawDataToWrite(fileContentsXmlStringWithOnlyStoreData2.getBytes());
 
         mWifiConfigStore.read();
-        verify(storeData1).deserializeData(eq(null), anyInt());
-        verify(storeData2).deserializeData(notNull(), anyInt());
-        verify(storeData2, never()).deserializeData(eq(null), anyInt());
+        verify(storeData1).deserializeData(eq(null), anyInt(), anyInt(), any());
+        verify(storeData2).deserializeData(notNull(), anyInt(), anyInt(), any());
+        verify(storeData2, never()).deserializeData(eq(null), anyInt(), anyInt(), any());
         reset(storeData1, storeData2);
 
         // Scenario 3: StoreData1 in shared store file & StoreData2 in user store file.
@@ -716,10 +661,10 @@ public class WifiConfigStoreTest {
         mUserStore.storeRawDataToWrite(fileContentsXmlStringWithOnlyStoreData2.getBytes());
 
         mWifiConfigStore.read();
-        verify(storeData1).deserializeData(notNull(), anyInt());
-        verify(storeData1, never()).deserializeData(eq(null), anyInt());
-        verify(storeData2).deserializeData(notNull(), anyInt());
-        verify(storeData2, never()).deserializeData(eq(null), anyInt());
+        verify(storeData1).deserializeData(notNull(), anyInt(), anyInt(), any());
+        verify(storeData1, never()).deserializeData(eq(null), anyInt(), anyInt(), any());
+        verify(storeData2).deserializeData(notNull(), anyInt(), anyInt(), any());
+        verify(storeData2, never()).deserializeData(eq(null), anyInt(), anyInt(), any());
         reset(storeData1, storeData2);
 
         // Scenario 4: StoreData1 & StoreData2 in shared store file.
@@ -734,10 +679,10 @@ public class WifiConfigStoreTest {
         mUserStore.storeRawDataToWrite(null);
 
         mWifiConfigStore.read();
-        verify(storeData1).deserializeData(notNull(), anyInt());
-        verify(storeData1, never()).deserializeData(eq(null), anyInt());
-        verify(storeData2).deserializeData(notNull(), anyInt());
-        verify(storeData2, never()).deserializeData(eq(null), anyInt());
+        verify(storeData1).deserializeData(notNull(), anyInt(), anyInt(), any());
+        verify(storeData1, never()).deserializeData(eq(null), anyInt(), anyInt(), any());
+        verify(storeData2).deserializeData(notNull(), anyInt(), anyInt(), any());
+        verify(storeData2, never()).deserializeData(eq(null), anyInt(), anyInt(), any());
         reset(storeData1, storeData2);
     }
 
@@ -784,9 +729,9 @@ public class WifiConfigStoreTest {
         verify(userStoreNetworkSuggestionsData).hasNewDataToSerialize();
 
         // Verify that we serialized data from the first 2 data source, but not from the last one.
-        verify(sharedStoreData).serializeData(any());
-        verify(userStoreData).serializeData(any());
-        verify(userStoreNetworkSuggestionsData, never()).serializeData(any());
+        verify(sharedStoreData).serializeData(any(), any());
+        verify(userStoreData).serializeData(any(), any());
+        verify(userStoreNetworkSuggestionsData, never()).serializeData(any(), any());
     }
 
     /**
@@ -860,190 +805,21 @@ public class WifiConfigStoreTest {
         // Read and verify the data content in the store file (metadata stripped out) has been sent
         // to the corresponding store data when integrity check passes.
         mWifiConfigStore.read();
-        verify(sharedStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-        verify(userStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-
-        // We shouldn't perform any data integrity checks on version 1 file.
-        verifyZeroInteractions(mDataIntegrityChecker);
+        verify(sharedStoreData, times(1)).deserializeData(
+                any(XmlPullParser.class), anyInt(),
+                eq(WifiConfigStore.INITIAL_CONFIG_STORE_DATA_VERSION), any());
+        verify(userStoreData, times(1)).deserializeData(
+                any(XmlPullParser.class), anyInt(),
+                eq(WifiConfigStore.INITIAL_CONFIG_STORE_DATA_VERSION), any());
     }
 
     /**
-     * Tests the read API behaviour when integrity check fails.
-     * Expected behaviour: The read should return an empty store data.
+     * Tests the read API behaviour to ensure that the integrity data is parsed from the file.
      */
     @Test
-    public void testReadWhenIntegrityCheckFails() throws Exception {
-        // Register data container.
-        StoreData sharedStoreData = mock(StoreData.class);
-        when(sharedStoreData.getStoreFileId())
-                .thenReturn(WifiConfigStore.STORE_FILE_SHARED_GENERAL);
-        when(sharedStoreData.getName()).thenReturn(TEST_SHARE_DATA);
-        StoreData userStoreData = mock(StoreData.class);
-        when(userStoreData.getStoreFileId())
-                .thenReturn(WifiConfigStore.STORE_FILE_USER_GENERAL);
-        when(userStoreData.getName()).thenReturn(TEST_USER_DATA);
-        mWifiConfigStore.registerStoreData(sharedStoreData);
-        mWifiConfigStore.registerStoreData(userStoreData);
-
-        // Read both share and user config store.
-        mWifiConfigStore.setUserStores(mUserStores);
-
-        // Now store some content in the shared and user data files.
-        mUserStore.storeRawDataToWrite(
-                String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                        HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getEncryptedData()),
-                        HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getIv()),
-                        TEST_USER_DATA).getBytes());
-        mSharedStore.storeRawDataToWrite(
-                String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                        HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getEncryptedData()),
-                        HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getIv()),
-                        TEST_SHARE_DATA).getBytes());
-
-        // Read and verify the data content in the store file (metadata stripped out) has been sent
-        // to the corresponding store data when integrity check passes.
-        mWifiConfigStore.read();
-        verify(sharedStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-        verify(userStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-
-        // Read and verify the data content in the store file (metadata stripped out) has not been
-        // sent to the corresponding store data when integrity check fails.
-        when(mDataIntegrityChecker.isOk(any(byte[].class), any(EncryptedData.class)))
-                .thenReturn(false);
-        mWifiConfigStore.read();
-        verify(sharedStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-        verify(userStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-    }
-
-    /**
-     * Tests the write API behaviour when integrity check fails.
-     * Expected behaviour: The read should return an empty store data.
-     */
-    @Test
-    public void testWriteWhenIntegrityComputeFails() throws Exception {
-        // Register data container.
-        StoreData sharedStoreData = mock(StoreData.class);
-        when(sharedStoreData.getStoreFileId())
-                .thenReturn(WifiConfigStore.STORE_FILE_SHARED_GENERAL);
-        when(sharedStoreData.getName()).thenReturn(TEST_SHARE_DATA);
-        when(sharedStoreData.hasNewDataToSerialize()).thenReturn(true);
-        StoreData userStoreData = mock(StoreData.class);
-        when(userStoreData.getStoreFileId())
-                .thenReturn(WifiConfigStore.STORE_FILE_USER_GENERAL);
-        when(userStoreData.getName()).thenReturn(TEST_USER_DATA);
-        when(userStoreData.hasNewDataToSerialize()).thenReturn(true);
-        mWifiConfigStore.registerStoreData(sharedStoreData);
-        mWifiConfigStore.registerStoreData(userStoreData);
-
-        // Read both share and user config store.
-        mWifiConfigStore.setUserStores(mUserStores);
-
-        // Reset store file contents & ensure that the user and store data files are empty.
-        mUserStore.storeRawDataToWrite(null);
-        mSharedStore.storeRawDataToWrite(null);
-        assertNull(mUserStore.getStoreBytes());
-        assertNull(mSharedStore.getStoreBytes());
-
-        // Write and verify that the data is written to the config store file when integrity
-        // computation passes.
-        mWifiConfigStore.write(true);
-        assertNotNull(mUserStore.getStoreBytes());
-        assertNotNull(mSharedStore.getStoreBytes());
-        assertTrue(new String(mUserStore.getStoreBytes()).contains(TEST_USER_DATA));
-        assertTrue(new String(mSharedStore.getStoreBytes()).contains(TEST_SHARE_DATA));
-
-        // Reset store file contents & ensure that the user and store data files are empty.
-        mUserStore.storeRawDataToWrite(null);
-        mSharedStore.storeRawDataToWrite(null);
-        assertNull(mUserStore.getStoreBytes());
-        assertNull(mSharedStore.getStoreBytes());
-
-        // Write and verify that the data is not written to the config store file when integrity
-        // computation fails.
-        when(mDataIntegrityChecker.compute(any(byte[].class))).thenReturn(null);
-        mWifiConfigStore.write(true);
-        assertNull(mUserStore.getStoreBytes());
-        assertNull(mSharedStore.getStoreBytes());
-    }
-
-    /**
-     * Tests the write API behaviour to ensure that the integrity data is written to the file.
-     */
-    @Test
-    public void testWriteContainsIntegrityData() throws Exception {
-        byte[] encryptedData = new byte[EncryptedData.ENCRYPTED_DATA_LENGTH];
-        byte[] iv = new byte[EncryptedData.IV_LENGTH];
-        Random random = new Random();
-        random.nextBytes(encryptedData);
-        random.nextBytes(iv);
-        final EncryptedData testEncryptedData = new EncryptedData(encryptedData, iv);
-
-        doAnswer(new AnswerWithArguments() {
-            public EncryptedData answer(byte[] data) {
-                String storeXmlString = new String(data);
-                // Verify that we fill in zeros to the data when we compute integrity.
-                if (storeXmlString.contains(TEST_SHARE_DATA)) {
-                    assertEquals(String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                            HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getEncryptedData()),
-                            HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getIv()),
-                            TEST_SHARE_DATA), storeXmlString);
-                } else if (storeXmlString.contains(TEST_USER_DATA)) {
-                    assertEquals(String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                            HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getEncryptedData()),
-                            HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getIv()),
-                            TEST_USER_DATA), storeXmlString);
-                }
-                return testEncryptedData;
-            }
-        }).when(mDataIntegrityChecker).compute(any(byte[].class));
-
-        // Register data container.
-        StoreData sharedStoreData = mock(StoreData.class);
-        when(sharedStoreData.getStoreFileId())
-                .thenReturn(WifiConfigStore.STORE_FILE_SHARED_GENERAL);
-        when(sharedStoreData.getName()).thenReturn(TEST_SHARE_DATA);
-        when(sharedStoreData.hasNewDataToSerialize()).thenReturn(true);
-        StoreData userStoreData = mock(StoreData.class);
-        when(userStoreData.getStoreFileId())
-                .thenReturn(WifiConfigStore.STORE_FILE_USER_GENERAL);
-        when(userStoreData.getName()).thenReturn(TEST_USER_DATA);
-        when(userStoreData.hasNewDataToSerialize()).thenReturn(true);
-        mWifiConfigStore.registerStoreData(sharedStoreData);
-        mWifiConfigStore.registerStoreData(userStoreData);
-
-        // Read both share and user config store.
-        mWifiConfigStore.setUserStores(mUserStores);
-
-        // Write and verify that the data is written to the config store file when integrity
-        // computation passes.
-        mWifiConfigStore.write(true);
-
-        // Verify that we fill in zeros to the data when we computed integrity.
-        verify(mDataIntegrityChecker, times(2)).compute(any(byte[].class));
-
-        // Verify the parsed integrity data
-        assertNotNull(mUserStore.getStoreBytes());
-        assertNotNull(mSharedStore.getStoreBytes());
-        String userStoreXmlString = new String(mUserStore.getStoreBytes());
-        String sharedStoreXmlString = new String(mSharedStore.getStoreBytes());
-        assertEquals(String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                HexEncoding.encodeToString(encryptedData).toLowerCase(),
-                HexEncoding.encodeToString(iv).toLowerCase(),
-                TEST_USER_DATA), userStoreXmlString);
-        assertEquals(String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                HexEncoding.encodeToString(encryptedData).toLowerCase(),
-                HexEncoding.encodeToString(iv).toLowerCase(),
-                TEST_SHARE_DATA), sharedStoreXmlString);
-    }
-
-    /**
-     * Tests the read API behaviour to ensure that the integrity data is parsed from the file and
-     * used for checking integrity of the file.
-     */
-    @Test
-    public void testReadParsesIntegrityData() throws Exception {
-        byte[] encryptedData = new byte[EncryptedData.ENCRYPTED_DATA_LENGTH];
-        byte[] iv = new byte[EncryptedData.IV_LENGTH];
+    public void testReadVersion2StoreFile() throws Exception {
+        byte[] encryptedData = new byte[0];
+        byte[] iv = new byte[0];
         Random random = new Random();
         random.nextBytes(encryptedData);
         random.nextBytes(iv);
@@ -1078,40 +854,14 @@ public class WifiConfigStoreTest {
                         TEST_SHARE_DATA).getBytes());
 
         // Read and verify the data content in the store file (metadata stripped out) has been sent
-        // to the corresponding store data when integrity check passes.
+        // to the corresponding store data.
         mWifiConfigStore.read();
-        verify(sharedStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-        verify(userStoreData, times(1)).deserializeData(any(XmlPullParser.class), anyInt());
-
-        // Verify that we parsed the integrity data and used it for checking integrity of the file.
-        ArgumentCaptor<EncryptedData> integrityCaptor =
-                ArgumentCaptor.forClass(EncryptedData.class);
-        ArgumentCaptor<byte[]> dataCaptor = ArgumentCaptor.forClass(byte[].class);
-        // Will be invoked twice for each file - shared & user store file.
-        verify(mDataIntegrityChecker, times(2)).isOk(
-                dataCaptor.capture(), integrityCaptor.capture());
-        // Verify the parsed integrity data
-        assertEquals(2, integrityCaptor.getAllValues().size());
-        EncryptedData parsedEncryptedData1 = integrityCaptor.getAllValues().get(0);
-        assertArrayEquals(encryptedData, parsedEncryptedData1.getEncryptedData());
-        assertArrayEquals(iv, parsedEncryptedData1.getIv());
-        EncryptedData parsedEncryptedData2 = integrityCaptor.getAllValues().get(1);
-        assertArrayEquals(encryptedData, parsedEncryptedData2.getEncryptedData());
-        assertArrayEquals(iv, parsedEncryptedData2.getIv());
-
-        // Verify that we fill in zeros to the data when we performed integrity checked.
-        assertEquals(2, dataCaptor.getAllValues().size());
-        String sharedStoreXmlStringWithZeroedIntegrity =
-                new String(dataCaptor.getAllValues().get(0));
-        assertEquals(String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getEncryptedData()),
-                HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getIv()),
-                TEST_SHARE_DATA), sharedStoreXmlStringWithZeroedIntegrity);
-        String userStoreXmlStringWithZeroedIntegrity = new String(dataCaptor.getAllValues().get(1));
-        assertEquals(String.format(TEST_DATA_XML_STRING_FORMAT_V2_WITH_ONE_DATA_SOURCE,
-                HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getEncryptedData()),
-                HexEncoding.encodeToString(ZEROED_ENCRYPTED_DATA.getIv()),
-                TEST_USER_DATA), userStoreXmlStringWithZeroedIntegrity);
+        verify(sharedStoreData, times(1))
+                .deserializeData(any(XmlPullParser.class), anyInt(),
+                        eq(WifiConfigStore.INTEGRITY_CONFIG_STORE_DATA_VERSION), any());
+        verify(userStoreData, times(1))
+                .deserializeData(any(XmlPullParser.class), anyInt(),
+                        eq(WifiConfigStore.INTEGRITY_CONFIG_STORE_DATA_VERSION), any());
     }
 
     /**
@@ -1123,15 +873,7 @@ public class WifiConfigStoreTest {
         private boolean mStoreWritten;
 
         MockStoreFile(@WifiConfigStore.StoreFileId int fileId) {
-            super(new File("MockStoreFile"), fileId, mDataIntegrityChecker);
-<<<<<<< HEAD
-        }
-
-        MockStoreFile(@WifiConfigStore.StoreFileId int fileId,
-                      DataIntegrityChecker dataIntegrityChecker) {
-            super(new File("MockStoreFile"), fileId, dataIntegrityChecker);
-=======
->>>>>>> 0793c09e7bbd0bda98df2d1cb6236f7b49926900
+            super(new File("MockStoreFile"), fileId, mEncryptionUtil);
         }
 
         @Override
@@ -1182,13 +924,14 @@ public class WifiConfigStoreTest {
         }
 
         @Override
-        public void serializeData(XmlSerializer out)
+        public void serializeData(XmlSerializer out, WifiConfigStoreEncryptionUtil encryptionUtil)
                 throws XmlPullParserException, IOException {
             XmlUtil.writeNextValue(out, XML_TAG_TEST_DATA, mData);
         }
 
         @Override
-        public void deserializeData(XmlPullParser in, int outerTagDepth)
+        public void deserializeData(XmlPullParser in, int outerTagDepth, int version,
+                WifiConfigStoreEncryptionUtil encryptionUtil)
                 throws XmlPullParserException, IOException {
             if (in == null) {
                 return;
