@@ -2043,8 +2043,13 @@ public class WifiServiceImpl extends BaseWifiService {
         enforceNetworkSettingsPermission();
         mLog.info("setScanAlwaysAvailable uid=%").c(Binder.getCallingUid()).flush();
         mSettingsStore.handleWifiScanAlwaysAvailableToggled(isAvailable);
-        mWifiInjector.getWifiScanAlwaysAvailableSettingsCompatibility()
-                .handleWifiScanAlwaysAvailableToggled(isAvailable);
+        long ident = Binder.clearCallingIdentity();
+        try {
+            mWifiInjector.getWifiScanAlwaysAvailableSettingsCompatibility()
+                    .handleWifiScanAlwaysAvailableToggled(isAvailable);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
         mActiveModeWarden.scanAlwaysModeChanged();
     }
 
