@@ -572,6 +572,12 @@ public class WifiAwareDataPathStateManager {
             nnri.peerDataMac = mac;
             nnri.channelInfo = channelInfo;
 
+            NetworkInfo networkInfo = new NetworkInfo(ConnectivityManager.TYPE_NONE, 0,
+                    NETWORK_TAG, "");
+            NetworkCapabilities networkCapabilities = new NetworkCapabilities(
+                    sNetworkCapabilitiesFilter);
+            LinkProperties linkProperties = new LinkProperties();
+
             boolean interfaceUsedByAnotherNdp = isInterfaceUpAndUsedByAnotherNdp(nnri);
             if (!interfaceUsedByAnotherNdp) {
                 try {
@@ -608,26 +614,83 @@ public class WifiAwareDataPathStateManager {
                     }
                 }
             }
-
             try {
-                InterfaceConfiguration ifcg = mNwService.getInterfaceConfig(nnri.interfaceName);
-                if(!(ifcg.isActive())) {
-                    AwareNetworkObserver awareNwObserver = new AwareNetworkObserver();
-                    awareNwObserver.setInfo(nnri.interfaceName, ndpId, accept, mac);
-                    if (VDBG) Log.v(TAG, "onDataPathConfirm:  link is not active");
-                    mNwService.registerObserver(awareNwObserver);
-                    // return null as we are waiting for callback on observer
-                    networkSpecifier = null;
+                if (nnri.peerIpv6Override == null) {
+                    //TODO Remove this later
+                    Log.v(TAG, "onDataPathConfirm: nnri.peerIpv6Override is null");
+                    nnri.peerIpv6 = Inet6Address.getByAddress(null,
+                            MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress(),
+                            NetworkInterface.getByName(nnri.interfaceName));
                 } else {
-                    if (VDBG || mVerboseLoggingEnabled) Log.v(TAG,
-                                   "onDataPathConfirm:link is active");
-                    handleAddressUpdated(ndpId, null, accept, mac);
+                    //TODO Remove this later
+                    Log.v(TAG, "onDataPathConfirm: nnri.peerIpv6Override is not null");
+                    byte[] addr = new byte[16];
+
+                    addr[0] = (byte) 0xfe;
+                    addr[1] = (byte) 0x80;
+                    addr[8] = nnri.peerIpv6Override[0];
+                    addr[9] = nnri.peerIpv6Override[1];
+                    addr[10] = nnri.peerIpv6Override[2];
+                    addr[11] = nnri.peerIpv6Override[3];
+                    addr[12] = nnri.peerIpv6Override[4];
+                    addr[13] = nnri.peerIpv6Override[5];
+                    addr[14] = nnri.peerIpv6Override[6];
+                    addr[15] = nnri.peerIpv6Override[7];
+
+                    nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
+                            NetworkInterface.getByName(nnri.interfaceName));
                 }
-            } catch (android.os.RemoteException e) {
-                Log.e(TAG, "onDataPathConfirm:  RemoteException getInterfaceConfig");
-                if (accept) mMgr.endDataPath(ndpId);
+            } catch (SocketException | UnknownHostException | ArrayIndexOutOfBoundsException e) {
+                Log.e(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
+                nnri.peerIpv6 = null;
+                try {
+                    // Check the time for mNwService.getInterfaceConfig. TODO Remove this later
+                    Log.v(TAG, "onDataPathConfirm: Before mNwService.getInterfaceConfig(nnri.interfaceName) -- ");
+                    InterfaceConfiguration ifcg = mNwService.getInterfaceConfig(nnri.interfaceName);
+                    Log.v(TAG, "onDataPathConfirm: After mNwService.getInterfaceConfig(nnri.interfaceName) -- ");
+                    if(!(ifcg.isActive())) {
+                        AwareNetworkObserver awareNwObserver = new AwareNetworkObserver();
+                        awareNwObserver.setInfo(nnri.interfaceName, ndpId, accept, mac);
+                        Log.v(TAG, "onDataPathConfirm:  link is not active");
+                        mNwService.registerObserver(awareNwObserver);
+                        // return null as we are waiting for callback on observer
+                        networkSpecifier = null;
+                    } else {
+                        // TODO Why do you neeed this. Please remove after initial testing.
+                        Log.v(TAG, "onDataPathConfirm:  link is active");
+                        handleAddressUpdated(ndpId, null, accept, mac);
+                    }
+                    return networkSpecifier;
+                } catch (android.os.RemoteException e1) {
+                    Log.e(TAG, "onDataPathConfirm:  RemoteException getInterfaceConfig");
+                    if (accept) mMgr.endDataPath(ndpId);
+                }
+            }
+            if (nnri.peerIpv6 != null) {
+                networkCapabilities.setTransportInfo(
+                    new WifiAwareNetworkInfo(nnri.peerIpv6, nnri.peerPort,
+                                nnri.peerTransportProtocol));
             }
 
+            if (VDBG || mVerboseLoggingEnabled) {
+                Log.v(TAG, "onDataPathConfirm: AwareNetworkInfo="
+                        + networkCapabilities.getTransportInfo());
+            }
+
+            if (!mNiWrapper.configureAgentProperties(nnri, nnri.equivalentRequests, ndpId,
+                    networkInfo, networkCapabilities, linkProperties)) {
+                declareUnfullfillableAndEndDp(nnri, ndpId);
+                return networkSpecifier;
+            }
+
+            nnri.networkAgent = new WifiAwareNetworkAgent(mLooper, mContext,
+                    AGENT_TAG_PREFIX + nnri.ndpId,
+                    new NetworkInfo(ConnectivityManager.TYPE_NONE, 0, NETWORK_TAG, ""),
+                    networkCapabilities, linkProperties, NETWORK_FACTORY_SCORE_AVAIL,
+                    nnri);
+            nnri.startValidationTimestamp = mClock.getElapsedSinceBootMillis();
+            handleAddressValidation(nnri, linkProperties, networkInfo, ndpId,
+                    networkSpecifier.isOutOfBand());
         } else {
             if (VDBG || mVerboseLoggingEnabled) {
                 Log.v(TAG, "onDataPathConfirm: data-path for networkSpecifier=" + networkSpecifier
@@ -671,32 +734,34 @@ public class WifiAwareDataPathStateManager {
 
         WifiAwareNetworkSpecifier networkSpecifier = nnriE.getKey();
         AwareNetworkRequestInformation nnri = nnriE.getValue();
+        Log.e(TAG, "onDataPathConfirm: nnri.peerIpv6 is:" + nnri.peerIpv6);
+        if(nnri.peerIpv6 == null) {
+            try {
+                if (nnri.peerIpv6Override == null) {
+                    nnri.peerIpv6 = Inet6Address.getByAddress(null,
+                            MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress(),
+                            NetworkInterface.getByName(nnri.interfaceName));
+                } else {
+                    byte[] addr = new byte[16];
 
-        try {
-            if (nnri.peerIpv6Override == null) {
-                nnri.peerIpv6 = Inet6Address.getByAddress(null,
-                        MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress(),
-                        NetworkInterface.getByName(nnri.interfaceName));
-            } else {
-                byte[] addr = new byte[16];
+                    addr[0] = (byte) 0xfe;
+                    addr[1] = (byte) 0x80;
+                    addr[8] = nnri.peerIpv6Override[0];
+                    addr[9] = nnri.peerIpv6Override[1];
+                    addr[10] = nnri.peerIpv6Override[2];
+                    addr[11] = nnri.peerIpv6Override[3];
+                    addr[12] = nnri.peerIpv6Override[4];
+                    addr[13] = nnri.peerIpv6Override[5];
+                    addr[14] = nnri.peerIpv6Override[6];
+                    addr[15] = nnri.peerIpv6Override[7];
 
-                addr[0] = (byte) 0xfe;
-                addr[1] = (byte) 0x80;
-                addr[8] = nnri.peerIpv6Override[0];
-                addr[9] = nnri.peerIpv6Override[1];
-                addr[10] = nnri.peerIpv6Override[2];
-                addr[11] = nnri.peerIpv6Override[3];
-                addr[12] = nnri.peerIpv6Override[4];
-                addr[13] = nnri.peerIpv6Override[5];
-                addr[14] = nnri.peerIpv6Override[6];
-                addr[15] = nnri.peerIpv6Override[7];
-
-                nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
-                        NetworkInterface.getByName(nnri.interfaceName));
+                    nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
+                           NetworkInterface.getByName(nnri.interfaceName));
+                }
+            } catch (SocketException | UnknownHostException e) {
+                Log.e(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
+                nnri.peerIpv6 = null;
             }
-        } catch (SocketException | UnknownHostException e) {
-            Log.e(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
-            nnri.peerIpv6 = null;
         }
 
         if (nnri.peerIpv6 != null) {
@@ -1816,7 +1881,7 @@ public class WifiAwareDataPathStateManager {
         private byte[] mac;
 
         public void setInfo(String ifaceName, int ndpId, boolean accept, byte[] mac) {
-            if (VDBG) Log.v(TAG, "mNwObserver:  setInfo received ifaceName["
+            Log.v(TAG, "mNwObserver:  setInfo received ifaceName["
                             +ifaceName+"]");
             mIface = ifaceName;
             mNdpId = ndpId;
@@ -1826,7 +1891,7 @@ public class WifiAwareDataPathStateManager {
 
         @Override
         public void interfaceStatusChanged(String iface, boolean up) {
-            if (VDBG) Log.v(TAG, "mNwObserver:  interfaceStatusChanged received iface["
+            Log.v(TAG, "mNwObserver:  interfaceStatusChanged received iface["
                         +iface+"], isUp?["+up+"]");
             if(iface.equals(mIface) && !up) {
                 mHandler.post(() -> {
@@ -1841,7 +1906,7 @@ public class WifiAwareDataPathStateManager {
 
         @Override
         public void addressUpdated(String iface, LinkAddress address) {
-            if (VDBG) Log.v(TAG, "mNwObserver:  addressUpdated received iface["+iface
+            Log.v(TAG, "mNwObserver:  addressUpdated received iface["+iface
                           +"], address[" +address.toString()+"]");
             if(iface.equals(mIface)) {
                 mHandler.post(() -> {
