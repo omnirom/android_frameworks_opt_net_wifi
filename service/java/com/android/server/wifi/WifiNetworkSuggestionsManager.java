@@ -135,6 +135,7 @@ public class WifiNetworkSuggestionsManager {
     private final WifiInjector mWifiInjector;
     private final FrameworkFacade mFrameworkFacade;
     private final TelephonyUtil mTelephonyUtil;
+    private final WifiKeyStore mWifiKeyStore;
 
     /**
      * Per app meta data to store network suggestions, status, etc for each app providing network
@@ -232,6 +233,10 @@ public class WifiNetworkSuggestionsManager {
             this.wns = wns;
             this.perAppInfo = perAppInfo;
             this.isAutojoinEnabled = isAutoJoinEnabled;
+            this.wns.wifiConfiguration.fromWifiNetworkSuggestion = true;
+            this.wns.wifiConfiguration.ephemeral = true;
+            this.wns.wifiConfiguration.creatorName = perAppInfo.packageName;
+            this.wns.wifiConfiguration.creatorUid = perAppInfo.uid;
         }
 
         @Override
@@ -267,6 +272,16 @@ public class WifiNetworkSuggestionsManager {
         public static ExtendedWifiNetworkSuggestion fromWns(@NonNull WifiNetworkSuggestion wns,
                 @NonNull PerAppInfo perAppInfo, boolean isAutoJoinEnabled) {
             return new ExtendedWifiNetworkSuggestion(wns, perAppInfo, isAutoJoinEnabled);
+        }
+
+        /**
+         * Create a {@link WifiConfiguration} from suggestion for framework internal use.
+         */
+        public WifiConfiguration createInternalWifiConfiguration() {
+            WifiConfiguration config = new WifiConfiguration(wns.getWifiConfiguration());
+            config.allowAutojoin = isAutojoinEnabled;
+            config.trusted = !wns.isNetworkUntrusted;
+            return config;
         }
     }
 
@@ -398,7 +413,7 @@ public class WifiNetworkSuggestionsManager {
                             extNetworkSuggestions.iterator().next().perAppInfo.uid);
                 }
                 for (ExtendedWifiNetworkSuggestion ewns : extNetworkSuggestions) {
-                    if (ewns.wns.wifiConfiguration.isPasspoint()) {
+                    if (ewns.wns.passpointConfiguration != null) {
                         addToPasspointInfoMap(ewns);
                     } else {
                         addToScanResultMatchInfoMap(ewns);
@@ -519,7 +534,8 @@ public class WifiNetworkSuggestionsManager {
                                          WifiConfigManager wifiConfigManager,
                                          WifiConfigStore wifiConfigStore,
                                          WifiMetrics wifiMetrics,
-                                         TelephonyUtil telephonyUtil) {
+                                         TelephonyUtil telephonyUtil,
+                                         WifiKeyStore keyStore) {
         mContext = context;
         mResources = context.getResources();
         mHandler = handler;
@@ -533,6 +549,7 @@ public class WifiNetworkSuggestionsManager {
         mWifiConfigManager = wifiConfigManager;
         mWifiMetrics = wifiMetrics;
         mTelephonyUtil = telephonyUtil;
+        mWifiKeyStore = keyStore;
 
         // register the data store for serializing/deserializing data.
         wifiConfigStore.registerStoreData(
@@ -802,6 +819,13 @@ public class WifiNetworkSuggestionsManager {
                 if (carrierId != TelephonyManager.UNKNOWN_CARRIER_ID) {
                     ewns.wns.wifiConfiguration.carrierId = carrierId;
                 }
+                if (ewns.wns.wifiConfiguration.isEnterprise()) {
+                    if (!mWifiKeyStore.updateNetworkKeys(ewns.wns.wifiConfiguration, null)) {
+                        Log.e(TAG, "Enterprise network install failure for SSID: "
+                                + ewns.wns.wifiConfiguration.SSID);
+                        continue;
+                    }
+                }
                 addToScanResultMatchInfoMap(ewns);
             } else {
                 if (carrierId != TelephonyManager.UNKNOWN_CARRIER_ID) {
@@ -812,7 +836,8 @@ public class WifiNetworkSuggestionsManager {
                 if (!mWifiInjector.getPasspointManager().addOrUpdateProvider(
                         ewns.wns.passpointConfiguration, uid,
                         packageName, true, !ewns.wns.isNetworkUntrusted)) {
-                    Log.e(TAG, "Passpoint profile install failure.");
+                    Log.e(TAG, "Passpoint profile install failure for FQDN: "
+                            + ewns.wns.wifiConfiguration.FQDN);
                     continue;
                 }
                 addToPasspointInfoMap(ewns);
@@ -938,14 +963,17 @@ public class WifiNetworkSuggestionsManager {
         }
         // Clear the cache.
         for (ExtendedWifiNetworkSuggestion ewns : extNetworkSuggestions) {
-            if (ewns.wns.wifiConfiguration.isPasspoint()) {
+            if (ewns.wns.passpointConfiguration != null) {
                 // Clear the Passpoint config.
                 mWifiInjector.getPasspointManager().removeProvider(
                         ewns.perAppInfo.uid,
                         false,
-                        ewns.wns.wifiConfiguration.getKey(), null);
+                        ewns.wns.passpointConfiguration.getUniqueId(), null);
                 removeFromPassPointInfoMap(ewns);
             } else {
+                if (ewns.wns.wifiConfiguration.isEnterprise()) {
+                    mWifiKeyStore.removeKeys(ewns.wns.wifiConfiguration.enterpriseConfig);
+                }
                 removeFromScanResultMatchInfoMapAndRemoveRelatedScoreCard(ewns);
             }
         }
@@ -1112,6 +1140,34 @@ public class WifiNetworkSuggestionsManager {
                 .flatMap(e -> convertToWnsSet(e.extNetworkSuggestions)
                         .stream())
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * Get all user approved, non-passpoint networks from suggestion.
+     */
+    public List<WifiConfiguration> getAllPnoAvailableSuggestionNetworks() {
+        List<WifiConfiguration> networks = new ArrayList<>();
+        for (PerAppInfo info : mActiveNetworkSuggestionsPerApp.values()) {
+            if (!info.hasUserApproved && info.carrierId == TelephonyManager.UNKNOWN_CARRIER_ID) {
+                continue;
+            }
+            for (ExtendedWifiNetworkSuggestion ewns : info.extNetworkSuggestions) {
+                if (ewns.wns.getPasspointConfig() != null) {
+                    continue;
+                }
+                WifiConfiguration network = mWifiConfigManager
+                        .getConfiguredNetwork(ewns.wns.getWifiConfiguration().getKey());
+                if (network == null) {
+                    network = new WifiConfiguration(ewns.wns.getWifiConfiguration());
+                    network.ephemeral = true;
+                    network.fromWifiNetworkSuggestion = true;
+                    network.allowAutojoin = ewns.isAutojoinEnabled;
+                    network.trusted = !ewns.wns.isNetworkUntrusted;
+                }
+                networks.add(network);
+            }
+        }
+        return networks;
     }
 
     private List<Integer> getAllMaxSizes() {
@@ -1470,11 +1526,13 @@ public class WifiNetworkSuggestionsManager {
      * Check if the given passpoint suggestion has user approval and allow user manually connect.
      */
     public boolean isPasspointSuggestionSharedWithUser(WifiConfiguration config) {
+        Set<ExtendedWifiNetworkSuggestion> extendedWifiNetworkSuggestions =
+                getNetworkSuggestionsForFqdnMatch(config.FQDN);
         Set<ExtendedWifiNetworkSuggestion> matchedSuggestions =
-                getNetworkSuggestionsForFqdnMatch(config.FQDN)
-                        .stream().filter(ewns -> ewns.perAppInfo.uid == config.creatorUid)
-                        .collect(Collectors.toSet());
-        if (matchedSuggestions.isEmpty()) {
+                extendedWifiNetworkSuggestions == null ? null : extendedWifiNetworkSuggestions
+                .stream().filter(ewns -> ewns.perAppInfo.uid == config.creatorUid)
+                .collect(Collectors.toSet());
+        if (matchedSuggestions == null || matchedSuggestions.isEmpty()) {
             Log.e(TAG, "Matched network suggestion is missing for FQDN:" + config.FQDN);
             return false;
         }

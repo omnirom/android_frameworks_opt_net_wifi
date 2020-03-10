@@ -530,11 +530,11 @@ public class WifiConfigurationUtil {
                 Log.e(TAG, "validateKeyMgmt failed: not PSK or 8021X");
                 return false;
             }
-            if (keyMgmnt.cardinality() == 3
-                    && (!keyMgmnt.get(WifiConfiguration.KeyMgmt.SUITE_B_192) &&
-                        !keyMgmnt.get(WifiConfiguration.KeyMgmt.FILS_SHA256) &&
-                        !keyMgmnt.get(WifiConfiguration.KeyMgmt.FILS_SHA384))) {
-                Log.e(TAG, "validateKeyMgmt failed: not SUITE_B_192 or FILS");
+            if (keyMgmnt.cardinality() == 4
+                    && (!keyMgmnt.get(WifiConfiguration.KeyMgmt.SUITE_B_192)
+                    && !keyMgmnt.get(WifiConfiguration.KeyMgmt.FILS_SHA256)
+                    && !keyMgmnt.get(WifiConfiguration.KeyMgmt.FILS_SHA384))) {
+                Log.e(TAG, "validateKeyMgmt failed: neither SUITE_B_192 nor FILS");
                 return false;
             }
         }
