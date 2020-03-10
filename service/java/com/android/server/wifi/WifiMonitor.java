@@ -102,7 +102,7 @@ public class WifiMonitor {
     public static final int MBO_OCE_BSS_TM_HANDLING_DONE         = BASE + 71;
 
     /* Fils network connection completed */
-    public static final int FILS_NETWORK_CONNECTION_EVENT        = BASE + 63;
+    public static final int FILS_NETWORK_CONNECTION_EVENT        = BASE + 62;
 
     /* Take some gap, start DPP event from 101*/
     public static final int DPP_EVENT                            = BASE + 101;
@@ -520,8 +520,6 @@ public class WifiMonitor {
     public void broadcastFilsNetworkConnectionEvent(String iface, int networkId, String bssid) {
         sendMessage(iface, FILS_NETWORK_CONNECTION_EVENT, networkId, 0, bssid);
     }
-
-    /**
 
     /**
      * Broadcast the network disconnection event to all the handlers registered for this event.

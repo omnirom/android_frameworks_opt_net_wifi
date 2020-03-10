@@ -119,9 +119,16 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     @Override
     public Bundle getAvailableChannels(@WifiBand int band, String packageName,
             @Nullable String featureId) {
-        enforcePermission(Binder.getCallingUid(), packageName, featureId, false, false, false);
+        int uid = Binder.getCallingUid();
+        long ident = Binder.clearCallingIdentity();
+        try {
+            enforcePermission(uid, packageName, featureId, false, false, false);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
 
         ChannelSpec[][] channelSpecs = mWifiThreadRunner.call(() -> {
+            if (mChannelHelper == null) return new ChannelSpec[0][0];
             mChannelHelper.updateChannels();
             return mChannelHelper.getAvailableScanChannels(band);
         }, new ChannelSpec[0][0]);

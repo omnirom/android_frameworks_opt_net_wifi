@@ -93,6 +93,7 @@ public class PasspointProviderTest extends WifiBaseTest {
     private static final int TEST_USAGE_LIMIT_DATA_LIMIT = 100;
     private static final String TEST_FQDN = "test.com";
     private static final String TEST_FQDN2 = "test2.com";
+    private static final String TEST_FQDN3 = "test3.com";
     private static final String TEST_FRIENDLY_NAME = "Friendly Name";
     private static final long[] TEST_RC_OIS = new long[] {0x1234L, 0x2345L};
     private static final long[] TEST_IE_RC_OIS = new long[] {0x1234L, 0x2133L};
@@ -103,7 +104,7 @@ public class PasspointProviderTest extends WifiBaseTest {
             new String[] {"trusted.fqdn.com", "another.fqdn.com"};
     // User credential data
     private static final String TEST_USERNAME = "username";
-    private static final String TEST_PASSWORD = "password";
+    private static final String TEST_PASSWORD = "password3";
     // SIM credential data
     private static final int TEST_EAP_TYPE = WifiEnterpriseConfig.Eap.SIM;
     private static final int TEST_SIM_CREDENTIAL_TYPE = EAPConstants.EAP_SIM;
@@ -328,9 +329,14 @@ public class PasspointProviderTest extends WifiBaseTest {
         }
 
         if (credential.getUserCredential() != null) {
+            String decodedPassword;
             Credential.UserCredential userCredential = credential.getUserCredential();
-            byte[] pwOctets = Base64.decode(userCredential.getPassword(), Base64.DEFAULT);
-            String decodedPassword = new String(pwOctets, StandardCharsets.UTF_8);
+            try {
+                byte[] pwOctets = Base64.decode(userCredential.getPassword(), Base64.DEFAULT);
+                decodedPassword = new String(pwOctets, StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e) {
+                decodedPassword = userCredential.getPassword();
+            }
 
             assertEquals("anonymous@" + credential.getRealm(),
                     wifiEnterpriseConfig.getAnonymousIdentity());
@@ -351,6 +357,7 @@ public class PasspointProviderTest extends WifiBaseTest {
             }
             assertEquals(userCredential.getUsername(), wifiEnterpriseConfig.getIdentity());
             assertEquals(decodedPassword, wifiEnterpriseConfig.getPassword());
+            assertEquals(decodedPassword, TEST_PASSWORD);
             assertEquals(WifiConfiguration.METERED_OVERRIDE_NONE,
                     wifiConfig.meteredOverride);
 
@@ -1383,5 +1390,195 @@ public class PasspointProviderTest extends WifiBaseTest {
         assertFalse(mProvider.getHasEverConnected());
         mProvider.setHasEverConnected(true);
         assertTrue(mProvider.getHasEverConnected());
+    }
+
+    /**
+     * Verify that a provider is a home provider when there is a match between Other Home Partners
+     * in the profile and the Domain Name ANQP element.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void getWifiConfigWithUserCredentialAndNonBase64Password() throws Exception {
+        // Create provider for R2.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.USER, false);
+
+        // Update the password to non-Base64
+        Credential credential = config.getCredential();
+        Credential.UserCredential userCredential = credential.getUserCredential();
+        userCredential.setPassword(TEST_PASSWORD);
+        credential.setUserCredential(userCredential);
+        config.setCredential(credential);
+
+        mProvider = createProvider(config);
+
+        // Install certificate.
+        when(mKeyStore.putCaCertInKeyStore(CA_CERTIFICATE_ALIAS, FakeKeys.CA_CERT0))
+                .thenReturn(true);
+        assertTrue(mProvider.installCertsAndKeys());
+
+        // Retrieve the WifiConfiguration associated with the provider, and verify the content of
+        // the configuration.
+        verifyWifiConfigWithTestData(config, mProvider.getWifiConfig());
+
+        // Verify that AAA server trusted names are provisioned.
+        config.setAaaServerTrustedNames(TEST_TRUSTED_NAME);
+        mProvider = createProvider(config);
+        verifyWifiConfigWithTestData(config,
+                createProvider(config).getWifiConfig());
+    }
+
+    /**
+     * Verify that an expected WifiConfiguration will be returned for a Passpoint provider
+     * with a user credential.
+     *
+     * @throws Exception
+     */
+    @Test
+    public void matchOtherPartnersDomainName() throws Exception {
+        // Setup test provider.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.USER, false);
+
+        // Configuration was created with TEST_FQDN as the FQDN, add TEST_FQDN3 as other home
+        // partner.
+        HomeSp homeSp = config.getHomeSp();
+        homeSp.setOtherHomePartners(new String [] {TEST_FQDN3});
+        config.setHomeSp(homeSp);
+        mProvider = createProvider(config);
+
+        // Setup Domain Name ANQP element to TEST_FQDN2 and TEST_FQDN3
+        Map<ANQPElementType, ANQPElement> anqpElementMap = new HashMap<>();
+        anqpElementMap.put(ANQPElementType.ANQPDomName,
+                createDomainNameElement(new String[] {TEST_FQDN2, TEST_FQDN3}));
+
+        assertEquals(PasspointMatch.HomeProvider,
+                mProvider.match(anqpElementMap, mRoamingConsortium));
+    }
+
+    /**
+     * Verify that matching Any HomeOI results in a Home Provider match
+     *
+     * @throws Exception
+     */
+    @Test
+    public void matchAnyHomeOi() throws Exception {
+        // Setup test provider.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.USER, false);
+        Long[] anqpOis = new Long[] {0x1234L, 0xdeadL, 0xf0cdL};
+
+        // Configuration was created with TEST_FQDN as the FQDN
+        HomeSp homeSp = config.getHomeSp();
+        homeSp.setMatchAnyOis(TEST_RC_OIS);
+        homeSp.setRoamingConsortiumOis(null);
+        config.setHomeSp(homeSp);
+        mProvider = createProvider(config);
+
+        // Setup Domain Name ANQP element to TEST_FQDN2 and TEST_FQDN3
+        Map<ANQPElementType, ANQPElement> anqpElementMap = new HashMap<>();
+        anqpElementMap.put(ANQPElementType.ANQPDomName,
+                createDomainNameElement(new String[] {TEST_FQDN2, TEST_FQDN3}));
+        // Setup RCOIs advertised by the AP
+        anqpElementMap.put(ANQPElementType.ANQPRoamingConsortium,
+                createRoamingConsortiumElement(anqpOis));
+
+        assertEquals(PasspointMatch.HomeProvider,
+                mProvider.match(anqpElementMap, mRoamingConsortium));
+    }
+
+    /**
+     * Verify that non-matching Any HomeOI results in a None Provider match
+     *
+     * @throws Exception
+     */
+    @Test
+    public void matchAnyHomeOiNegative() throws Exception {
+        // Setup test provider.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.USER, false);
+        Long[] anqpOis = new Long[] {0x12a4L, 0xceadL, 0xf0cdL};
+
+        // Configuration was created with TEST_FQDN as the FQDN
+        HomeSp homeSp = config.getHomeSp();
+        homeSp.setMatchAnyOis(TEST_RC_OIS);
+        homeSp.setRoamingConsortiumOis(null);
+        config.setHomeSp(homeSp);
+        mProvider = createProvider(config);
+
+        // Setup Domain Name ANQP element to TEST_FQDN2 and TEST_FQDN3
+        Map<ANQPElementType, ANQPElement> anqpElementMap = new HashMap<>();
+        anqpElementMap.put(ANQPElementType.ANQPDomName,
+                createDomainNameElement(new String[] {TEST_FQDN2, TEST_FQDN3}));
+        // Setup RCOIs advertised by the AP
+        anqpElementMap.put(ANQPElementType.ANQPRoamingConsortium,
+                createRoamingConsortiumElement(anqpOis));
+
+        assertEquals(PasspointMatch.None,
+                mProvider.match(anqpElementMap, mRoamingConsortium));
+    }
+
+    /**
+     * Verify that matching All HomeOI results in a Home Provider match
+     *
+     * @throws Exception
+     */
+    @Test
+    public void matchAllHomeOi() throws Exception {
+        // Setup test provider.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.USER, false);
+        Long[] anqpOis = new Long[] {0x1234L, 0x2345L, 0xabcdL, 0xdeadL, 0xf0cdL};
+
+        // Configuration was created with TEST_FQDN as the FQDN
+        HomeSp homeSp = config.getHomeSp();
+        homeSp.setMatchAllOis(TEST_RC_OIS);
+        homeSp.setRoamingConsortiumOis(null);
+        config.setHomeSp(homeSp);
+        mProvider = createProvider(config);
+
+        // Setup Domain Name ANQP element to TEST_FQDN2 and TEST_FQDN3
+        Map<ANQPElementType, ANQPElement> anqpElementMap = new HashMap<>();
+        anqpElementMap.put(ANQPElementType.ANQPDomName,
+                createDomainNameElement(new String[] {TEST_FQDN2, TEST_FQDN3}));
+        // Setup RCOIs advertised by the AP
+        anqpElementMap.put(ANQPElementType.ANQPRoamingConsortium,
+                createRoamingConsortiumElement(anqpOis));
+
+        assertEquals(PasspointMatch.HomeProvider,
+                mProvider.match(anqpElementMap, mRoamingConsortium));
+    }
+
+    /**
+     * Verify that non-matching All HomeOI results in a None Provider match
+     *
+     * @throws Exception
+     */
+    @Test
+    public void matchAllHomeOiNegative() throws Exception {
+        // Setup test provider.
+        PasspointConfiguration config = generateTestPasspointConfiguration(
+                CredentialType.USER, false);
+        // 0x1234 matches, but 0x2345 does not
+        Long[] anqpOis = new Long[] {0x1234L, 0x5678L, 0xdeadL, 0xf0cdL};
+
+        // Configuration was created with TEST_FQDN as the FQDN
+        HomeSp homeSp = config.getHomeSp();
+        homeSp.setMatchAllOis(TEST_RC_OIS);
+        homeSp.setRoamingConsortiumOis(null);
+        config.setHomeSp(homeSp);
+        mProvider = createProvider(config);
+
+        // Setup Domain Name ANQP element to TEST_FQDN2 and TEST_FQDN3
+        Map<ANQPElementType, ANQPElement> anqpElementMap = new HashMap<>();
+        anqpElementMap.put(ANQPElementType.ANQPDomName,
+                createDomainNameElement(new String[] {TEST_FQDN2, TEST_FQDN3}));
+        // Setup RCOIs advertised by the AP
+        anqpElementMap.put(ANQPElementType.ANQPRoamingConsortium,
+                createRoamingConsortiumElement(anqpOis));
+
+        assertEquals(PasspointMatch.None,
+                mProvider.match(anqpElementMap, mRoamingConsortium));
     }
 }
