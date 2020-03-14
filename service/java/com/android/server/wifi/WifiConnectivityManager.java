@@ -19,8 +19,10 @@ package com.android.server.wifi;
 import static com.android.internal.util.Preconditions.checkNotNull;
 import static com.android.server.wifi.ClientModeImpl.WIFI_WORK_SOURCE;
 
+import android.annotation.NonNull;
 import android.app.AlarmManager;
 import android.content.Context;
+import android.net.MacAddress;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
@@ -118,6 +120,7 @@ public class WifiConnectivityManager {
     public static final int MAX_CONNECTION_ATTEMPTS_TIME_INTERVAL_MS = 4 * 60 * 1000; // 4 mins
     // Max number of connection attempts in the above time interval.
     public static final int MAX_CONNECTION_ATTEMPTS_RATE = 6;
+    private static final int TEMP_BSSID_BLOCK_DURATION = 10 * 1000; // 10 seconds
 
     // ClientModeImpl has a bunch of states. From the
     // WifiConnectivityManager's perspective it only cares
@@ -188,6 +191,8 @@ public class WifiConnectivityManager {
     private int[] mConnectedSingleScanSchedule;
     private int[] mDisconnectedSingleScanSchedule;
     private int[] mConnectedSingleSavedNetworkSingleScanSchedule;
+    private List<WifiCandidates.Candidate> mLatestCandidates = null;
+    private long mLatestCandidatesTimestampMs = 0;
 
     private final Object mLock = new Object();
 
@@ -304,6 +309,8 @@ public class WifiConnectivityManager {
         mWifiChannelUtilization.refreshChannelStatsAndChannelUtilization(
                 mStateMachine.getWifiLinkLayerStats(), WifiChannelUtilization.UNKNOWN_FREQ);
 
+        updateUserDisabledList(scanDetails);
+
         // Check if any blocklisted BSSIDs can be freed.
         Set<String> bssidBlocklist = mBssidBlocklistMonitor.updateAndGetBssidBlocklist();
 
@@ -319,6 +326,8 @@ public class WifiConnectivityManager {
         List<WifiCandidates.Candidate> candidates = mNetworkSelector.getCandidatesFromScan(
                 scanDetails, bssidBlocklist, mWifiInfo, mStateMachine.isConnected(),
                 mStateMachine.isDisconnected(), mUntrustedConnectionAllowed);
+        mLatestCandidates = candidates;
+        mLatestCandidatesTimestampMs = mClock.getElapsedSinceBootMillis();
 
         if (mDeviceMobilityState == WifiManager.DEVICE_MOBILITY_STATE_HIGH_MVMT
                 && mContext.getResources().getBoolean(
@@ -361,6 +370,7 @@ public class WifiConnectivityManager {
             // cached candidates are too recent, wait for next scan
             if (mClock.getElapsedSinceBootMillis() - mCachedWifiCandidates.timeSinceBootMs
                     < minimumTimeBetweenScansMs) {
+                mWifiMetrics.incrementNumHighMovementConnectionSkipped();
                 return null;
             }
 
@@ -378,6 +388,7 @@ public class WifiConnectivityManager {
                             new CachedWifiCandidates(mClock.getElapsedSinceBootMillis(),
                             candidates);
                 }
+                mWifiMetrics.incrementNumHighMovementConnectionStarted();
                 return filteredCandidates;
             }
         }
@@ -391,7 +402,25 @@ public class WifiConnectivityManager {
                     + "Re-doing scan to confirm network quality.");
             scheduleDelayedPartialScan(minimumTimeBetweenScansMs);
         }
+        mWifiMetrics.incrementNumHighMovementConnectionSkipped();
         return null;
+    }
+
+    private void updateUserDisabledList(List<ScanDetail> scanDetails) {
+        List<String> results = new ArrayList<>();
+        List<ScanResult> passpointAp = new ArrayList<>();
+        for (ScanDetail scanDetail : scanDetails) {
+            results.add(ScanResultUtil.createQuotedSSID(scanDetail.getScanResult().SSID));
+            if (!scanDetail.getScanResult().isPasspointNetwork()) {
+                continue;
+            }
+            passpointAp.add(scanDetail.getScanResult());
+        }
+        if (!passpointAp.isEmpty()) {
+            results.addAll(new ArrayList<>(mWifiInjector.getPasspointManager()
+                    .getAllMatchingPasspointProfilesForScanResults(passpointAp).keySet()));
+        }
+        mConfigManager.updateUserDisabledList(results);
     }
 
     /**
@@ -1576,15 +1605,52 @@ public class WifiConnectivityManager {
      * Handler when a WiFi connection attempt ended.
      *
      * @param failureCode {@link WifiMetrics.ConnectionEvent} failure code.
+     * @param bssid the failed network.
+     * @param ssid identifies the failed network.
      */
-    public void handleConnectionAttemptEnded(int failureCode) {
+    public void handleConnectionAttemptEnded(int failureCode, @NonNull String bssid,
+            @NonNull String ssid) {
         if (failureCode == WifiMetrics.ConnectionEvent.FAILURE_NONE) {
-            String ssid = (mWifiInfo.getWifiSsid() == null)
+            String ssidUnquoted = (mWifiInfo.getWifiSsid() == null)
                     ? null
                     : mWifiInfo.getWifiSsid().toString();
-            mOpenNetworkNotifier.handleWifiConnected(ssid);
+            mOpenNetworkNotifier.handleWifiConnected(ssidUnquoted);
         } else {
             mOpenNetworkNotifier.handleConnectionFailure();
+            retryConnectionOnLatestCandidates(bssid, ssid);
+        }
+    }
+
+    private void retryConnectionOnLatestCandidates(String bssid, String ssid) {
+        try {
+            if (mLatestCandidates == null || mLatestCandidates.size() == 0
+                    || mClock.getElapsedSinceBootMillis() - mLatestCandidatesTimestampMs
+                    > TEMP_BSSID_BLOCK_DURATION) {
+                mLatestCandidates = null;
+                return;
+            }
+            MacAddress macAddress = MacAddress.fromString(bssid);
+            int prevNumCandidates = mLatestCandidates.size();
+            mLatestCandidates = mLatestCandidates.stream()
+                    .filter(candidate -> !macAddress.equals(candidate.getKey().bssid))
+                    .collect(Collectors.toList());
+            if (prevNumCandidates == mLatestCandidates.size()) {
+                return;
+            }
+            WifiConfiguration candidate = mNetworkSelector.selectNetwork(mLatestCandidates);
+            if (candidate != null) {
+                localLog("Automatic retry on the next best WNS candidate-" + candidate.SSID);
+                // Make sure that the failed BSSID is blocked for at least TEMP_BSSID_BLOCK_DURATION
+                // to prevent the supplicant from trying it again.
+                mBssidBlocklistMonitor.blockBssidForDurationMs(bssid, ssid,
+                        TEMP_BSSID_BLOCK_DURATION);
+                connectToNetwork(candidate);
+            }
+        } catch (IllegalArgumentException e) {
+            localLog("retryConnectionOnLatestCandidates: failed to create MacAddress from bssid="
+                    + bssid);
+            mLatestCandidates = null;
+            return;
         }
     }
 
@@ -1697,6 +1763,8 @@ public class WifiConnectivityManager {
         }
 
         mRunning = true;
+        mLatestCandidates = null;
+        mLatestCandidatesTimestampMs = 0;
     }
 
     /**
@@ -1710,6 +1778,8 @@ public class WifiConnectivityManager {
         mOpenNetworkNotifier.clearPendingNotification(true /* resetRepeatDelay */);
         mLastConnectionAttemptBssid = null;
         mWaitForFullBandScanResults = false;
+        mLatestCandidates = null;
+        mLatestCandidatesTimestampMs = 0;
     }
 
     /**

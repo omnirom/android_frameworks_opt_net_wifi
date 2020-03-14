@@ -3155,10 +3155,10 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
-     * Disable an ephemeral network, i.e. network that is created thru a WiFi Scorer
+     * Temporarily disable a network, should be trigger when user disconnect a network
      */
     @Override
-    public void disableEphemeralNetwork(String SSID, String packageName) {
+    public void disableEphemeralNetwork(String network, String packageName) {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.CHANGE_WIFI_STATE,
                 "WifiService");
         if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())) {
@@ -3167,7 +3167,7 @@ public class WifiServiceImpl extends BaseWifiService {
             return;
         }
         mLog.info("disableEphemeralNetwork uid=%").c(Binder.getCallingUid()).flush();
-        mWifiThreadRunner.post(() -> mWifiConfigManager.disableEphemeralNetwork(SSID));
+        mWifiThreadRunner.post(() -> mWifiConfigManager.userTemporarilyDisabledNetwork(network));
     }
 
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
@@ -3370,6 +3370,7 @@ public class WifiServiceImpl extends BaseWifiService {
             mWifiThreadRunner.run(() -> {
                 mWifiInjector.getWifiNetworkScoreCache().dumpWithLatestScanResults(
                         fd, pw, args, mScanRequestProxy.getScanResults());
+                mWifiInjector.getSettingsConfigStore().dump(fd, pw, args);
             });
             pw.println();
         }
@@ -3520,7 +3521,7 @@ public class WifiServiceImpl extends BaseWifiService {
         }
         mWifiThreadRunner.post(() -> {
             mPasspointManager.clearAnqpRequestsAndFlushCache();
-            mWifiConfigManager.clearDeletedEphemeralNetworks();
+            mWifiConfigManager.clearUserTemporarilyDisabledList();
             mWifiConfigManager.removeAllEphemeralOrPasspointConfiguredNetworks();
             mClientModeImpl.clearNetworkRequestUserApprovedAccessPoints();
             mWifiNetworkSuggestionsManager.clear();

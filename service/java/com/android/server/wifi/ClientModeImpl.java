@@ -2846,6 +2846,7 @@ public class ClientModeImpl extends StateMachine {
         mLastSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         mLastSimBasedConnectionCarrierName = null;
         mWifiScoreCard.resetConnectionState();
+        mWifiDataStall.reset();
         updateL2KeyAndGroupHint();
     }
 
@@ -3061,17 +3062,14 @@ public class ClientModeImpl extends StateMachine {
             configuration = getTargetWifiConfiguration();
         }
 
+        String bssid = mLastBssid == null ? mTargetBssid : mLastBssid;
+        String ssid = mWifiInfo.getSSID();
+        if (WifiManager.UNKNOWN_SSID.equals(ssid)) {
+            ssid = getTargetSsid();
+        }
         if (level2FailureCode != WifiMetrics.ConnectionEvent.FAILURE_NONE) {
-
             int blocklistReason = convertToBssidBlocklistMonitorFailureReason(
                     level2FailureCode, level2FailureReason);
-
-            String bssid = mLastBssid == null ? mTargetBssid : mLastBssid;
-            String ssid = mWifiInfo.getSSID();
-            if (WifiManager.UNKNOWN_SSID.equals(ssid)) {
-                ssid = getTargetSsid();
-            }
-
             if (blocklistReason != -1) {
                 int networkId = (configuration == null) ? WifiConfiguration.INVALID_NETWORK_ID
                         : configuration.networkId;
@@ -3112,7 +3110,7 @@ public class ClientModeImpl extends StateMachine {
 
         mWifiMetrics.endConnectionEvent(level2FailureCode, connectivityFailureCode,
                 level2FailureReason);
-        mWifiConnectivityManager.handleConnectionAttemptEnded(level2FailureCode);
+        mWifiConnectivityManager.handleConnectionAttemptEnded(level2FailureCode, bssid, ssid);
         if (configuration != null) {
             mNetworkFactory.handleConnectionAttemptEnded(level2FailureCode, configuration);
             mWifiNetworkSuggestionsManager.handleConnectionAttemptEnded(
@@ -3892,6 +3890,7 @@ public class ClientModeImpl extends StateMachine {
             mWifiMetrics.logStaEvent(StaEvent.TYPE_WIFI_ENABLED);
             mWifiScoreCard.noteSupplicantStateChanged(mWifiInfo);
             mWifiHealthMonitor.setWifiEnabled(true);
+            mWifiDataStall.init();
         }
 
         @Override
@@ -3914,6 +3913,7 @@ public class ClientModeImpl extends StateMachine {
             mWifiInfo.setSupplicantState(SupplicantState.DISCONNECTED);
             mWifiScoreCard.noteSupplicantStateChanged(mWifiInfo);
             mWifiHealthMonitor.setWifiEnabled(false);
+            mWifiDataStall.reset();
             stopClientMode();
         }
 
@@ -6673,6 +6673,7 @@ public class ClientModeImpl extends StateMachine {
                 result = new NetworkUpdateResult(netId);
             }
             final int networkId = result.getNetworkId();
+            mWifiConfigManager.userEnabledNetwork(networkId);
             if (!mWifiConfigManager.enableNetwork(networkId, true, callingUid, null)
                     || !mWifiConfigManager.updateLastConnectUid(networkId, callingUid)) {
                 logi("connect Allowing uid " + callingUid
