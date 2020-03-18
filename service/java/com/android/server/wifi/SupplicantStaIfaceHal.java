@@ -55,6 +55,7 @@ import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
+import android.net.wifi.WifiAnnotations.WifiStandard;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiSsid;
 import android.net.wifi.WifiDppConfig;
@@ -141,6 +142,7 @@ public class SupplicantStaIfaceHal {
     private final Handler mEventHandler;
     private DppEventCallback mDppCallback = null;
     private final Clock mClock;
+    private final WifiMetrics mWifiMetrics;
 
     private final IServiceNotification mServiceNotificationCallback =
             new IServiceNotification.Stub() {
@@ -204,12 +206,13 @@ public class SupplicantStaIfaceHal {
 
     public SupplicantStaIfaceHal(Context context, WifiMonitor monitor,
                                  FrameworkFacade frameworkFacade, Handler handler,
-                                 Clock clock) {
+                                 Clock clock, WifiMetrics wifiMetrics) {
         mContext = context;
         mWifiMonitor = monitor;
         mFrameworkFacade = frameworkFacade;
         mEventHandler = handler;
         mClock = clock;
+        mWifiMetrics = wifiMetrics;
 
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mSupplicantDeathRecipient = new SupplicantDeathRecipient();
@@ -1283,8 +1286,8 @@ public class SupplicantStaIfaceHal {
             if (pmkData != null
                     && pmkData.expirationTimeInSec > mClock.getElapsedSinceBootMillis() / 1000) {
                 logi("Set PMK cache for config id " + config.networkId);
-                if (!networkHandle.setPmkCache(pmkData.data)) {
-                    loge("Set PMK cache failed.");
+                if (networkHandle.setPmkCache(pmkData.data)) {
+                    mWifiMetrics.setConnectionPmkCache(true);
                 }
             }
 
@@ -3434,7 +3437,7 @@ public class SupplicantStaIfaceHal {
         return featureSet;
     }
 
-    private @ScanResult.WifiStandard int getWifiStandardFromCap(ConnectionCapabilities capa) {
+    private @WifiStandard int getWifiStandardFromCap(ConnectionCapabilities capa) {
         switch(capa.technology) {
             case WifiTechnology.HE:
                 return ScanResult.WIFI_STANDARD_11AX;

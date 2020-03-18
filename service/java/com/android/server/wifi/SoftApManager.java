@@ -795,7 +795,7 @@ public class SoftApManager implements ActiveModeManager {
                     cancelTimeoutMessage();
                     return;
                 }
-                int timeout = mApConfig.getSoftApConfiguration().getShutdownTimeoutMillis();
+                long timeout = mApConfig.getSoftApConfiguration().getShutdownTimeoutMillis();
                 if (timeout == 0) {
                     timeout =  mContext.getResources().getInteger(
                             R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds);
