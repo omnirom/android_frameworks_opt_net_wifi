@@ -440,6 +440,9 @@ public class WifiMetrics {
     // Connection duration stats collected while link layer stats reports are on
     private final ConnectionDurationStats mConnectionDurationStats = new ConnectionDurationStats();
 
+    // Wi-Fi off metrics
+    private final WifiOffMetrics mWifiOffMetrics = new WifiOffMetrics();
+
     @VisibleForTesting
     static class NetworkSelectionExperimentResults {
         public static final int MAX_CHOICES = 10;
@@ -478,6 +481,10 @@ public class WifiMetrics {
                 sb.append(", mAuthPhase2Method=" + mRouterFingerPrintProto.authPhase2Method);
                 sb.append(", mOcspType=" + mRouterFingerPrintProto.ocspType);
                 sb.append(", mPmkCache=" + mRouterFingerPrintProto.pmkCacheEnabled);
+                sb.append(", mMaxSupportedTxLinkSpeedMbps=" + mRouterFingerPrintProto
+                        .maxSupportedTxLinkSpeedMbps);
+                sb.append(", mMaxSupportedRxLinkSpeedMbps=" + mRouterFingerPrintProto
+                        .maxSupportedRxLinkSpeedMbps);
             }
             return sb.toString();
         }
@@ -534,6 +541,14 @@ public class WifiMetrics {
         public void setPmkCache(boolean isEnabled) {
             synchronized (mLock) {
                 mRouterFingerPrintProto.pmkCacheEnabled = isEnabled;
+            }
+        }
+
+        public void setMaxSupportedLinkSpeedMbps(int maxSupportedTxLinkSpeedMbps,
+                int maxSupportedRxLinkSpeedMbps) {
+            synchronized (mLock) {
+                mRouterFingerPrintProto.maxSupportedTxLinkSpeedMbps = maxSupportedTxLinkSpeedMbps;
+                mRouterFingerPrintProto.maxSupportedRxLinkSpeedMbps = maxSupportedRxLinkSpeedMbps;
             }
         }
     }
@@ -944,6 +959,44 @@ public class WifiMetrics {
         }
     }
 
+    class WifiOffMetrics {
+        public int numWifiOff = 0;
+        public int numWifiOffDeferring = 0;
+        public int numWifiOffDeferringTimeout = 0;
+        public final IntCounter wifiOffDeferringTimeHistogram = new IntCounter();
+
+        public WifiMetricsProto.WifiOffMetrics toProto() {
+            WifiMetricsProto.WifiOffMetrics proto =
+                    new WifiMetricsProto.WifiOffMetrics();
+            proto.numWifiOff = numWifiOff;
+            proto.numWifiOffDeferring = numWifiOffDeferring;
+            proto.numWifiOffDeferringTimeout = numWifiOffDeferringTimeout;
+            proto.wifiOffDeferringTimeHistogram = wifiOffDeferringTimeHistogram.toProto();
+            return proto;
+        }
+
+        public void clear() {
+            numWifiOff = 0;
+            numWifiOffDeferring = 0;
+            numWifiOffDeferringTimeout = 0;
+            wifiOffDeferringTimeHistogram.clear();
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("numWifiOff=")
+                    .append(numWifiOff)
+                    .append(", numWifiOffDeferring=")
+                    .append(numWifiOffDeferring)
+                    .append(", numWifiOffDeferringTimeout=")
+                    .append(numWifiOffDeferringTimeout)
+                    .append(", wifiOffDeferringTimeHistogram=")
+                    .append(wifiOffDeferringTimeHistogram);
+            return sb.toString();
+        }
+    }
+
     public WifiMetrics(Context context, FrameworkFacade facade, Clock clock, Looper looper,
             WifiAwareMetrics awareMetrics, RttMetrics rttMetrics,
             WifiPowerMetrics wifiPowerMetrics, WifiP2pMetrics wifiP2pMetrics,
@@ -1315,6 +1368,19 @@ public class WifiMetrics {
         synchronized (mLock) {
             if (mCurrentConnectionEvent != null) {
                 mCurrentConnectionEvent.mRouterFingerPrint.setPmkCache(isEnabled);
+            }
+        }
+    }
+
+    /**
+     * Set the max link speed supported by current network
+     */
+    public void setConnectionMaxSupportedLinkSpeedMbps(int maxSupportedTxLinkSpeedMbps,
+            int maxSupportedRxLinkSpeedMbps) {
+        synchronized (mLock) {
+            if (mCurrentConnectionEvent != null) {
+                mCurrentConnectionEvent.mRouterFingerPrint.setMaxSupportedLinkSpeedMbps(
+                        maxSupportedTxLinkSpeedMbps, maxSupportedRxLinkSpeedMbps);
             }
         }
     }
@@ -3141,6 +3207,10 @@ public class WifiMetrics {
                         + mWifiLogProto.numIpRenewalFailure);
                 pw.println("mWifiLogProto.connectionDurationStats="
                         + mConnectionDurationStats.toString());
+                pw.println("mWifiLogProto.isExternalWifiScorerOn="
+                        + mWifiLogProto.isExternalWifiScorerOn);
+                pw.println("mWifiLogProto.wifiOffMetrics="
+                        + mWifiOffMetrics.toString());
             }
         }
     }
@@ -3710,6 +3780,7 @@ public class WifiMetrics {
             }
             mWifiLogProto.bssidBlocklistStats = mBssidBlocklistStats.toProto();
             mWifiLogProto.connectionDurationStats = mConnectionDurationStats.toProto();
+            mWifiLogProto.wifiOffMetrics = mWifiOffMetrics.toProto();
         }
     }
 
@@ -3906,6 +3977,8 @@ public class WifiMetrics {
             mNumProvisionSuccess = 0;
             mBssidBlocklistStats = new BssidBlocklistStats();
             mConnectionDurationStats.clear();
+            mWifiLogProto.isExternalWifiScorerOn = false;
+            mWifiOffMetrics.clear();
 
         }
     }
@@ -5488,6 +5561,31 @@ public class WifiMetrics {
         synchronized (mLock) {
             mConnectionDurationStats.incrementDurationCount(timeDeltaLastTwoPollsMs,
                     isThroughputSufficient, isCellularDataAvailable);
+        }
+    }
+
+    /**
+     * Sets the status to indicate whether external WiFi connected network scorer is present or not.
+     */
+    public void setIsExternalWifiScorerOn(boolean value) {
+        synchronized (mLock) {
+            mWifiLogProto.isExternalWifiScorerOn = value;
+        }
+    }
+
+    /**
+     * Note Wi-Fi off metrics
+     */
+    public void noteWifiOff(boolean isDeferred, boolean isTimeout, int duration) {
+        synchronized (mLock) {
+            mWifiOffMetrics.numWifiOff++;
+            if (isDeferred) {
+                mWifiOffMetrics.numWifiOffDeferring++;
+                if (isTimeout) {
+                    mWifiOffMetrics.numWifiOffDeferringTimeout++;
+                }
+                mWifiOffMetrics.wifiOffDeferringTimeHistogram.increment(duration);
+            }
         }
     }
 }

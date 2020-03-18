@@ -459,21 +459,17 @@ public class HostapdHal {
                     mContext.getResources().getBoolean(
                             R.bool.config_wifi_softap_ieee80211ac_supported);
             int band;
-            if (mForceApChannel) {
-                ifaceParams.channelParams.enableAcs = false;
-                ifaceParams.channelParams.channel = mForcedApChannel;
-                band = mForcedApBand;
-            } else if (ApConfigUtil.isAcsSupported(mContext)) {
+            boolean enableAcs = ApConfigUtil.isAcsSupported(mContext) && config.getChannel() == 0
+                    && !mForceApChannel;
+            if (enableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
                 if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
                 }
-                band = config.getBand();
-            } else {
-                ifaceParams.channelParams.enableAcs = false;
-                ifaceParams.channelParams.channel = config.getChannel();
-                band = config.getBand();
             }
+            ifaceParams.channelParams.channel =
+                    mForceApChannel ? mForcedApChannel : config.getChannel();
+            band = mForceApChannel ? mForcedApBand : config.getBand();
 
             android.hardware.wifi.hostapd.V1_2.IHostapd.NetworkParams nwParamsV1_2 =
                     prepareNetworkParams(config);
