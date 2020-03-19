@@ -31,8 +31,6 @@ import android.util.Log;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl.P2pStatus;
 import com.android.server.wifi.util.NativeUtil;
 
-import libcore.util.HexEncoding;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -629,8 +627,7 @@ class SupplicantVendorP2pIfaceCallback extends ISupplicantVendorP2PIfaceCallback
         }
 
         try {
-            device.primaryDeviceType = new String(HexEncoding.encode(
-                    primaryDeviceType, 0, primaryDeviceType.length));
+            device.primaryDeviceType = NativeUtil.wpsDevTypeStringFromByteArray(primaryDeviceType);
         } catch (Exception e) {
             Log.e(TAG, "Could not encode device primary type.", e);
             return;
