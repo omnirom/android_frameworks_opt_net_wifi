@@ -71,8 +71,6 @@ public class HostapdHal {
     private boolean mVerboseLoggingEnabled = false;
     private final Context mContext;
     private final Handler mEventHandler;
-    private final List<vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.AcsChannelRange>
-            mVendorAcsChannelRanges;
     private String mCountryCode = null;
     private boolean mForceApChannel = false;
     private int mForcedApBand;
@@ -153,15 +151,6 @@ public class HostapdHal {
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mHostapdDeathRecipient = new HostapdDeathRecipient();
         mHostapdVendorDeathRecipient = new HostapdVendorDeathRecipient();
-
-        // TODO(b/148559350): Update based on configured bands
-        mVendorAcsChannelRanges = new ArrayList<>();
-        mVendorAcsChannelRanges.addAll(
-                toVendorAcsChannelRanges(mContext.getResources().getString(
-                    R.string.config_wifiSoftap2gChannelList)));
-        mVendorAcsChannelRanges.addAll(
-                toVendorAcsChannelRanges(mContext.getResources().getString(
-                    R.string.config_wifiSoftap5gChannelList)));
     }
 
     /**
@@ -1221,20 +1210,12 @@ public class HostapdHal {
                 Log.e(TAG, "Unrecognized apBand " + config.getBand());
                 return false;
             }
-            if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
+            if (ApConfigUtil.isAcsSupported(mContext)) {
                 ifaceParams.channelParams.enableAcs = true;
                 if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
                     ifaceParams.channelParams.acsShouldExcludeDfs = true;
                 }
             } else {
-                // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
-                // is not supported.
-                // We should remove this workaround once channel selection is moved from
-                // ApConfigUtil to here.
-                if (ifaceParams.channelParams.band == IHostapd.Band.BAND_ANY) {
-                    Log.d(TAG, "ACS is not supported on this device, using 2.4 GHz band.");
-                    ifaceParams.channelParams.band = IHostapd.Band.BAND_2_4_GHZ;
-                }
                 ifaceParams.channelParams.enableAcs = false;
                 ifaceParams.channelParams.channel = config.getChannel();
             }
@@ -1267,8 +1248,17 @@ public class HostapdHal {
                     vendorIfaceParams1_1.vendorChannelParams.channelParams = ifaceParams.channelParams;
                     vendorIfaceParams1_1.vendorEncryptionType = getVendorEncryptionType(config);
                     vendorIfaceParams1_1.oweTransIfaceName = (config.getOweTransIfaceName() != null) ? config.getOweTransIfaceName() : "";
-                    if (mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported)) {
-                        vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(mVendorAcsChannelRanges);
+                    if (ifaceParams.channelParams.enableAcs) {
+                        if ((config.getBand() & SoftApConfiguration.BAND_2GHZ) != 0) {
+                            vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(
+                                    toVendorAcsChannelRanges(mContext.getResources().getString(
+                                        R.string.config_wifiSoftap2gChannelList)));
+                        }
+                        if ((config.getBand() & SoftApConfiguration.BAND_5GHZ) != 0) {
+                            vendorIfaceParams1_1.vendorChannelParams.acsChannelRanges.addAll(
+                                    toVendorAcsChannelRanges(mContext.getResources().getString(
+                                        R.string.config_wifiSoftap5gChannelList)));
+                        }
                     }
                     HostapdStatus status =
                         iHostapdVendorV1_1.addVendorAccessPoint_1_1(vendorIfaceParams1_1, nwParams);
