@@ -100,7 +100,6 @@ public class WifiApConfigStore {
     }
 
     // Dual SAP config
-    private String mBridgeInterfaceName = null;
     private boolean mDualSapStatus = false;
 
     private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
@@ -132,15 +131,16 @@ public class WifiApConfigStore {
             Log.wtf(TAG, "Failed to obtain secret for SAP MAC randomization."
                     + " All randomized MAC addresses are lost!");
         }
-
-        mBridgeInterfaceName = SystemProperties
-                .get("persist.vendor.wifi.softap.bridge.interface", "wifi_br0");
     }
 
    /* Additional APIs(get/set) to support SAP + SAP Feature */
 
     public synchronized String getBridgeInterface() {
-        return mBridgeInterfaceName;
+        String bridgeInterfaceName = mContext.getResources()
+                   .getString(R.string.config_vendor_wifi_tether_bridge_interface_name);
+        if (bridgeInterfaceName == null || TextUtils.isEmpty(bridgeInterfaceName))
+            return "wifi_br0"; // Return default value
+        return bridgeInterfaceName;
     }
 
     public synchronized boolean getDualSapStatus() {
