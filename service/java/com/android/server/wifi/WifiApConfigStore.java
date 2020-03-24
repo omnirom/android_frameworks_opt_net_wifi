@@ -218,7 +218,9 @@ public class WifiApConfigStore {
 
         // some countries are unable to support 5GHz only operation, always allow for 2GHz when
         // config doesn't force channel
-        if (config.getChannel() == 0 && (config.getBand() & SoftApConfiguration.BAND_2GHZ) == 0) {
+        // Do not explicitly mark 2G support when BOTH 2G+5G band is requested in DBS mode.
+        if (config.getChannel() == 0 && ((config.getBand() & SoftApConfiguration.BAND_2GHZ) == 0)
+                && (config.getBand() != SoftApConfiguration.BAND_DUAL)) {
             Log.w(TAG, "Supplied ap config band without 2.4G, add allowing for 2.4GHz");
             if (convertedConfigBuilder == null) {
                 convertedConfigBuilder = new SoftApConfiguration.Builder(config);

@@ -969,6 +969,15 @@ public class WifiServiceImpl extends BaseWifiService {
             }
         }
 
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_DUAL)
+                && !is5GhzBandSupportedInternal()
+                && (!is6GhzBandSupportedInternal()
+                       || !mContext.getResources().getBoolean(
+                               R.bool.config_wifiSoftap6ghzSupported))) {
+            mLog.err("Can not start softAp with Dual band, not supported.").flush();
+            return false;
+        }
+
         return true;
     }
 
@@ -4188,7 +4197,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (apConfig == null)
             apConfig = mWifiApConfigStore.getApConfiguration();
 
-        if (apConfig.getBand() == SoftApConfiguration.BAND_ANY
+        if (apConfig.getBand() == SoftApConfiguration.BAND_DUAL
                 || apConfig.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_OWE) {
             mLog.trace("setDualSapMode uid=%").c(Binder.getCallingUid()).flush();
             mWifiApConfigStore.setDualSapStatus(true);

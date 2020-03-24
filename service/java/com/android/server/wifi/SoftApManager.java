@@ -418,10 +418,10 @@ public class SoftApManager implements ActiveModeManager {
 
         boolean acsEnabled = mCurrentSoftApCapability.areFeaturesSupported(
                 SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD);
-
         result = ApConfigUtil.updateApChannelConfig(
                 mWifiNative, mContext.getResources(), mCountryCode, localConfigBuilder, config,
                 acsEnabled);
+
         if (result != SUCCESS) {
             Log.e(TAG, "Failed to update AP band and channel");
             return result;
@@ -558,6 +558,18 @@ public class SoftApManager implements ActiveModeManager {
             public void onDown(String ifaceName) { }
         };
 
+        /* Utility API to generate a temporary MAC for 2nd interface when starting Softap on 2 interfaces.
+         * This flips the last bit of MAC address which was assigned to 1st interface.
+         */
+        private SoftApConfiguration randomizeMacOnSecondInterface(SoftApConfiguration config) {
+            if (config.getBssid() == null) return config;
+            byte[] macBytes = config.getBssid().toByteArray();
+            macBytes[5] ^= 1;
+            MacAddress mac = MacAddress.fromBytes(macBytes);
+
+            return new SoftApConfiguration.Builder(config).setBssid(mac).build();
+        }
+
         private boolean validateDualSapSetupResult(int result) {
             if (result != SUCCESS) {
                 int failureReason = WifiManager.SAP_START_FAILURE_GENERAL;
@@ -569,6 +581,7 @@ public class SoftApManager implements ActiveModeManager {
                               failureReason);
                 stopSoftAp();
                 mWifiMetrics.incrementSoftApStartResult(false, failureReason);
+                mModeListener.onStartFailure();
                 return false;
             }
             if (!mWifiNative.setHostapdParams("softap bridge up " +mApInterfaceName)) {
@@ -599,6 +612,7 @@ public class SoftApManager implements ActiveModeManager {
                         WifiManager.SAP_START_FAILURE_GENERAL);
                 mWifiMetrics.incrementSoftApStartResult(false,
                         WifiManager.SAP_START_FAILURE_GENERAL);
+                mModeListener.onStartFailure();
                 return false;
             }
             mDataInterfaceName = mWifiNative.getFstDataInterfaceName();
@@ -629,6 +643,7 @@ public class SoftApManager implements ActiveModeManager {
             int result = startSoftAp();
             if (result == SUCCESS) {
                 localConfig = configBuilder.setBand(SoftApConfiguration.BAND_5GHZ).build();
+                localConfig = randomizeMacOnSecondInterface(localConfig);
                 mApInterfaceName = mdualApInterfaces[1];
                 mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), localConfig,
                         mCurrentSoftApCapability);
@@ -669,6 +684,7 @@ public class SoftApManager implements ActiveModeManager {
                 openConfigBuilder.setOweTransIfaceName(mdualApInterfaces[0]);
                 openConfigBuilder.setPassphrase(null, SoftApConfiguration.SECURITY_TYPE_OPEN);
                 SoftApConfiguration openConfig = openConfigBuilder.build();
+                openConfig = randomizeMacOnSecondInterface(openConfig);
                 mApConfig = new SoftApModeConfiguration(mApConfig.getTargetMode(), openConfig,
                         mCurrentSoftApCapability);
                 result = startSoftAp();
@@ -703,7 +719,9 @@ public class SoftApManager implements ActiveModeManager {
                 switch (message.what) {
                     case CMD_START:
                         SoftApConfiguration config = (SoftApConfiguration) message.obj;
-                        if (config != null && config.getBand() == SoftApConfiguration.BAND_ANY) {
+                        if (config == null)
+                            config = mApConfig.getSoftApConfiguration();
+                        if (config != null && config.getBand() == SoftApConfiguration.BAND_DUAL) {
                             if (!setupForDualBandSoftApMode(config)) {
                                 Log.d(TAG, "Dual band sap start failed");
                                 break;
