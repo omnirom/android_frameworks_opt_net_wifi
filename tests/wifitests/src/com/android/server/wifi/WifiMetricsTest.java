@@ -452,6 +452,8 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final boolean IS_MAC_RANDOMIZATION_ON = true;
     private static final int NUM_LINK_SPEED_LEVELS_TO_INCREMENT = 30;
     private static final int TEST_RSSI_LEVEL = -80;
+    private static final int MAX_SUPPORTED_TX_LINK_SPEED_MBPS = 144;
+    private static final int MAX_SUPPORTED_RX_LINK_SPEED_MBPS = 190;
 
     private ScanDetail buildMockScanDetail(boolean hidden, NetworkDetail.HSRelease hSRelease,
             String capabilities) {
@@ -2514,6 +2516,26 @@ public class WifiMetricsTest extends WifiBaseTest {
     }
 
     /**
+     * Check max supported link speed
+     */
+    @Test
+    public void testConnectionMaxSupportedLinkSpeed() throws Exception {
+        mWifiMetrics.startConnectionEvent(mTestWifiConfig, "TestNetwork",
+                WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE);
+        mWifiMetrics.setConnectionMaxSupportedLinkSpeedMbps(MAX_SUPPORTED_TX_LINK_SPEED_MBPS,
+                MAX_SUPPORTED_RX_LINK_SPEED_MBPS);
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_NONE,
+                WifiMetricsProto.ConnectionEvent.HLF_NONE,
+                WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
+        dumpProtoAndDeserialize();
+        assertEquals(MAX_SUPPORTED_TX_LINK_SPEED_MBPS, mDecodedProto.connectionEvent[0]
+                .routerFingerprint.maxSupportedTxLinkSpeedMbps);
+        assertEquals(MAX_SUPPORTED_RX_LINK_SPEED_MBPS, mDecodedProto.connectionEvent[0]
+                .routerFingerprint.maxSupportedRxLinkSpeedMbps);
+    }
+
+    /**
      * Check ScoringParams
      */
     @Test
@@ -4350,5 +4372,52 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.connectionDurationStats.totalTimeInsufficientThroughputMs);
         assertEquals(3000,
                 mDecodedProto.connectionDurationStats.totalTimeCellularDataOffMs);
+    }
+
+    /**
+     * Test the logging of isExternalWifiScorerOn
+     */
+    @Test
+    public void testIsExternalWifiScorerOn() throws Exception {
+        mWifiMetrics.setIsExternalWifiScorerOn(true);
+        dumpProtoAndDeserialize();
+        assertEquals(true, mDecodedProto.isExternalWifiScorerOn);
+    }
+
+    /*
+     * Test the logging of Wi-Fi off
+     */
+    @Test
+    public void testWifiOff() throws Exception {
+        // if not deferred, timeout and duration should be ignored.
+        mWifiMetrics.noteWifiOff(false, false, 0);
+        mWifiMetrics.noteWifiOff(false, true, 999);
+
+        // deferred, not timed out
+        mWifiMetrics.noteWifiOff(true, false, 0);
+        mWifiMetrics.noteWifiOff(true, false, 1000);
+
+        // deferred and timed out
+        mWifiMetrics.noteWifiOff(true, true, 2000);
+        mWifiMetrics.noteWifiOff(true, true, 2000);
+        mWifiMetrics.noteWifiOff(true, true, 4000);
+
+        dumpProtoAndDeserialize();
+
+        assertEquals(7,
+                mDecodedProto.wifiOffMetrics.numWifiOff);
+        assertEquals(5,
+                mDecodedProto.wifiOffMetrics.numWifiOffDeferring);
+        assertEquals(3,
+                mDecodedProto.wifiOffMetrics.numWifiOffDeferringTimeout);
+
+        Int32Count[] expectedHistogram = {
+                buildInt32Count(0, 1),
+                buildInt32Count(1000, 1),
+                buildInt32Count(2000, 2),
+                buildInt32Count(4000, 1),
+        };
+        assertKeyCountsEqual(expectedHistogram,
+                mDecodedProto.wifiOffMetrics.wifiOffDeferringTimeHistogram);
     }
 }

@@ -283,7 +283,6 @@ public class WifiNetworkSuggestionsManager {
         public WifiConfiguration createInternalWifiConfiguration() {
             WifiConfiguration config = new WifiConfiguration(wns.getWifiConfiguration());
             config.allowAutojoin = isAutojoinEnabled;
-            config.trusted = !wns.isNetworkUntrusted;
             return config;
         }
     }
@@ -852,7 +851,7 @@ public class WifiNetworkSuggestionsManager {
                 // Install Passpoint config, if failure, ignore that suggestion
                 if (!mWifiInjector.getPasspointManager().addOrUpdateProvider(
                         ewns.wns.passpointConfiguration, uid,
-                        packageName, true, !ewns.wns.isNetworkUntrusted)) {
+                        packageName, true, !ewns.wns.isUntrusted())) {
                     Log.e(TAG, "Passpoint profile install failure for FQDN: "
                             + ewns.wns.wifiConfiguration.FQDN);
                     continue;
@@ -1179,11 +1178,7 @@ public class WifiNetworkSuggestionsManager {
                 WifiConfiguration network = mWifiConfigManager
                         .getConfiguredNetwork(ewns.wns.getWifiConfiguration().getKey());
                 if (network == null) {
-                    network = new WifiConfiguration(ewns.wns.getWifiConfiguration());
-                    network.ephemeral = true;
-                    network.fromWifiNetworkSuggestion = true;
-                    network.allowAutojoin = ewns.isAutojoinEnabled;
-                    network.trusted = !ewns.wns.isNetworkUntrusted;
+                    network = ewns.createInternalWifiConfiguration();
                 }
                 networks.add(network);
             }
@@ -1586,6 +1581,10 @@ public class WifiNetworkSuggestionsManager {
      * Check if the given passpoint suggestion has user approval and allow user manually connect.
      */
     public boolean isPasspointSuggestionSharedWithUser(WifiConfiguration config) {
+        if (WifiConfiguration.isMetered(config, null)
+                && mTelephonyUtil.isCarrierNetworkFromNonDefaultDataSim(config)) {
+            return false;
+        }
         Set<ExtendedWifiNetworkSuggestion> extendedWifiNetworkSuggestions =
                 getNetworkSuggestionsForFqdnMatch(config.FQDN);
         Set<ExtendedWifiNetworkSuggestion> matchedSuggestions =

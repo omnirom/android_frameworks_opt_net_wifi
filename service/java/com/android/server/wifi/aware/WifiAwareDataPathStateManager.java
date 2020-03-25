@@ -682,7 +682,7 @@ public class WifiAwareDataPathStateManager {
 
             mAwareMetrics.recordNdpStatus(NanStatusType.SUCCESS, isOutOfBand, nnri.startTimestamp);
             nnri.startTimestamp = mClock.getElapsedSinceBootMillis(); // update time-stamp
-            mAwareMetrics.recordNdpCreation(nnri.uid, mNetworkRequestsCache);
+            mAwareMetrics.recordNdpCreation(nnri.uid, nnri.packageName, mNetworkRequestsCache);
         } else {
             if (mClock.getElapsedSinceBootMillis() - nnri.startValidationTimestamp
                     > ADDRESS_VALIDATION_TIMEOUT_MS) {
@@ -1170,6 +1170,7 @@ public class WifiAwareDataPathStateManager {
         public int state;
 
         public int uid;
+        public String packageName;
         public String interfaceName;
         public int pubSubId = 0;
         public int peerInstanceId = 0;
@@ -1241,6 +1242,7 @@ public class WifiAwareDataPathStateManager {
                 boolean allowNdpResponderFromAnyOverride) {
             int uid, pubSubId = 0;
             int peerInstanceId = 0;
+            String packageName = null;
             byte[] peerMac = ns.peerMac;
 
             if (VDBG || mVerboseLoggingEnabled) {
@@ -1280,6 +1282,7 @@ public class WifiAwareDataPathStateManager {
                 return null;
             }
             uid = client.getUid();
+            packageName = client.getCallingPackage();
 
             // API change post 27: no longer allow "ANY"-style responders (initiators were never
             // permitted).
@@ -1360,10 +1363,12 @@ public class WifiAwareDataPathStateManager {
                 }
             }
 
-            // validate UID
-            if (request.getRequestorUid() != uid) {
+            // validate UID && package name
+            if (request.getRequestorUid() != uid
+                    || !TextUtils.equals(request.getRequestorPackageName(), packageName)) {
                 Log.e(TAG, "processNetworkSpecifier: networkSpecifier=" + ns.toString()
-                        + " -- UID mismatch to clientId's uid=" + uid);
+                        + " -- UID or package name mismatch to clientId's uid=" + uid
+                        + ", packageName=" + packageName);
                 return null;
             }
 
@@ -1385,6 +1390,7 @@ public class WifiAwareDataPathStateManager {
             AwareNetworkRequestInformation nnri = new AwareNetworkRequestInformation();
             nnri.state = AwareNetworkRequestInformation.STATE_IDLE;
             nnri.uid = uid;
+            nnri.packageName = packageName;
             nnri.pubSubId = pubSubId;
             nnri.peerInstanceId = peerInstanceId;
             nnri.peerDiscoveryMac = peerMac;
@@ -1397,8 +1403,10 @@ public class WifiAwareDataPathStateManager {
         @Override
         public String toString() {
             StringBuilder sb = new StringBuilder("AwareNetworkRequestInformation: ");
-            sb.append("state=").append(state).append(", ns=").append(networkSpecifier).append(
-                    ", uid=").append(uid).append(", interfaceName=").append(interfaceName).append(
+            sb.append("state=").append(state).append(", ns=").append(networkSpecifier)
+                    .append(", uid=").append(uid)
+                    .append(", packageName=").append(packageName)
+                    .append(", interfaceName=").append(interfaceName).append(
                     ", pubSubId=").append(pubSubId).append(", peerInstanceId=").append(
                     peerInstanceId).append(", peerDiscoveryMac=").append(
                     peerDiscoveryMac == null ? ""
@@ -1510,6 +1518,7 @@ public class WifiAwareDataPathStateManager {
             }
 
             networkCapabilities.setRequestorUid(nnri.uid);
+            networkCapabilities.setRequestorPackageName(nnri.packageName);
             networkCapabilities.setNetworkSpecifier(new WifiAwareAgentNetworkSpecifier(
                     networkRequests.stream()
                             .map(NetworkRequest::getNetworkSpecifier)

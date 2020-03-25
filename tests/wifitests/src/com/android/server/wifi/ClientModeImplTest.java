@@ -1032,6 +1032,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiLockManager).updateWifiClientConnected(true);
         verify(mWifiNative).getConnectionCapabilities(any());
         verify(mThroughputPredictor).predictMaxTxThroughput(any());
+        verify(mWifiMetrics).setConnectionMaxSupportedLinkSpeedMbps(90, 80);
         verify(mWifiDataStall).setConnectionCapabilities(any());
         assertEquals(90, wifiInfo.getMaxSupportedTxLinkSpeedMbps());
     }
@@ -3511,16 +3512,37 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mBssidBlocklistMonitor).handleNetworkValidationSuccess(sBSSID, sSSID);
     }
 
+    private void connectWithValidInitRssi(int initRssiDbm) throws Exception {
+        triggerConnect();
+        mCmi.getWifiInfo().setRssi(initRssiDbm);
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.ASSOCIATED));
+        mLooper.dispatchAll();
+
+        mCmi.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.COMPLETED));
+        mLooper.dispatchAll();
+
+        assertEquals("ObtainingIpState", getCurrentState().getName());
+    }
+
     /**
      * Verify that we set the INTERNET and bandwidth capability in the network agent when connected
-     * as a result of auto-join/legacy API's .
+     * as a result of auto-join/legacy API's. Also verify up/down stream bandwidth values when
+     * Rx link speed is unavailable.
      */
     @Test
     public void verifyNetworkCapabilities() throws Exception {
+        when(mWifiDataStall.getTxThroughputKbps()).thenReturn(70_000);
+        when(mWifiDataStall.getRxThroughputKbps()).thenReturn(-1);
         when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
                 .thenReturn(Pair.create(Process.INVALID_UID, ""));
         // Simulate the first connection.
-        connect();
+        connectWithValidInitRssi(-42);
+
         ArgumentCaptor<NetworkCapabilities> networkCapabilitiesCaptor =
                 ArgumentCaptor.forClass(NetworkCapabilities.class);
         verify(mConnectivityManager).registerNetworkAgent(any(Messenger.class),
@@ -3536,22 +3558,29 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertNull(networkCapabilities.getNetworkSpecifier());
 
         assertEquals(mConnectedNetwork.creatorUid, networkCapabilities.getOwnerUid());
+        assertEquals(
+                Arrays.asList(mConnectedNetwork.creatorUid),
+                networkCapabilities.getAdministratorUids());
 
         // Should set bandwidth correctly
-        assertEquals(90_000, networkCapabilities.getLinkUpstreamBandwidthKbps());
-        assertEquals(80_000, networkCapabilities.getLinkDownstreamBandwidthKbps());
+        assertEquals(-42, mCmi.getWifiInfo().getRssi());
+        assertEquals(70_000, networkCapabilities.getLinkUpstreamBandwidthKbps());
+        assertEquals(70_000, networkCapabilities.getLinkDownstreamBandwidthKbps());
     }
 
     /**
      * Verify that we don't set the INTERNET capability in the network agent when connected
-     * as a result of the new network request API.
+     * as a result of the new network request API. Also verify up/down stream bandwidth values
+     * when both Tx and Rx link speed are unavailable.
      */
     @Test
     public void verifyNetworkCapabilitiesForSpecificRequest() throws Exception {
+        when(mWifiDataStall.getTxThroughputKbps()).thenReturn(-1);
+        when(mWifiDataStall.getRxThroughputKbps()).thenReturn(-1);
         when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
                 .thenReturn(Pair.create(TEST_UID, OP_PACKAGE_NAME));
         // Simulate the first connection.
-        connect();
+        connectWithValidInitRssi(-42);
         ArgumentCaptor<NetworkCapabilities> networkCapabilitiesCaptor =
                 ArgumentCaptor.forClass(NetworkCapabilities.class);
         verify(mConnectivityManager).registerNetworkAgent(any(Messenger.class),
@@ -3574,6 +3603,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertEquals(expectedWifiNetworkAgentSpecifier, wifiNetworkAgentSpecifier);
         assertEquals(TEST_UID, networkCapabilities.getRequestorUid());
         assertEquals(OP_PACKAGE_NAME, networkCapabilities.getRequestorPackageName());
+        assertEquals(90_000, networkCapabilities.getLinkUpstreamBandwidthKbps());
+        assertEquals(80_000, networkCapabilities.getLinkDownstreamBandwidthKbps());
     }
 
     /**
