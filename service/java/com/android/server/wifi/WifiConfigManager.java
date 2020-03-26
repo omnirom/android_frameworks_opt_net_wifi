@@ -52,6 +52,7 @@ import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.MissingCounterTimerLockList;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -234,6 +235,8 @@ public class WifiConfigManager {
     private final MacAddressUtil mMacAddressUtil;
     private final TelephonyUtil mTelephonyUtil;
     private final WifiScoreCard mWifiScoreCard;
+    // Keep order of network connection.
+    private final LruConnectionTracker mLruConnectionTracker;
 
     /**
      * Local log used for debugging any WifiConfigManager issues.
@@ -255,7 +258,6 @@ public class WifiConfigManager {
      * Also when user manfully select to connect network will unblock that network.
      */
     private final MissingCounterTimerLockList<String> mUserTemporarilyDisabledList;
-
 
     /**
      * Framework keeps a mapping from configKey to the randomized MAC address so that
@@ -331,7 +333,8 @@ public class WifiConfigManager {
             NetworkListUserStoreData networkListUserStoreData,
             RandomizedMacStoreData randomizedMacStoreData,
             FrameworkFacade frameworkFacade, Handler handler,
-            DeviceConfigFacade deviceConfigFacade, WifiScoreCard wifiScoreCard) {
+            DeviceConfigFacade deviceConfigFacade, WifiScoreCard wifiScoreCard,
+            LruConnectionTracker lruConnectionTracker) {
         mContext = context;
         mClock = clock;
         mUserManager = userManager;
@@ -365,6 +368,7 @@ public class WifiConfigManager {
         mLocalLog = new LocalLog(
                 context.getSystemService(ActivityManager.class).isLowRamDevice() ? 128 : 256);
         mMacAddressUtil = mWifiInjector.getMacAddressUtil();
+        mLruConnectionTracker = lruConnectionTracker;
     }
 
     /**
@@ -1450,6 +1454,9 @@ public class WifiConfigManager {
         if (networkId == mLastSelectedNetworkId) {
             clearLastSelectedNetwork();
         }
+        if (!config.ephemeral && !config.isPasspoint()) {
+            mLruConnectionTracker.removeNetwork(config);
+        }
         sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_REMOVED);
         // Unless the removed network is ephemeral or Passpoint, persist the network removal.
         if (!config.ephemeral && !config.isPasspoint()) {
@@ -1973,6 +1980,11 @@ public class WifiConfigManager {
         WifiConfiguration config = getInternalConfiguredNetwork(networkId);
         if (config == null) {
             return false;
+        }
+
+        // Only record connection order for non-passpoint from user saved or suggestion.
+        if (!config.isPasspoint() && (config.fromWifiNetworkSuggestion || !config.ephemeral)) {
+            mLruConnectionTracker.addNetwork(config);
         }
         config.lastConnected = mClock.getWallClockMillis();
         config.numAssociation++;
@@ -3140,6 +3152,10 @@ public class WifiConfigManager {
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Failed to add network to config map", e);
             }
+
+            if (configuration.isMostRecentlyConnected) {
+                mLruConnectionTracker.addNetwork(configuration);
+            }
         }
     }
 
@@ -3311,6 +3327,9 @@ public class WifiConfigManager {
                 continue;
             }
 
+            config.isMostRecentlyConnected =
+                    mLruConnectionTracker.isMostRecentlyConnected(config);
+
             // We push all shared networks & private networks not belonging to the current
             // user to the shared store. Ideally, private networks for other users should
             // not even be in memory,
@@ -3459,5 +3478,4 @@ public class WifiConfigManager {
         }
         return scanMaxRssi;
     }
-
 }
