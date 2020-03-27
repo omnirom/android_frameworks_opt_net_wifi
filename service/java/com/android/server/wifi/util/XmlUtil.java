@@ -866,6 +866,9 @@ public class XmlUtil {
                     writeStaticIpConfigurationToXml(
                             out, ipConfiguration.getStaticIpConfiguration());
                     break;
+                case DHCP:
+                case UNASSIGNED:
+                    break;
                 default:
                     Log.w(TAG, "Ignoring unknown ip assignment type: "
                             + ipConfiguration.getIpAssignment());
@@ -893,6 +896,9 @@ public class XmlUtil {
                     XmlUtil.writeNextValue(
                             out, XML_TAG_PROXY_PAC_FILE,
                             ipConfiguration.getHttpProxy().getPacFileUrl().toString());
+                    break;
+                case NONE:
+                case UNASSIGNED:
                     break;
                 default:
                     Log.w(TAG, "Ignoring unknown proxy settings type: "

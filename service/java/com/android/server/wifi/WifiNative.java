@@ -1595,16 +1595,6 @@ public class WifiNative {
     }
 
     /**
-     * Fetch TX packet counters on current connection from wificond.
-     * @param ifaceName Name of the interface.
-     * Returns an TxPacketCounters object.
-     * Returns null on failure.
-     */
-    public WifiNl80211Manager.TxPacketCounters getTxPacketCounters(@NonNull String ifaceName) {
-        return mWifiCondManager.getTxPacketCounters(ifaceName);
-    }
-
-    /**
      * Query the list of valid frequencies for the provided band.
      * The result depends on the on the country code that has been set.
      *
@@ -1779,6 +1769,7 @@ public class WifiNative {
      * @return true on success.
      */
     public boolean startPnoScan(@NonNull String ifaceName, PnoSettings pnoSettings) {
+        removeAllNetworks(ifaceName);
         return mWifiCondManager.startPnoScan(ifaceName, pnoSettings.toNativePnoSettings(),
                 Runnable::run,
                 new WifiNl80211Manager.PnoScanRequestCallback() {
