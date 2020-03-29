@@ -894,6 +894,7 @@ public class InformationElementUtil {
      * by wpa_supplicant.
      */
     public static class Capabilities {
+        private static final int CAP_VHT_8SS_OFFSET = 224; //(0xEO)
         private static final int WPA_VENDOR_OUI_TYPE_ONE = 0x01f25000;
         private static final int WPS_VENDOR_OUI_TYPE = 0x04f25000;
         private static final short WPA_VENDOR_OUI_VERSION = 0x0001;
@@ -936,12 +937,8 @@ public class InformationElementUtil {
         public boolean isIBSS;
         public boolean isPrivacy;
         public boolean isWPS;
-        public boolean isHt;
-        public boolean isVht;
         public boolean isHe;
-        public boolean reportHt;
-        public boolean reportVht;
-        public boolean reportHe;
+        public boolean isVht8ss;
 
         public Capabilities() {
         }
@@ -1251,15 +1248,12 @@ public class InformationElementUtil {
                     }
                 }
 
-                if (ie.id == InformationElement.EID_HT_CAPABILITIES) {
-                    isHt = true;
-                } else if (ie.id == InformationElement.EID_VHT_CAPABILITIES) {
-                    isVht = true;
-                } else if (ie.id == InformationElement.EID_EXTENSION_PRESENT &&
-                      ie.bytes != null && ie.bytes.length > 0 &&
-                      ((ie.bytes[0] & 0xFF) == InformationElement.EID_EXT_HE_CAPABILITIES)) {
+                if (ie.id == InformationElement.EID_VHT_CAPABILITIES && ie.bytes != null &&
+                    ie.bytes.length > 0 && ((ie.bytes[1] & CAP_VHT_8SS_OFFSET) == CAP_VHT_8SS_OFFSET)) {
+                    isVht8ss = true;
+                } else if (ie.id == InformationElement.EID_EXTENSION_PRESENT && ie.bytes != null &&
+                           ie.bytes.length > 0 &&  ((ie.bytes[0] & 0xFF) == InformationElement.EID_EXT_HE_CAPABILITIES))
                     isHe = true;
-                }
             }
         }
 
@@ -1381,14 +1375,8 @@ public class InformationElementUtil {
             if (isWPS) {
                 capabilities.append("[WPS]");
             }
-            if (reportHt && isHt) {
-                capabilities.append("[WFA-HT]");
-            }
-            if (reportVht && isVht) {
-                capabilities.append("[WFA-VHT]");
-            }
-            if (reportHe && isHe) {
-                capabilities.append("[WFA-HE]");
+            if (isVht8ss && isHe) {
+                capabilities.append("[WFA-HE-READY]");
             }
 
             return capabilities.toString();

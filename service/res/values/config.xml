@@ -420,4 +420,7 @@
 
     <!-- Do not translate. Default bridge interface name for Dual SAP tethering -->
     <string name="config_vendor_wifi_tether_bridge_interface_name" translatable="false">wifi_br0</string>
+
+    <!-- Boolean to provide support to keep wifi5 symbol for 8SS supported device and 11ax AP -->
+    <bool translatable="false" name="config_vendorWifi11axReadySupport">true</bool>
 </resources>
