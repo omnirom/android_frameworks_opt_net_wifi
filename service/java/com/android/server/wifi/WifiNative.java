@@ -589,11 +589,7 @@ public class WifiNative {
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
-            if (mHostapdHal.isVendorHostapdHal()) {
-                if (!mHostapdHal.removeVendorAccessPoint(iface.name)) {
-                    Log.e(TAG, "Failed to remove vendor access point on " + iface);
-                }
-            } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
+            if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
             if (!mWifiCondManager.tearDownSoftApInterface(iface.name)) {
