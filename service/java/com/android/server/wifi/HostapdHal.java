@@ -29,6 +29,7 @@ import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApConfiguration.BandType;
 import android.net.wifi.WifiManager;
+import android.net.wifi.nl80211.NativeWifiClient;
 import android.os.Handler;
 import android.os.IHwBinder.DeathRecipient;
 import android.os.RemoteException;
@@ -1460,14 +1461,18 @@ public class HostapdHal {
 
         @Override
         public void onStaConnected(byte[/* 6 */] bssid) {
-                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
-                mSoftApListener.onStaConnected(bssidStr);
+            if (bssid == null) return;
+            NativeWifiClient client = new NativeWifiClient(MacAddress.fromBytes(bssid));
+            Log.d(TAG, "Client " + client.getMacAddress() + " connected.");
+            mSoftApListener.onConnectedClientsChanged(client, true);
         }
 
         @Override
         public void onStaDisconnected(byte[/* 6 */] bssid) {
-                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
-                mSoftApListener.onStaDisconnected(bssidStr);
+            if (bssid == null) return;
+            NativeWifiClient client = new NativeWifiClient(MacAddress.fromBytes(bssid));
+            Log.d(TAG, "Client " + client.getMacAddress() + " disconnected.");
+            mSoftApListener.onConnectedClientsChanged(client, false);
         }
     }
 
@@ -1497,14 +1502,18 @@ public class HostapdHal {
 
         @Override
         public void onStaConnected(byte[/* 6 */] bssid) {
-                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
-                mSoftApListener.onStaConnected(bssidStr);
+            if (bssid == null) return;
+            NativeWifiClient client = new NativeWifiClient(MacAddress.fromBytes(bssid));
+            Log.d(TAG, "Client " + client.getMacAddress() + " connected.");
+            mSoftApListener.onConnectedClientsChanged(client, true);
         }
 
         @Override
         public void onStaDisconnected(byte[/* 6 */] bssid) {
-                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
-                mSoftApListener.onStaDisconnected(bssidStr);
+            if (bssid == null) return;
+            NativeWifiClient client = new NativeWifiClient(MacAddress.fromBytes(bssid));
+            Log.d(TAG, "Client " + client.getMacAddress() + " disconnected.");
+            mSoftApListener.onConnectedClientsChanged(client, false);
         }
         @Override
         public void onFailure(String ifaceName) {
