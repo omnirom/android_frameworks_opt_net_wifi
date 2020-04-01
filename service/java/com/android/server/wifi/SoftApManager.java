@@ -119,11 +119,15 @@ public class SoftApManager implements ActiveModeManager {
 
     private String mStartTimestamp;
 
+    private long mDefaultShutDownTimeoutMills;
+
     private static final SimpleDateFormat FORMATTER = new SimpleDateFormat("MM-dd HH:mm:ss.SSS");
 
     private BaseWifiDiagnostics mWifiDiagnostics;
 
     private @Role int mRole = ROLE_UNSPECIFIED;
+
+    private boolean mEverReportMetricsForMaxClient = false;
 
     @NonNull
     private Set<MacAddress> mBlockedClientList = new HashSet<>();
@@ -214,6 +218,8 @@ public class SoftApManager implements ActiveModeManager {
             mAllowedClientList = new HashSet<>(softApConfig.getAllowedClientList());
             mTimeoutEnabled = softApConfig.isAutoShutdownEnabled();
         }
+        mDefaultShutDownTimeoutMills = mContext.getResources().getInteger(
+                R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds);
     }
 
     /**
@@ -501,6 +507,11 @@ public class SoftApManager implements ActiveModeManager {
                     WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
             mSoftApCallback.onBlockedClientConnecting(newClient,
                     WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
+            // Avoid report the max client blocked in the same settings.
+            if (!mEverReportMetricsForMaxClient) {
+                mWifiMetrics.noteSoftApClientBlocked(maxConfig);
+                mEverReportMetricsForMaxClient = true;
+            }
             return false;
         }
         return true;
@@ -797,8 +808,7 @@ public class SoftApManager implements ActiveModeManager {
                 }
                 long timeout = mApConfig.getSoftApConfiguration().getShutdownTimeoutMillis();
                 if (timeout == 0) {
-                    timeout =  mContext.getResources().getInteger(
-                            R.integer.config_wifiFrameworkSoftApShutDownTimeoutMilliseconds);
+                    timeout =  mDefaultShutDownTimeoutMills;
                 }
                 mSoftApTimeoutMessage.schedule(SystemClock.elapsedRealtime()
                         + timeout);
@@ -985,7 +995,14 @@ public class SoftApManager implements ActiveModeManager {
                     // the interface was up, but goes down
                     sendMessage(CMD_INTERFACE_DOWN);
                 }
-                mWifiMetrics.addSoftApUpChangedEvent(isUp, mApConfig.getTargetMode());
+                mWifiMetrics.addSoftApUpChangedEvent(isUp, mApConfig.getTargetMode(),
+                        mDefaultShutDownTimeoutMills);
+                if (isUp) {
+                    mWifiMetrics.updateSoftApConfiguration(mApConfig.getSoftApConfiguration(),
+                            mApConfig.getTargetMode());
+                    mWifiMetrics.updateSoftApCapability(mCurrentSoftApCapability,
+                            mApConfig.getTargetMode());
+                }
             }
 
             @Override
@@ -1004,6 +1021,7 @@ public class SoftApManager implements ActiveModeManager {
 
                 Log.d(TAG, "Resetting connected clients on start");
                 mConnectedClients.clear();
+                mEverReportMetricsForMaxClient = false;
                 mQCNumAssociatedStations = 0;
                 scheduleTimeoutMessage();
             }
@@ -1028,7 +1046,8 @@ public class SoftApManager implements ActiveModeManager {
 
                 // Need this here since we are exiting |Started| state and won't handle any
                 // future CMD_INTERFACE_STATUS_CHANGED events after this point
-                mWifiMetrics.addSoftApUpChangedEvent(false, mApConfig.getTargetMode());
+                mWifiMetrics.addSoftApUpChangedEvent(false, mApConfig.getTargetMode(),
+                        mDefaultShutDownTimeoutMills);
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLED,
                         WifiManager.WIFI_AP_STATE_DISABLING, 0);
 
@@ -1175,6 +1194,8 @@ public class SoftApManager implements ActiveModeManager {
                         if (mApConfig.getTargetMode() ==  WifiManager.IFACE_IP_MODE_TETHERED) {
                             SoftApCapability capability = (SoftApCapability) message.obj;
                             mCurrentSoftApCapability = new SoftApCapability(capability);
+                            mWifiMetrics.updateSoftApCapability(mCurrentSoftApCapability,
+                                    mApConfig.getTargetMode());
                             updateClientConnection();
                         }
                         break;
@@ -1190,6 +1211,11 @@ public class SoftApManager implements ActiveModeManager {
                         if (!ApConfigUtil.checkConfigurationChangeNeedToRestart(
                                 currentConfig, newConfig)) {
                             Log.d(TAG, "Configuration changed to " + newConfig);
+                            if (mApConfig.getSoftApConfiguration().getMaxNumberOfClients()
+                                    != newConfig.getMaxNumberOfClients()) {
+                                Log.d(TAG, "Max Client changed, reset to record the metrics");
+                                mEverReportMetricsForMaxClient = false;
+                            }
                             boolean needRescheduleTimer =
                                     mApConfig.getSoftApConfiguration().getShutdownTimeoutMillis()
                                     != newConfig.getShutdownTimeoutMillis()
@@ -1204,6 +1230,9 @@ public class SoftApManager implements ActiveModeManager {
                                 cancelTimeoutMessage();
                                 scheduleTimeoutMessage();
                             }
+                            mWifiMetrics.updateSoftApConfiguration(
+                                    mApConfig.getSoftApConfiguration(),
+                                    mApConfig.getTargetMode());
                         } else {
                             Log.d(TAG, "Ignore the config: " + newConfig
                                     + " update since it requires restart");
