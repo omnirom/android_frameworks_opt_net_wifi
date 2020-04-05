@@ -158,6 +158,7 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
     private static final int NOTIFICATION_TYPE_ON_DATA_PATH_CONFIRM = 310;
     private static final int NOTIFICATION_TYPE_ON_DATA_PATH_END = 311;
     private static final int NOTIFICATION_TYPE_ON_DATA_PATH_SCHED_UPDATE = 312;
+    private static final int NOTIFICATION_TYPE_DATA_PATH_CREATED = 313;
 
     private static final SparseArray<String> sSmToString = MessageUtils.findMessageNames(
             new Class[]{WifiAwareStateManager.class},
@@ -1027,6 +1028,7 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         mSm.sendMessage(msg);
     }
 
+
     /*
      * NOTIFICATIONS
      */
@@ -1186,6 +1188,13 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         msg.getData().putByteArray(MESSAGE_BUNDLE_KEY_MAC_ADDRESS, peerMac);
         msg.getData().putIntegerArrayList(MESSAGE_BUNDLE_KEY_NDP_IDS, ndpIds);
         msg.obj = channelInfo;
+        mSm.sendMessage(msg);
+    }
+
+    public void onDataPathCreationSucess(WifiAwareNetworkSpecifier specifier) {
+        Message msg = mSm.obtainMessage(MESSAGE_TYPE_NOTIFICATION,
+                        NOTIFICATION_TYPE_DATA_PATH_CREATED, 0,
+                         (java.lang.Object)specifier);
         mSm.sendMessage(msg);
     }
 
@@ -1523,6 +1532,20 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
                         }
                     }
 
+                    break;
+                }
+                case NOTIFICATION_TYPE_DATA_PATH_CREATED: {
+                    if (VDBG || mVerboseLoggingEnabled) Log.e(TAG,
+                                    "processNotification:  msg=" + msg);
+                    WifiAwareNetworkSpecifier networkSpecifier =
+                                (WifiAwareNetworkSpecifier)msg.obj;
+                    if (networkSpecifier != null) {
+                        WakeupMessage timeout = mDataPathConfirmTimeoutMessages.remove(
+                            networkSpecifier);
+                        if (timeout != null) {
+                            timeout.cancel();
+                        }
+                    }
                     break;
                 }
                 case NOTIFICATION_TYPE_ON_DATA_PATH_END:
