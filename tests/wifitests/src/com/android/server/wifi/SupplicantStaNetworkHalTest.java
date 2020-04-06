@@ -182,31 +182,6 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         verify(mISupplicantStaNetworkV12, never())
                 .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
                         .getSaePasswordCallback.class));
-        verify(mISupplicantStaNetworkV12, never()).setSaePasswordId(any(String.class));
-        verify(mISupplicantStaNetworkV12, never())
-                .getPskPassphrase(any(ISupplicantStaNetwork.getPskPassphraseCallback.class));
-        verify(mISupplicantStaNetworkV12, never()).setPsk(any(byte[].class));
-        verify(mISupplicantStaNetworkV12, never())
-                .getPsk(any(ISupplicantStaNetwork.getPskCallback.class));
-    }
-
-    /**
-     * Tests the saving/loading of WifiConfiguration to wpa_supplicant with SAE password identifier.
-     */
-    @Test
-    public void testSaePasswordIdNetworkWifiConfigurationSaveLoad() throws Exception {
-        // Now expose the V1.2 ISupplicantStaNetwork
-        mSupplicantNetwork = new SupplicantStaNetworkHalSpyV1_2(mISupplicantStaNetworkMock,
-                IFACE_NAME, mContext, mWifiMonitor);
-
-        WifiConfiguration config = WifiConfigurationTestUtil.createSaeNetwork();
-        config.saePasswordId = "TestIdentifier";
-        testWifiConfigurationSaveLoad(config);
-        verify(mISupplicantStaNetworkV12).setSaePassword(any(String.class));
-        verify(mISupplicantStaNetworkV12, never())
-                .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
-                        .getSaePasswordCallback.class));
-        verify(mISupplicantStaNetworkV12).setSaePasswordId(any(String.class));
         verify(mISupplicantStaNetworkV12, never())
                 .getPskPassphrase(any(ISupplicantStaNetwork.getPskPassphraseCallback.class));
         verify(mISupplicantStaNetworkV12, never()).setPsk(any(byte[].class));
@@ -384,6 +359,29 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         verify(mISupplicantStaNetworkV12, never()).setPsk(any(byte[].class));
         verify(mISupplicantStaNetworkV12, never())
                 .getPsk(any(ISupplicantStaNetwork.getPskCallback.class));
+    }
+
+    /**
+     * Tests the saving/loading of WifiConfiguration with FILS AKM
+     * to wpa_supplicant.
+     */
+    @Test
+    public void testTLSWifiEnterpriseConfigWithFilsEapErp() throws Exception {
+        // Now expose the V1.3 ISupplicantStaNetwork
+        createSupplicantStaNetwork(SupplicantStaNetworkVersion.V1_3);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createEapNetwork();
+        config.enterpriseConfig =
+                WifiConfigurationTestUtil.createTLSWifiEnterpriseConfigWithNonePhase2();
+        config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA256);
+        config.enterpriseConfig.setFieldValue(WifiEnterpriseConfig.EAP_ERP, "1");
+        testWifiConfigurationSaveLoad(config);
+        // Check the supplicant variables to ensure that we have added the FILS AKM.
+        assertTrue((mSupplicantVariables.keyMgmtMask & android.hardware.wifi.supplicant.V1_3
+                .ISupplicantStaNetwork.KeyMgmtMask.FILS_SHA256)
+                == android.hardware.wifi.supplicant.V1_3
+                .ISupplicantStaNetwork.KeyMgmtMask.FILS_SHA256);
+        verify(mISupplicantStaNetworkV13).setEapErp(eq(true));
     }
 
     /**
@@ -974,6 +972,14 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
                     Integer.parseInt(oppKeyCaching) == 1 ? true : false,
                     mSupplicantVariables.eapProactiveKeyCaching);
         }
+        // There is no getter for this one, so check the supplicant variable.
+        String eapErp =
+                config.enterpriseConfig.getFieldValue(WifiEnterpriseConfig.EAP_ERP);
+        if (!TextUtils.isEmpty(eapErp)) {
+            assertEquals(
+                    Integer.parseInt(eapErp) == 1 ? true : false,
+                    mSupplicantVariables.eapErp);
+        }
     }
 
     /**
@@ -1117,22 +1123,6 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         }).when(mISupplicantStaNetworkV12)
                 .getSaePassword(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
                         .getSaePasswordCallback.class));
-        /** SAE password identifier*/
-        doAnswer(new AnswerWithArguments() {
-            public SupplicantStatus answer(String saePasswordId) throws RemoteException {
-                mSupplicantVariables.saePasswordId = saePasswordId;
-                return mStatusSuccess;
-            }
-        }).when(mISupplicantStaNetworkV12).setSaePasswordId(any(String.class));
-        doAnswer(new AnswerWithArguments() {
-            public void answer(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
-                        .getSaePasswordIdCallback cb)
-                    throws RemoteException {
-                cb.onValues(mStatusSuccess, mSupplicantVariables.saePasswordId);
-            }
-        }).when(mISupplicantStaNetworkV12)
-                .getSaePasswordId(any(android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
-                        .getSaePasswordIdCallback.class));
 
         /** PSK passphrase */
         doAnswer(new AnswerWithArguments() {
@@ -1695,6 +1685,14 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         }).when(mISupplicantStaNetworkV13)
                 .getWapiCertSuite(any(android.hardware.wifi.supplicant.V1_3
                         .ISupplicantStaNetwork.getWapiCertSuiteCallback.class));
+
+        /** EAP ERP */
+        doAnswer(new AnswerWithArguments() {
+            public SupplicantStatus answer(boolean enable) throws RemoteException {
+                mSupplicantVariables.eapErp = enable;
+                return mStatusSuccess;
+            }
+        }).when(mISupplicantStaNetworkV13).setEapErp(any(boolean.class));
     }
 
     private SupplicantStatus createSupplicantStatus(int code) {
@@ -1739,7 +1737,6 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         public String idStr;
         public int updateIdentifier;
         public String pskPassphrase;
-        public String saePasswordId;
         public byte[] psk;
         public ArrayList<Byte>[] wepKey = new ArrayList[4];
         public int wepTxKeyIdx;
@@ -1761,5 +1758,6 @@ public class SupplicantStaNetworkHalTest extends WifiBaseTest {
         public int ocsp;
         public ArrayList<Byte> serializedPmkCache;
         public String wapiCertSuite;
+        public boolean eapErp;
     }
 }

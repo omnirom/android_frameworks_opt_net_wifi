@@ -408,8 +408,8 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
 
         assertTrue(connectableNetworks.isEmpty());
 
-        verify(mWifiConfigManager, times(scanSsids.length))
-                .wasEphemeralNetworkDeleted(anyString());
+        verify(mWifiConfigManager, times(suggestionSsids.length))
+                .isNetworkTemporarilyDisabledByUser(anyString());
         verify(mWifiConfigManager).getConfiguredNetwork(eq(
                 suggestions[0].wns.wifiConfiguration.getKey()));
         verify(mWifiConfigManager).addOrUpdateNetwork(any(), anyInt(), anyString());
@@ -466,8 +466,8 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
         validateConnectableNetworks(connectableNetworks, new String[] {scanSsids[0]});
 
         // check for any saved networks.
-        verify(mWifiConfigManager, times(scanSsids.length))
-                .wasEphemeralNetworkDeleted(anyString());
+        verify(mWifiConfigManager, times(suggestionSsids.length))
+                .isNetworkTemporarilyDisabledByUser(anyString());
         verify(mWifiConfigManager)
                 .getConfiguredNetwork(suggestions[0].wns.wifiConfiguration.getKey());
         verify(mWifiConfigManager).addOrUpdateNetwork(
@@ -513,7 +513,8 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
         // setup config manager interactions.
         setupAddToWifiConfigManager(suggestions[0].wns.wifiConfiguration);
         // Network was disabled by the user.
-        when(mWifiConfigManager.wasEphemeralNetworkDeleted(suggestionSsids[0])).thenReturn(true);
+        when(mWifiConfigManager.isNetworkTemporarilyDisabledByUser(suggestionSsids[0]))
+                .thenReturn(true);
 
         List<Pair<ScanDetail, WifiConfiguration>> connectableNetworks = new ArrayList<>();
         mNetworkSuggestionNominator.nominateNetworks(
@@ -523,10 +524,11 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
 
         assertTrue(connectableNetworks.isEmpty());
 
-        verify(mWifiConfigManager, times(scanSsids.length)).wasEphemeralNetworkDeleted(anyString());
-        // Verify we did not try to add any new networks or other interactions with
+        verify(mWifiConfigManager, times(suggestionSsids.length))
+                .isNetworkTemporarilyDisabledByUser(anyString());
+        // Verify we did try to add any new networks or other interactions with
         // WifiConfigManager.
-        verifyNoMoreInteractions(mWifiConfigManager);
+        verifyAddToWifiConfigManager(suggestions[0].wns.wifiConfiguration);
     }
 
     /**
@@ -580,8 +582,8 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
 
         assertTrue(connectableNetworks.isEmpty());
 
-        verify(mWifiConfigManager, times(scanSsids.length))
-                .wasEphemeralNetworkDeleted(anyString());
+        verify(mWifiConfigManager, times(suggestionSsids.length))
+                .isNetworkTemporarilyDisabledByUser(anyString());
         verify(mWifiConfigManager).getConfiguredNetwork(eq(
                 suggestions[0].wns.wifiConfiguration.getKey()));
         verify(mWifiConfigManager).addOrUpdateNetwork(
@@ -649,8 +651,8 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
 
         validateConnectableNetworks(connectableNetworks, new String[] {scanSsids[0]});
 
-        verify(mWifiConfigManager, times(scanSsids.length))
-                .wasEphemeralNetworkDeleted(anyString());
+        verify(mWifiConfigManager, times(suggestionSsids.length))
+                .isNetworkTemporarilyDisabledByUser(anyString());
         verify(mWifiConfigManager).getConfiguredNetwork(eq(
                 suggestions[0].wns.wifiConfiguration.getKey()));
         verify(mWifiConfigManager).addOrUpdateNetwork(
@@ -852,6 +854,93 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
         verifyAddToWifiConfigManager(suggestions[0].wns.wifiConfiguration);
     }
 
+    /**
+     * Ensure that we nominate the no matching network suggestion.
+     * Because the only matched suggestion is untrusted and untrusted is not allowed
+     * Expected connectable Networks: {}
+     */
+    @Test
+    public void testSelectNetworkSuggestionForOneMatchUntrustedNotAllow() {
+        String[] scanSsids = {"test1", "test2"};
+        String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
+        int[] freqs = {2470, 2437};
+        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        int[] levels = {-67, -76};
+        String[] suggestionSsids = {"\"" + scanSsids[0] + "\""};
+        int[] securities = {SECURITY_PSK};
+        boolean[] appInteractions = {true};
+        boolean[] meteredness = {true};
+        int[] priorities = {-1};
+        int[] uids = {TEST_UID};
+        String[] packageNames = {TEST_PACKAGE};
+        boolean[] autojoin = {true};
+        boolean[] shareWithUser = {true};
+
+        ScanDetail[] scanDetails =
+                buildScanDetails(scanSsids, bssids, freqs, caps, levels, mClock);
+        ExtendedWifiNetworkSuggestion[] suggestions = buildNetworkSuggestions(suggestionSsids,
+                securities, appInteractions, meteredness, priorities, uids,
+                packageNames, autojoin, shareWithUser);
+        suggestions[0].wns.wifiConfiguration.trusted = false;
+        // Link the scan result with suggestions.
+        linkScanDetailsWithNetworkSuggestions(scanDetails, suggestions);
+
+        List<Pair<ScanDetail, WifiConfiguration>> connectableNetworks = new ArrayList<>();
+        mNetworkSuggestionNominator.nominateNetworks(
+                Arrays.asList(scanDetails), null, null, true, false,
+                (ScanDetail scanDetail, WifiConfiguration configuration) -> {
+                    connectableNetworks.add(Pair.create(scanDetail, configuration));
+                });
+
+        assertTrue(connectableNetworks.isEmpty());
+    }
+
+    /**
+     * Ensure that we nominate the one matching network suggestion.
+     * Because the only matched suggestion is untrusted and untrusted is allowed
+     * Expected connectable Networks: {suggestionSsids[0]}
+     */
+    @Test
+    public void testSelectNetworkSuggestionForOneMatchUntrustedAllow() {
+        String[] scanSsids = {"test1", "test2"};
+        String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
+        int[] freqs = {2470, 2437};
+        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        int[] levels = {-67, -76};
+        String[] suggestionSsids = {"\"" + scanSsids[0] + "\""};
+        int[] securities = {SECURITY_PSK};
+        boolean[] appInteractions = {true};
+        boolean[] meteredness = {true};
+        int[] priorities = {-1};
+        int[] uids = {TEST_UID};
+        String[] packageNames = {TEST_PACKAGE};
+        boolean[] autojoin = {true};
+        boolean[] shareWithUser = {true};
+
+        ScanDetail[] scanDetails =
+                buildScanDetails(scanSsids, bssids, freqs, caps, levels, mClock);
+        ExtendedWifiNetworkSuggestion[] suggestions = buildNetworkSuggestions(suggestionSsids,
+                securities, appInteractions, meteredness, priorities, uids,
+                packageNames, autojoin, shareWithUser);
+        suggestions[0].wns.wifiConfiguration.trusted = false;
+        // Link the scan result with suggestions.
+        linkScanDetailsWithNetworkSuggestions(scanDetails, suggestions);
+
+        setupAddToWifiConfigManager(suggestions[0].wns.wifiConfiguration);
+
+        List<Pair<ScanDetail, WifiConfiguration>> connectableNetworks = new ArrayList<>();
+        mNetworkSuggestionNominator.nominateNetworks(
+                Arrays.asList(scanDetails), null, null, true, true,
+                (ScanDetail scanDetail, WifiConfiguration configuration) -> {
+                    connectableNetworks.add(Pair.create(scanDetail, configuration));
+                });
+
+
+        validateConnectableNetworks(connectableNetworks, scanSsids[0]);
+
+        verifyAddToWifiConfigManager(suggestions[0].wns.wifiConfiguration);
+    }
+
     private void setupAddToWifiConfigManager(WifiConfiguration...candidates) {
         for (int i = 0; i < candidates.length; i++) {
             WifiConfiguration candidate = candidates[i];
@@ -912,7 +1001,7 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
      * Build an array of scanDetails based on the caller supplied network SSID, BSSID,
      * frequency, capability and RSSI level information.
      */
-    public static ScanDetail[] buildScanDetails(String[] ssids, String[] bssids, int[] freqs,
+    private static ScanDetail[] buildScanDetails(String[] ssids, String[] bssids, int[] freqs,
                                                     String[] caps, int[] levels, Clock clock) {
         if (ssids == null || ssids.length == 0) return new ScanDetail[0];
 
@@ -929,7 +1018,7 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
      * Generate an array of {@link android.net.wifi.WifiConfiguration} based on the caller
      * supplied network SSID and security information.
      */
-    public static WifiConfiguration[] buildWifiConfigurations(String[] ssids, int[] securities) {
+    private static WifiConfiguration[] buildWifiConfigurations(String[] ssids, int[] securities) {
         if (ssids == null || ssids.length == 0) return new WifiConfiguration[0];
 
         WifiConfiguration[] configs = new WifiConfiguration[ssids.length];
@@ -953,6 +1042,9 @@ public class NetworkSuggestionNominatorTest extends WifiBaseTest {
             configs[i].meteredOverride = meteredness[i]
                     ? WifiConfiguration.METERED_OVERRIDE_METERED
                     : WifiConfiguration.METERED_OVERRIDE_NONE;
+            configs[i].creatorName = packageNames[i];
+            configs[i].ephemeral = true;
+            configs[i].fromWifiNetworkSuggestion = true;
             PerAppInfo perAppInfo = new PerAppInfo(uids[i], packageNames[i], null);
             WifiNetworkSuggestion suggestion =
                     new WifiNetworkSuggestion(configs[i], null, appInteractions[i], false,

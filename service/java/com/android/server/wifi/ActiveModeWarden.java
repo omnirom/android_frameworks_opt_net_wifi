@@ -74,7 +74,6 @@ public class ActiveModeWarden {
     private final BatteryStatsManager mBatteryStatsManager;
     private final ScanRequestProxy mScanRequestProxy;
     private final WifiController mWifiController;
-    private final WifiApConfigStore mWifiApConfigStore;
 
     private WifiManager.SoftApCallback mSoftApCallback;
     private WifiManager.SoftApCallback mLohsCallback;
@@ -121,7 +120,6 @@ public class ActiveModeWarden {
         mBatteryStatsManager = batteryStatsManager;
         mScanRequestProxy = wifiInjector.getScanRequestProxy();
         mWifiController = new WifiController();
-        mWifiApConfigStore = wifiInjector.getWifiApConfigStore();
 
         wifiNative.registerStatusListener(isReady -> {
             if (!isReady) {
@@ -626,6 +624,7 @@ public class ActiveModeWarden {
         private final DisabledState mDisabledState = new DisabledState();
 
         private QcStaDisablingState mQcStaDisablingState = new QcStaDisablingState();
+        private WifiApConfigStore mWifiApConfigStore;
 
         private boolean mIsInEmergencyCall = false;
         private boolean mIsInEmergencyCallbackMode = false;
@@ -651,6 +650,10 @@ public class ActiveModeWarden {
             boolean isWifiEnabled = mSettingsStore.isWifiToggleEnabled();
             boolean isScanningAlwaysAvailable = mSettingsStore.isScanAlwaysAvailable();
             boolean isLocationModeActive = mWifiPermissionsUtil.isLocationModeEnabled();
+
+            // Due to cyclic dependency of ActiveModeWarden and WifiApConfigStore, fetch
+            // WifiConfigStore object later during WifiController.start().
+            mWifiApConfigStore = mWifiInjector.getWifiApConfigStore();
 
             log("isAirplaneModeOn = " + isAirplaneModeOn
                     + ", isWifiEnabled = " + isWifiEnabled

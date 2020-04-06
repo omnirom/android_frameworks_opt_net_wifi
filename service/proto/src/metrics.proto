@@ -585,6 +585,18 @@ message WifiLog {
 
   // Connection duration under various health conditions
   optional ConnectionDurationStats connection_duration_stats = 160;
+
+  // Number of WAPI-Personal saved networks.
+  optional int32 num_wapi_personal_networks = 161;
+
+  // Number of WAPI-Enterprise saved networks.
+  optional int32 num_wapi_enterprise_networks = 162;
+
+  // Total number of scan results for WAPI-Personal networks
+  optional int32 num_wapi_personal_network_scan_results = 163;
+
+  // Total number of scan results for WAPI-Enterprise networks
+  optional int32 num_wapi_enterprise_network_scan_results = 164;
 }
 
 // Information that gets logged for every WiFi connection.
@@ -648,6 +660,81 @@ message RouterFingerPrint {
     ROUTER_TECH_AX = 7;
   }
 
+  enum EapMethod {
+
+    // No EAP method used
+    TYPE_EAP_UNKNOWN = 0;
+
+    // EAP with Transport Layer Security
+    TYPE_EAP_TLS = 1;
+
+    // EAP with Tunneled Transport Layer Security
+    TYPE_EAP_TTLS = 2;
+
+    // EAP with Subscriber Identity Module [RFC-4186]
+    TYPE_EAP_SIM = 3;
+
+    // EAP with Authentication and Key Agreement [RFC-4187]
+    TYPE_EAP_AKA = 4;
+
+    // EAP with Authentication and Key Agreement Prime [RFC-5448]
+    TYPE_EAP_AKA_PRIME = 5;
+
+    // Protected EAP
+    TYPE_EAP_PEAP = 6;
+
+    // EAP for Hotspot 2.0 r2 OSEN
+    TYPE_EAP_UNAUTH_TLS = 7;
+
+    // EAP with Password
+    TYPE_EAP_PWD = 8;
+
+    // EAP with WAPI certifcate
+    TYPE_EAP_WAPI_CERT = 9;
+  }
+
+  enum AuthPhase2Method {
+
+    // No phase2 method
+    TYPE_PHASE2_NONE = 0;
+
+    // Password Authentication Protocol
+    TYPE_PHASE2_PAP = 1;
+
+    // Microsoft Challenge Handshake Authentication Protocol
+    TYPE_PHASE2_MSCHAP = 2;
+
+    // Microsoft Challenge Handshake Authentication Protocol v2
+    TYPE_PHASE2_MSCHAPV2 = 3;
+
+    // Generic Token Card
+    TYPE_PHASE2_GTC = 4;
+
+    // EAP-Subscriber Identity Module [RFC-4186]
+    TYPE_PHASE2_SIM = 5;
+
+    // EAP-Authentication and Key Agreement [RFC-4187]
+    TYPE_PHASE2_AKA = 6;
+
+    // EAP-Authentication and Key Agreement Prime [RFC-5448]
+    TYPE_PHASE2_AKA_PRIME   = 7;
+  }
+
+  enum OcspType {
+    // Do not use OCSP stapling
+    TYPE_OCSP_NONE = 0;
+
+    // Try to use OCSP stapling, but not require response
+    TYPE_OCSP_REQUEST_CERT_STATUS = 1;
+
+    // Require valid OCSP stapling response
+    TYPE_OCSP_REQUIRE_CERT_STATUS = 2;
+
+    // Require valid OCSP stapling response for all not-trusted certificates
+    // in the server certificate chain
+    TYPE_OCSP_REQUIRE_ALL_NON_TRUSTED_CERTS_STATUS = 3;
+  }
+
   optional RoamType roam_type = 1;
 
   // Channel on which the connection takes place.
@@ -670,6 +757,18 @@ message RouterFingerPrint {
 
   // If the router is a passpoint / hotspot 2.0 network
   optional bool passpoint = 8;
+
+  // EAP method used by the enterprise network
+  optional EapMethod eap_method = 9;
+
+  // Phase 2 authentication method after setting up a secure channel
+  optional AuthPhase2Method auth_phase2_method = 10;
+
+  // Online certificate status protocol stapling type
+  optional OcspType ocsp_type = 11;
+
+  // PMK caching enablement
+  optional bool pmk_cache_enabled = 12;
 }
 
 message ConnectionEvent {
@@ -771,6 +870,43 @@ message ConnectionEvent {
     NOMINATOR_OPEN_NETWORK_AVAILABLE = 9;
   }
 
+  enum NetworkType {
+    // Unknown network type
+    TYPE_UNKNOWN = 0;
+
+    // WPA2 network
+    TYPE_WPA2 = 1;
+
+    // WPA3 network
+    TYPE_WPA3 = 2;
+
+    // Passpoint network
+    TYPE_PASSPOINT = 3;
+
+    // EAP network, excluding passpoint
+    TYPE_EAP = 4;
+
+    // OWE network
+    TYPE_OWE = 5;
+
+    // Open network
+    TYPE_OPEN = 6;
+
+    // WAPI network
+    TYPE_WAPI = 7;
+  }
+
+  enum NetworkCreator {
+    // This network is created by an unknown app.
+    CREATOR_UNKNOWN = 0;
+
+    // This network is created by the user.
+    CREATOR_USER = 1;
+
+    // This network is created by a carrier app.
+    CREATOR_CARRIER = 2;
+  }
+
   // Start time of the connection.
   optional int64 start_time_millis = 1;// [(datapol.semantic_type) = ST_TIMESTAMP];
 
@@ -816,6 +952,12 @@ message ConnectionEvent {
 
   // Number of BSSIDs for this network that were excluded from network selection.
   optional int32 num_bssid_in_blocklist = 15;
+
+  // The type of network for this connection.
+  optional NetworkType network_type = 16;
+
+  // UID of the app that created this network.
+  optional NetworkCreator network_creator = 17;
 }
 
 // Number of occurrences of a specific RSSI poll rssi value
@@ -1850,6 +1992,18 @@ message ExperimentValues {
 message BssidBlocklistStats {
   // Distributions of number of blocked BSSIDs filtered out from network selection.
   repeated Int32Count network_selection_filtered_bssid_count = 1;
+
+  // If this is enabled, then network connections in high movement state will be skipped unless
+  // we find a candidate BSSID with similar RSSI in 2 scans sufficiently far apart.
+  optional bool high_movement_multiple_scans_feature_enabled = 2;
+
+  // Number of times connection is skipped in the high movement state
+  // only relevant if high_movement_multiple_scans_feature_enabled=true
+  optional int32 num_high_movement_connection_skipped = 3;
+
+  // Number of times connection is initiated in the high movement state
+  // only relevant if high_movement_multiple_scans_feature_enabled=true
+  optional int32 num_high_movement_connection_started = 4;
 }
 
 message WifiIsUnusableEvent {

@@ -15,11 +15,13 @@
  */
 package com.android.server.wifi;
 
+import static com.android.server.wifi.util.InformationElementUtil.BssLoad.INVALID;
 import static com.android.server.wifi.util.InformationElementUtil.BssLoad.MAX_CHANNEL_UTILIZATION;
 import static com.android.server.wifi.util.InformationElementUtil.BssLoad.MIN_CHANNEL_UTILIZATION;
 
 import android.annotation.NonNull;
 import android.net.wifi.ScanResult;
+import android.net.wifi.WifiAnnotations.WifiStandard;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.nl80211.DeviceWiphyCapabilities;
 import android.util.Log;
@@ -125,6 +127,30 @@ public class ThroughputPredictor {
     }
 
     /**
+     * Predict Tx throughput with current connection capabilities, RSSI and channel utilization
+     * @return predicted Tx throughput in Mbps
+     */
+    public int predictTxThroughput(@NonNull WifiNative.ConnectionCapabilities capabilities,
+            int rssiDbm, int frequency, int channelUtilization) {
+        int channelUtilizationFinal = getValidChannelUtilization(frequency,
+                INVALID, channelUtilization, false);
+        return predictThroughputInternal(capabilities.wifiStandard, capabilities.channelBandwidth,
+                rssiDbm, capabilities.maxNumberTxSpatialStreams, channelUtilizationFinal);
+    }
+
+    /**
+     * Predict Rx throughput with current connection capabilities, RSSI and channel utilization
+     * @return predicted Rx throughput in Mbps
+     */
+    public int predictRxThroughput(@NonNull WifiNative.ConnectionCapabilities capabilities,
+            int rssiDbm, int frequency, int channelUtilization) {
+        int channelUtilizationFinal = getValidChannelUtilization(frequency,
+                INVALID, channelUtilization, false);
+        return predictThroughputInternal(capabilities.wifiStandard, capabilities.channelBandwidth,
+                rssiDbm, capabilities.maxNumberRxSpatialStreams, channelUtilizationFinal);
+    }
+
+    /**
      * Predict network throughput given by the current channel condition and RSSI
      * @param deviceCapabilities Phy Capabilities of the device
      * @param wifiStandardAp the highest wifi standard supported by AP
@@ -138,7 +164,7 @@ public class ThroughputPredictor {
      * @return predicted throughput in Mbps
      */
     public int predictThroughput(DeviceWiphyCapabilities deviceCapabilities,
-            @ScanResult.WifiStandard int wifiStandardAp,
+            @WifiStandard int wifiStandardAp,
             int channelWidthAp, int rssiDbm, int frequency, int maxNumSpatialStreamAp,
             int channelUtilizationBssLoad, int channelUtilizationLinkLayerStats,
             boolean isBluetoothConnected) {
@@ -220,7 +246,7 @@ public class ThroughputPredictor {
                 channelUtilization);
     }
 
-    private int predictThroughputInternal(@ScanResult.WifiStandard int wifiStandard,
+    private int predictThroughputInternal(@WifiStandard int wifiStandard,
             int channelWidth, int rssiDbm, int maxNumSpatialStream,  int channelUtilization) {
 
         // channel bandwidth in MHz = 20MHz * (2 ^ channelWidthFactor);

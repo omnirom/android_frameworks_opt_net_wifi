@@ -52,6 +52,7 @@ import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.util.MissingCounterTimerLockList;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -63,7 +64,6 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
 import java.util.Collections;
@@ -187,10 +187,13 @@ public class WifiConfigManager {
             MacAddress.fromString(WifiInfo.DEFAULT_MAC_ADDRESS);
 
     /**
-     * Expiration timeout for deleted ephemeral ssids. (1 day)
+     * Expiration timeout for user disconnect network. (1 hour)
      */
     @VisibleForTesting
-    public static final long DELETED_EPHEMERAL_SSID_EXPIRY_MS = (long) 1000 * 60 * 60 * 24;
+    public static final long USER_DISCONNECT_NETWORK_BLOCK_EXPIRY_MS = (long) 1000 * 60 * 60;
+
+    @VisibleForTesting
+    public static final int SCAN_RESULT_MISSING_COUNT_THRESHOLD = 1;
 
     /**
      * General sorting algorithm of all networks for scanning purposes:
@@ -198,7 +201,7 @@ public class WifiConfigManager {
      * have the same |numAssociation|, place the configurations with
      * |lastSeenInQualifiedNetworkSelection| set first.
      */
-    private static final WifiConfigurationUtil.WifiConfigurationComparator sScanListComparator =
+    public static final WifiConfigurationUtil.WifiConfigurationComparator sScanListComparator =
             new WifiConfigurationUtil.WifiConfigurationComparator() {
                 @Override
                 public int compareNetworksWithSameStatus(WifiConfiguration a, WifiConfiguration b) {
@@ -245,14 +248,14 @@ public class WifiConfigManager {
      */
     private final Map<Integer, ScanDetailCache> mScanDetailCaches;
     /**
-     * Framework keeps a list of ephemeral SSIDs that where deleted by user,
+     * Framework keeps a list of networks that where temporarily disabled by user,
      * framework knows not to autoconnect again even if the app/scorer recommends it.
-     * The entries are deleted after 24 hours.
-     * The SSIDs are encoded in a String as per definition of WifiConfiguration.SSID field.
-     *
-     * The map stores the SSID and the wall clock time when the network was deleted.
+     * Network will be based on FQDN for passpoint and SSID for non-passpoint.
+     * List will be deleted when Wifi turn off, device restart or network settings reset.
+     * Also when user manfully select to connect network will unblock that network.
      */
-    private final Map<String, Long> mDeletedEphemeralSsidsToTimeMap;
+    private final MissingCounterTimerLockList<String> mUserTemporarilyDisabledList;
+
 
     /**
      * Framework keeps a mapping from configKey to the randomized MAC address so that
@@ -343,7 +346,8 @@ public class WifiConfigManager {
 
         mConfiguredNetworks = new ConfigurationMap(userManager);
         mScanDetailCaches = new HashMap<>(16, 0.75f);
-        mDeletedEphemeralSsidsToTimeMap = new HashMap<>();
+        mUserTemporarilyDisabledList =
+                new MissingCounterTimerLockList<>(SCAN_RESULT_MISSING_COUNT_THRESHOLD, mClock);
         mRandomizedMacAddressMapping = new HashMap<>();
         mListeners = new ArrayList<>();
 
@@ -954,7 +958,6 @@ public class WifiConfigManager {
                 && !externalConfig.preSharedKey.equals(PASSWORD_MASK)) {
             internalConfig.preSharedKey = externalConfig.preSharedKey;
         }
-        internalConfig.saePasswordId = externalConfig.saePasswordId;
         // Modify only wep keys are present in the provided configuration. This is a little tricky
         // because there is no easy way to tell if the app is actually trying to null out the
         // existing keys or not.
@@ -1045,6 +1048,9 @@ public class WifiConfigManager {
         internalConfig.meteredHint = externalConfig.meteredHint;
         internalConfig.meteredOverride = externalConfig.meteredOverride;
 
+        // Copy trusted bit
+        internalConfig.trusted = externalConfig.trusted;
+
         // Copy over macRandomizationSetting
         internalConfig.macRandomizationSetting = externalConfig.macRandomizationSetting;
         internalConfig.carrierId = externalConfig.carrierId;
@@ -1080,16 +1086,20 @@ public class WifiConfigManager {
         configuration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
         configuration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_EAP);
 
+        configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.GCMP_256);
         configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.CCMP);
         configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.GCMP_256);
         configuration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.TKIP);
 
+        configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.GCMP_256);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.CCMP);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.GCMP_256);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.TKIP);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP40);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP104);
 
+        configuration.allowedGroupManagementCiphers
+                .set(WifiConfiguration.GroupMgmtCipher.BIP_GMAC_256);
         configuration.allowedGroupCiphers.set(WifiConfiguration.GroupMgmtCipher.BIP_CMAC_256);
 
         configuration.allowedSuiteBCiphers.set(WifiConfiguration.SuiteBCipher.ECDHE_ECDSA);
@@ -1243,11 +1253,10 @@ public class WifiConfigManager {
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
 
-        // Update the keys for non-Passpoint enterprise networks.  For Passpoint, the certificates
-        // and keys are installed at the time the provider is installed.
-        if (config.enterpriseConfig != null
-                && config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE
-                && !config.isPasspoint()) {
+        // Update the keys for saved enterprise networks. For Passpoint, the certificates
+        // and keys are installed at the time the provider is installed. For suggestion enterprise
+        // network the certificates and keys are installed at the time the suggestion is added
+        if (!config.isPasspoint() && !config.fromWifiNetworkSuggestion && config.isEnterprise()) {
             if (!(mWifiKeyStore.updateNetworkKeys(newInternalConfig, existingInternalConfig))) {
                 return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
             }
@@ -1277,13 +1286,9 @@ public class WifiConfigManager {
             Log.e(TAG, "Failed to add network to config map", e);
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
-
-        if (mDeletedEphemeralSsidsToTimeMap.remove(config.SSID) != null) {
-            updateNetworkSelectionStatus(
-                    newInternalConfig, NetworkSelectionStatus.DISABLED_NONE);
-            if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "Removed from ephemeral blacklist: " + config.SSID);
-            }
+        // Add or update user saved network or saved passpoint network will re-enable network.
+        if (!newInternalConfig.fromWifiNetworkSuggestion) {
+            userEnabledNetwork(newInternalConfig.networkId);
         }
 
         // Stage the backup of the SettingsProvider package which backs this up.
@@ -1389,9 +1394,10 @@ public class WifiConfigManager {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Removing network " + config.getPrintableSsid());
         }
-        // Remove any associated enterprise keys for non-Passpoint networks.
-        if (!config.isPasspoint() && config.enterpriseConfig != null
-                && config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE) {
+        // Remove any associated enterprise keys for saved enterprise networks. Passpoint network
+        // will remove the enterprise keys when provider is uninstalled. Suggestion enterprise
+        // networks will remove the enterprise keys when suggestion is removed.
+        if (!config.fromWifiNetworkSuggestion && !config.isPasspoint() && config.isEnterprise()) {
             mWifiKeyStore.removeKeys(config.enterpriseConfig);
         }
 
@@ -1594,7 +1600,7 @@ public class WifiConfigManager {
                 != NetworkSelectionStatus.NETWORK_SELECTION_ENABLED) {
             localLog("setNetworkSelectionEnabled: configKey=" + config.getKey()
                     + " old networkStatus=" + status.getNetworkStatusString()
-                    + " disableReason=" + status.getNetworkDisableReasonString());
+                    + " disableReason=" + status.getNetworkSelectionDisableReasonString());
         }
         status.setNetworkSelectionStatus(
                 NetworkSelectionStatus.NETWORK_SELECTION_ENABLED);
@@ -1682,7 +1688,7 @@ public class WifiConfigManager {
         }
         localLog("setNetworkSelectionStatus: configKey=" + config.getKey()
                 + " networkStatus=" + networkStatus.getNetworkStatusString() + " disableReason="
-                + networkStatus.getNetworkDisableReasonString());
+                + networkStatus.getNetworkSelectionDisableReasonString());
         saveToStore(false);
         return true;
     }
@@ -1723,9 +1729,9 @@ public class WifiConfigManager {
                 if (mVerboseLoggingEnabled) {
                     Log.v(TAG, "Disable counter for network " + config.getPrintableSsid()
                             + " for reason "
-                            + NetworkSelectionStatus.getNetworkDisableReasonString(reason) + " is "
-                            + networkStatus.getDisableReasonCounter(reason) + " and threshold is "
-                            + disableReasonThreshold);
+                            + NetworkSelectionStatus.getNetworkSelectionDisableReasonString(reason)
+                            + " is " + networkStatus.getDisableReasonCounter(reason)
+                            + " and threshold is " + disableReasonThreshold);
                 }
                 return true;
             }
@@ -2081,7 +2087,7 @@ public class WifiConfigManager {
         if (connectChoiceConfigKey == null) {
             return;
         }
-        for (WifiConfiguration config : mConfiguredNetworks.valuesForCurrentUser()) {
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
             WifiConfiguration.NetworkSelectionStatus status = config.getNetworkSelectionStatus();
             String connectChoice = status.getConnectChoice();
             if (TextUtils.equals(connectChoice, connectChoiceConfigKey)) {
@@ -2660,7 +2666,7 @@ public class WifiConfigManager {
      * @return Set containing the frequeincies which were used for connection recently.
      */
     public Set<Integer> fetchChannelSetForPartialScan(long ageInMillis, int maxCount) {
-        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
+        List<WifiConfiguration> networks = getConfiguredNetworks();
 
         // Remove any permanently or temporarily disabled networks.
         Iterator<WifiConfiguration> iter = networks.iterator();
@@ -2781,58 +2787,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Retrieves a list of all the saved networks before enabling disconnected/connected PNO.
-     *
-     * PNO network list sent to the firmware has limited size. If there are a lot of saved
-     * networks, this list will be truncated and we might end up not sending the networks
-     * with the highest chance of connecting to the firmware.
-     * So, re-sort the network list based on the frequency of connection to those networks
-     * and whether it was last seen in the scan results.
-     *
-     * @return list of networks in the order of priority.
-     */
-    public List<WifiScanner.PnoSettings.PnoNetwork> retrievePnoNetworkList() {
-        List<WifiScanner.PnoSettings.PnoNetwork> pnoList = new ArrayList<>();
-        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
-        // Remove any permanently or temporarily disabled networks.
-        Iterator<WifiConfiguration> iter = networks.iterator();
-        while (iter.hasNext()) {
-            WifiConfiguration config = iter.next();
-            if (config.ephemeral || config.isPasspoint() || !config.allowAutojoin
-                    || config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()
-                    || config.getNetworkSelectionStatus().isNetworkTemporaryDisabled()) {
-                iter.remove();
-            }
-        }
-        if (networks.isEmpty()) {
-            return pnoList;
-        }
-
-        // Sort the networks with the most frequent ones at the front of the network list.
-        Collections.sort(networks, sScanListComparator);
-        if (mContext.getResources().getBoolean(R.bool.config_wifiPnoRecencySortingEnabled)) {
-            // Find the most recently connected network and move it to the front of the list.
-            putMostRecentlyConnectedNetworkAtTop(networks);
-        }
-        for (WifiConfiguration config : networks) {
-            WifiScanner.PnoSettings.PnoNetwork pnoNetwork =
-                    WifiConfigurationUtil.createPnoNetwork(config);
-            pnoList.add(pnoNetwork);
-            if (!mContext.getResources().getBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled)) {
-                continue;
-            }
-            WifiScoreCard.PerNetwork network = mWifiScoreCard.lookupNetwork(config.SSID);
-            List<Integer> channelList = network.getFrequencies();
-            pnoNetwork.frequencies = channelList.stream().mapToInt(Integer::intValue).toArray();
-            if (mVerboseLoggingEnabled) {
-                Log.v(TAG, "retrievePnoNetworkList " + pnoNetwork.ssid + ":"
-                        + Arrays.toString(pnoNetwork.frequencies));
-            }
-        }
-        return pnoList;
-    }
-
-    /**
      * Retrieves a list of all the saved hidden networks for scans
      *
      * Hidden network list sent to the firmware has limited size. If there are a lot of saved
@@ -2845,7 +2799,7 @@ public class WifiConfigManager {
      */
     public List<WifiScanner.ScanSettings.HiddenNetwork> retrieveHiddenNetworkList() {
         List<WifiScanner.ScanSettings.HiddenNetwork> hiddenList = new ArrayList<>();
-        List<WifiConfiguration> networks = new ArrayList<>(getInternalConfiguredNetworks());
+        List<WifiConfiguration> networks = getConfiguredNetworks();
         // Remove any non hidden networks.
         networks.removeIf(config -> !config.hiddenSSID);
         networks.sort(sScanListComparator);
@@ -2856,86 +2810,87 @@ public class WifiConfigManager {
         return hiddenList;
     }
 
-    private @Nullable WifiConfiguration getInternalEphemeralConfiguredNetwork(
-            @NonNull String ssid) {
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if ((config.ephemeral || config.isPasspoint()) && TextUtils.equals(config.SSID, ssid)) {
-                return config;
-            }
-        }
-        return null;
-    }
-
     /**
-     * Check if the provided ephemeral network was deleted by the user or not. This call also clears
-     * the SSID from the deleted ephemeral network map, if the duration has expired the
-     * timeout specified by {@link #DELETED_EPHEMERAL_SSID_EXPIRY_MS}.
+     * Check if the provided network was temporarily disabled by the user and still blocked.
      *
-     * @param ssid caller must ensure that the SSID passed thru this API match
-     *             the WifiConfiguration.SSID rules, and thus be surrounded by quotes.
-     * @return true if network was deleted, false otherwise.
+     * @param network Input can be SSID or FQDN. And caller must ensure that the SSID passed thru
+     *                this API matched the WifiConfiguration.SSID rules, and thus be surrounded by
+     *                quotes.
+     * @return true if network is blocking, otherwise false.
      */
-    public boolean wasEphemeralNetworkDeleted(String ssid) {
-        if (!mDeletedEphemeralSsidsToTimeMap.containsKey(ssid)) {
-            return false;
+    public boolean isNetworkTemporarilyDisabledByUser(String network) {
+        if (mUserTemporarilyDisabledList.isLocked(network)) {
+            return true;
         }
-        long deletedTimeInMs = mDeletedEphemeralSsidsToTimeMap.get(ssid);
-        long nowInMs = mClock.getWallClockMillis();
-        // Clear the ssid from the map if the age > |DELETED_EPHEMERAL_SSID_EXPIRY_MS|.
-        if (nowInMs - deletedTimeInMs > DELETED_EPHEMERAL_SSID_EXPIRY_MS) {
-            mDeletedEphemeralSsidsToTimeMap.remove(ssid);
-            WifiConfiguration foundConfig = getInternalEphemeralConfiguredNetwork(ssid);
-            if (foundConfig != null) {
-                updateNetworkSelectionStatus(
-                        foundConfig, NetworkSelectionStatus.DISABLED_NONE);
-            }
-            return false;
-        }
-        return true;
+        mUserTemporarilyDisabledList.remove(network);
+        return false;
     }
 
     /**
-     * Disable an ephemeral or Passpoint SSID for the purpose of network selection.
+     * User temporarily disable a network and will be block to auto-join when network is still
+     * nearby.
      *
      * The network will be re-enabled when:
-     * a) The user creates a network for that SSID and then forgets.
-     * b) The time specified by {@link #DELETED_EPHEMERAL_SSID_EXPIRY_MS} expires after the disable.
+     * a) User select to connect the network.
+     * b) The network is not in range for {@link #USER_DISCONNECT_NETWORK_BLOCK_EXPIRY_MS}
+     * c) Toggle wifi off, reset network settings or device reboot.
      *
-     * @param ssid caller must ensure that the SSID passed thru this API match
-     *             the WifiConfiguration.SSID rules, and thus be surrounded by quotes.
-     * @return the {@link WifiConfiguration} corresponding to this SSID, if any, so that we can
-     * disconnect if this is the current network.
+     * @param network Input can be SSID or FQDN. And caller must ensure that the SSID passed thru
+     *                this API matched the WifiConfiguration.SSID rules, and thus be surrounded by
+     *                quotes.
      */
-    public WifiConfiguration disableEphemeralNetwork(String ssid) {
-        if (ssid == null) {
-            return null;
+    public void userTemporarilyDisabledNetwork(String network) {
+        mUserTemporarilyDisabledList.add(network, USER_DISCONNECT_NETWORK_BLOCK_EXPIRY_MS);
+        Log.d(TAG, "Temporarily disable network: " + network + " num="
+                + mUserTemporarilyDisabledList.size());
+        removeUserChoiceFromDisabledNetwork(network);
+    }
+
+    /**
+     * Update the user temporarily disabled network list with networks in range.
+     * @param networks networks in range in String format, FQDN or SSID. And caller must ensure
+     *                 that the SSID passed thru this API matched the WifiConfiguration.SSID rules,
+     *                 and thus be surrounded by quotes.
+     */
+    public void updateUserDisabledList(List<String> networks) {
+        mUserTemporarilyDisabledList.update(new HashSet<>(networks));
+    }
+
+    private void removeUserChoiceFromDisabledNetwork(
+            @NonNull String network) {
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+            if (TextUtils.equals(config.SSID, network) || TextUtils.equals(config.FQDN, network)) {
+                removeConnectChoiceFromAllNetworks(config.getKey());
+            }
         }
-        WifiConfiguration foundConfig = getInternalEphemeralConfiguredNetwork(ssid);
-        if (foundConfig == null) return null;
-        // Store the ssid & the wall clock time at which the network was disabled.
-        mDeletedEphemeralSsidsToTimeMap.put(ssid, mClock.getWallClockMillis());
-        // Also, mark the ephemeral permanently blacklisted. Will be taken out of blacklist
-        // when the ssid is taken out of |mDeletedEphemeralSsidsToTimeMap|.
-        updateNetworkSelectionStatus(foundConfig, NetworkSelectionStatus.DISABLED_BY_WIFI_MANAGER);
-        Log.d(TAG, "Forget ephemeral SSID " + ssid + " num="
-                + mDeletedEphemeralSsidsToTimeMap.size());
-        if (foundConfig.ephemeral) {
-            Log.d(TAG, "Found ephemeral config in disableEphemeralNetwork: "
-                    + foundConfig.networkId);
-        } else if (foundConfig.isPasspoint()) {
-            Log.d(TAG, "Found Passpoint config in disableEphemeralNetwork: "
-                    + foundConfig.networkId + ", FQDN: " + foundConfig.FQDN);
+    }
+
+    /**
+     * User enabled network manually, maybe trigger by user select to connect network.
+     * @param networkId enabled network id.
+     */
+    public void userEnabledNetwork(int networkId) {
+        WifiConfiguration configuration = getInternalConfiguredNetwork(networkId);
+        if (configuration == null) {
+            return;
         }
-        removeConnectChoiceFromAllNetworks(foundConfig.getKey());
-        return foundConfig;
+        String network;
+        if (configuration.isPasspoint()) {
+            network = configuration.FQDN;
+        } else {
+            network = configuration.SSID;
+        }
+        mUserTemporarilyDisabledList.remove(network);
+        Log.d(TAG, "Enable disabled network: " + network + " num="
+                + mUserTemporarilyDisabledList.size());
     }
 
     /**
      * Clear all deleted ephemeral networks.
      */
     @VisibleForTesting
-    public void clearDeletedEphemeralNetworks() {
-        mDeletedEphemeralSsidsToTimeMap.clear();
+    public void clearUserTemporarilyDisabledList() {
+        mUserTemporarilyDisabledList.clear();
     }
 
     /**
@@ -3100,7 +3055,7 @@ public class WifiConfigManager {
     private void clearInternalData() {
         localLog("clearInternalData: Clearing all internal data");
         mConfiguredNetworks.clear();
-        mDeletedEphemeralSsidsToTimeMap.clear();
+        mUserTemporarilyDisabledList.clear();
         mRandomizedMacAddressMapping.clear();
         mScanDetailCaches.clear();
         clearLastSelectedNetwork();
@@ -3120,7 +3075,7 @@ public class WifiConfigManager {
         localLog("clearInternalUserData: Clearing user internal data for " + mCurrentUserId);
         Set<Integer> removedNetworkIds = new HashSet<>();
         // Remove any private networks of the old user before switching the userId.
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+        for (WifiConfiguration config : getConfiguredNetworks()) {
             if (!config.shared && doesUidBelongToCurrentUser(config.creatorUid)) {
                 removedNetworkIds.add(config.networkId);
                 localLog("clearInternalUserData: removed config."
@@ -3129,7 +3084,7 @@ public class WifiConfigManager {
                 mConfiguredNetworks.remove(config.networkId);
             }
         }
-        mDeletedEphemeralSsidsToTimeMap.clear();
+        mUserTemporarilyDisabledList.clear();
         mScanDetailCaches.clear();
         clearLastSelectedNetwork();
         return removedNetworkIds;

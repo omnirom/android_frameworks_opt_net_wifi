@@ -61,9 +61,9 @@
     <string name="wifi_cannot_connect_with_randomized_mac_title" msgid="3161171832972320854">"No se puede establecer conexión con <xliff:g id="SSID">%1$s</xliff:g>"</string>
     <string name="wifi_cannot_connect_with_randomized_mac_message" msgid="3084495849409387375">"Presiona para cambiar la configuración de privacidad y volver a intentarlo"</string>
     <string name="wifi_disable_mac_randomization_dialog_title" msgid="7200723795776228456">"¿Quieres cambiar la configuración de privacidad?"</string>
-    <string name="wifi_disable_mac_randomization_dialog_message" msgid="4240415044701814187">"Es posible que <xliff:g id="SSID_0">%1$s</xliff:g> quiera conectarse mediante la dirección MAC (un identificador único) de tu dispositivo. Eso podría permitir que dispositivos cercanos registren la ubicación de tu dispositivo. \n\nSi continúas, <xliff:g id="SSID_1">%1$s</xliff:g> cambiará la configuración de privacidad e intentará volver a establecer conexión."</string>
+    <string name="wifi_disable_mac_randomization_dialog_message" msgid="6780528750693169829">"Para conectarse, <xliff:g id="SSID">%1$s</xliff:g> necesita usar la dirección MAC (un identificador único) de tu dispositivo. Actualmente, tu configuración de privacidad para esta red usa un identificador aleatorio. \n\nEste cambio podría permitir que dispositivos cercanos registren la ubicación del tuyo."</string>
     <string name="wifi_disable_mac_randomization_dialog_confirm_text" msgid="6592972299988727403">"Cambiar configuración"</string>
-    <string name="wifi_disable_mac_randomization_dialog_success" msgid="8233753657756785734">"Se actualizó la configuración. Vuelve a conectarte."</string>
+    <string name="wifi_disable_mac_randomization_dialog_success" msgid="7288972191769783828">"Se actualizó la configuración. Intenta conectarte de nuevo."</string>
     <string name="wifi_disable_mac_randomization_dialog_failure" msgid="1823128152758990275">"No se puede cambiar la configuración de privacidad"</string>
     <string name="wifi_disable_mac_randomization_dialog_network_not_found" msgid="2352188098110676023">"No se encontró ninguna red"</string>
     <string name="wifi_eap_error_message_code_32760" msgid="2272296327034079386">"<xliff:g id="SSID">%1$s</xliff:g>: Error de autenticación de EAP 32760"</string>
@@ -76,8 +76,6 @@
     <string name="wifi_softap_auto_shutdown_timeout_expired_title" msgid="6772994319428197481">"Zona móvil inhabilitada"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_summary" msgid="2784340491027490290">"Se inhabilitó la zona móvil"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_detail" msgid="7203939001058203709">"Se inhabilitó la zona móvil debido a que venció el tiempo de inactividad."</string>
-    <!-- no translation found for wifi_sim_required_title (8362843050699015640) -->
-    <skip />
-    <!-- no translation found for wifi_sim_required_message (8337512370882674437) -->
-    <skip />
+    <string name="wifi_sim_required_title" msgid="8362843050699015640">"Sin conexión Wi-Fi"</string>
+    <string name="wifi_sim_required_message" msgid="6085636103482409595">"Para conectarte a <xliff:g id="SSID">%1$s</xliff:g>, inserta una SIM de <xliff:g id="CARRIER_NAME">%2$s</xliff:g>"</string>
 </resources>

@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static com.android.server.wifi.WifiConfigStore.ENCRYPT_CREDENTIALS_CONFIG_STORE_DATA_VERSION;
 
+import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.Context;
 import android.net.IpConfiguration;
@@ -41,6 +42,8 @@ import org.xmlpull.v1.XmlSerializer;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -59,17 +62,14 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
             "WifiEnterpriseConfiguration";
 
     private final Context mContext;
-    private final WifiOemConfigStoreMigrationDataHolder mWifiOemConfigStoreMigrationDataHolder;
 
     /**
      * List of saved shared networks visible to all the users to be stored in the store file.
      */
     private List<WifiConfiguration> mConfigurations;
 
-    NetworkListStoreData(Context context,
-            WifiOemConfigStoreMigrationDataHolder wifiOemConfigStoreMigrationDataHolder) {
+    NetworkListStoreData(Context context) {
         mContext = context;
-        mWifiOemConfigStoreMigrationDataHolder = wifiOemConfigStoreMigrationDataHolder;
     }
 
     @Override
@@ -82,11 +82,12 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
     @Override
     public void deserializeData(XmlPullParser in, int outerTagDepth,
             @WifiConfigStore.Version int version,
-            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil,
+            @NonNull WifiConfigStoreMigrationDataHolder storeMigrationDataHolder)
             throws XmlPullParserException, IOException {
         // Check if we have data to migrate from OEM, if yes skip loading the section from the file.
         List<WifiConfiguration> oemMigratedConfigurations =
-                mWifiOemConfigStoreMigrationDataHolder.getUserSavedNetworks();
+                storeMigrationDataHolder.getUserSavedNetworks();
         if (oemMigratedConfigurations != null) {
             Log.i(TAG, "Loading data from OEM migration hook");
             mConfigurations = oemMigratedConfigurations;
@@ -147,6 +148,8 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         if (networkList == null) {
             return;
         }
+        // Sort by SSID
+        Collections.sort(networkList, Comparator.comparing(a -> a.SSID));
         for (WifiConfiguration network : networkList) {
             serializeNetwork(out, network, encryptionUtil);
         }
@@ -294,7 +297,7 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         WifiConfiguration configuration = parsedConfig.second;
 
         if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
-            removeLegacySecurityFromSaeNetwork(configuration);
+            fixSaeNetworkSecurityBits(configuration);
         }
 
         String configKeyCalculated = configuration.getKey();
@@ -326,7 +329,7 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         return configuration;
     }
 
-    private void removeLegacySecurityFromSaeNetwork(WifiConfiguration saeNetwork) {
+    private void fixSaeNetworkSecurityBits(WifiConfiguration saeNetwork) {
         // SAE saved networks Auth Algorithm set to OPEN need to be have this field cleared.
         if (saeNetwork.allowedAuthAlgorithms.get(WifiConfiguration.AuthAlgorithm.OPEN)) {
             saeNetwork.allowedAuthAlgorithms.clear();
@@ -351,6 +354,8 @@ public abstract class NetworkListStoreData implements WifiConfigStore.StoreData 
         if (saeNetwork.allowedGroupCiphers.get(WifiConfiguration.GroupCipher.TKIP)) {
             saeNetwork.allowedGroupCiphers.clear(WifiConfiguration.GroupCipher.TKIP);
         }
+        saeNetwork.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.GCMP_256);
+        saeNetwork.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.GCMP_256);
     }
 }
 

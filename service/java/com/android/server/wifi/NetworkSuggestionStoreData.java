@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static com.android.server.wifi.WifiConfigStore.ENCRYPT_CREDENTIALS_CONFIG_STORE_DATA_VERSION;
 
+import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
@@ -121,7 +122,8 @@ public class NetworkSuggestionStoreData implements WifiConfigStore.StoreData {
     @Override
     public void deserializeData(XmlPullParser in, int outerTagDepth,
             @WifiConfigStore.Version int version,
-            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil,
+            @NonNull WifiConfigStoreMigrationDataHolder storeMigrationDataHolder)
             throws XmlPullParserException, IOException {
         // Ignore empty reads.
         if (in == null) {
@@ -463,6 +465,9 @@ public class NetworkSuggestionStoreData implements WifiConfigStore.StoreData {
         // with migration of data for devices upgrading from Q to R.
         perAppInfo.setUid(suggestorUid);
         WifiConfiguration wifiConfiguration = parsedConfig.second;
+        if (passpointConfiguration != null) {
+            wifiConfiguration.setPasspointUniqueId(passpointConfiguration.getUniqueId());
+        }
         if (enterpriseConfig != null) {
             wifiConfiguration.enterpriseConfig = enterpriseConfig;
         }

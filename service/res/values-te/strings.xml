@@ -61,9 +61,11 @@
     <string name="wifi_cannot_connect_with_randomized_mac_title" msgid="3161171832972320854">"<xliff:g id="SSID">%1$s</xliff:g>కు కనెక్ట్ చేయడం సాధ్యపడదు"</string>
     <string name="wifi_cannot_connect_with_randomized_mac_message" msgid="3084495849409387375">"మీ గోప్యతా సెట్టింగ్‌లను మార్చడానికి నొక్కి, మళ్లీ ప్రయత్నించండి"</string>
     <string name="wifi_disable_mac_randomization_dialog_title" msgid="7200723795776228456">"గోప్యతా సెట్టింగ్‌ను మార్చాలా?"</string>
-    <string name="wifi_disable_mac_randomization_dialog_message" msgid="4240415044701814187">"<xliff:g id="SSID_0">%1$s</xliff:g> అనేది ప్రత్యేకమైన ఐడెంటిఫయర్ అయిన మీ డివైజ్ MAC చిరునామాను ఉపయోగించి కనెక్ట్ చేయాలనుకోవచ్చు. అలా చేయడం వలన మీ లొకేషన్‌ను ట్రాక్ చేయడానికి సమీప పరికరాలకు అనుమతి లభించవచ్చు. \n\nఒకవేళ మీరు కొనసాగితే, మీ గోప్యతా సెట్టింగ్‌ను <xliff:g id="SSID_1">%1$s</xliff:g> మారుస్తుంది, అప్పుడు తిరిగి కనెక్ట్ చేయడానికి ప్రయత్నిస్తుంది."</string>
+    <!-- no translation found for wifi_disable_mac_randomization_dialog_message (6780528750693169829) -->
+    <skip />
     <string name="wifi_disable_mac_randomization_dialog_confirm_text" msgid="6592972299988727403">"సెట్టింగ్‌ను మార్చండి"</string>
-    <string name="wifi_disable_mac_randomization_dialog_success" msgid="8233753657756785734">"సెట్టింగ్ అప్‌డేట్ చేయబడింది. మళ్లీ కనెక్ట్ చేయడాన్ని ప్రయత్నించండి."</string>
+    <!-- no translation found for wifi_disable_mac_randomization_dialog_success (7288972191769783828) -->
+    <skip />
     <string name="wifi_disable_mac_randomization_dialog_failure" msgid="1823128152758990275">"గోప్యతా సెట్టింగ్‌లను మార్చడం సాధ్యం కాదు"</string>
     <string name="wifi_disable_mac_randomization_dialog_network_not_found" msgid="2352188098110676023">"నెట్‌వర్క్ కనుగొనబడలేదు"</string>
     <string name="wifi_eap_error_message_code_32760" msgid="2272296327034079386">"<xliff:g id="SSID">%1$s</xliff:g> : EAP ప్రామాణీకరణ ఎర్రర్ 32760"</string>
@@ -76,8 +78,6 @@
     <string name="wifi_softap_auto_shutdown_timeout_expired_title" msgid="6772994319428197481">"మొబైల్ హాట్‌స్పాట్ డిజేబుల్ అయింది"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_summary" msgid="2784340491027490290">"మొబైల్ హాట్‌స్పాట్ డిజేబుల్ చేయబడింది"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_detail" msgid="7203939001058203709">"ఇన్‌యాక్టివిటీ గడువు సమయం ముగిసిన కారణంగా మొబైల్ హాట్‌స్పాట్ డిజేబుల్ చేయబడింది."</string>
-    <!-- no translation found for wifi_sim_required_title (8362843050699015640) -->
-    <skip />
-    <!-- no translation found for wifi_sim_required_message (8337512370882674437) -->
-    <skip />
+    <string name="wifi_sim_required_title" msgid="8362843050699015640">"Wifi డిస్‌కనెక్ట్ చేయబడింది"</string>
+    <string name="wifi_sim_required_message" msgid="6085636103482409595">"<xliff:g id="SSID">%1$s</xliff:g>కి కనెక్ట్ చేయడానికి, <xliff:g id="CARRIER_NAME">%2$s</xliff:g> SIMను చొప్పించండి"</string>
 </resources>

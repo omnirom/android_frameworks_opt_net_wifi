@@ -25,7 +25,7 @@ import android.content.Context;
 import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiConfiguration;
-import android.net.wifi.WifiOemMigrationHook;
+import android.net.wifi.WifiMigration;
 import android.util.BackupUtils;
 
 import androidx.test.filters.SmallTest;
@@ -55,14 +55,14 @@ import java.util.List;
 public class SoftApBackupRestoreTest extends WifiBaseTest {
 
     @Mock private Context mContext;
-    @Mock private WifiOemMigrationHook.SettingsMigrationData mOemMigrationData;
+    @Mock private WifiMigration.SettingsMigrationData mOemMigrationData;
     private SoftApBackupRestore mSoftApBackupRestore;
     private final ArrayList<MacAddress> mTestBlockedList = new ArrayList<>();
     private final ArrayList<MacAddress> mTestAllowedList = new ArrayList<>();
     private static final int LAST_WIFICOFIGURATION_BACKUP_VERSION = 3;
     private static final boolean TEST_CLIENTCONTROLENABLE = false;
     private static final int TEST_MAXNUMBEROFCLIENTS = 10;
-    private static final int TEST_SHUTDOWNTIMEOUTMILLIS = 600_000;
+    private static final long TEST_SHUTDOWNTIMEOUTMILLIS = 600_000;
     private static final String TEST_BLOCKED_CLIENT = "11:22:33:44:55:66";
     private static final String TEST_ALLOWED_CLIENT = "aa:bb:cc:dd:ee:ff";
     private static final String TEST_SSID = "TestAP";
@@ -101,10 +101,10 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
         MockitoAnnotations.initMocks(this);
 
         mSession = ExtendedMockito.mockitoSession()
-                .mockStatic(WifiOemMigrationHook.class, withSettings().lenient())
+                .mockStatic(WifiMigration.class, withSettings().lenient())
                 .strictness(Strictness.LENIENT)
                 .startMocking();
-        when(WifiOemMigrationHook.loadFromSettings(any(Context.class)))
+        when(WifiMigration.loadFromSettings(any(Context.class)))
                 .thenReturn(mOemMigrationData);
         when(mOemMigrationData.isSoftApTimeoutEnabled()).thenReturn(true);
 
@@ -250,8 +250,9 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
         configBuilder.setHiddenSsid(TEST_HIDDEN);
         configBuilder.setMaxNumberOfClients(TEST_MAXNUMBEROFCLIENTS);
         configBuilder.setShutdownTimeoutMillis(TEST_SHUTDOWNTIMEOUTMILLIS);
-        configBuilder.enableClientControlByUser(TEST_CLIENTCONTROLENABLE);
-        configBuilder.setClientList(mTestBlockedList, mTestAllowedList);
+        configBuilder.setClientControlByUserEnabled(TEST_CLIENTCONTROLENABLE);
+        configBuilder.setBlockedClientList(mTestBlockedList);
+        configBuilder.setAllowedClientList(mTestAllowedList);
         SoftApConfiguration config = configBuilder.build();
 
         byte[] data = mSoftApBackupRestore.retrieveBackupDataFromSoftApConfiguration(config);
@@ -263,7 +264,7 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
 
     /**
      * Verifies that the restore of version 5 backup data will read the auto shutdown enable/disable
-     * tag from {@link WifiOemMigrationHook#loadFromSettings(Context)}
+     * tag from {@link WifiMigration#loadFromSettings(Context)}
      */
     @Test
     public void testSoftApConfigRestoreFromVersion5() throws Exception {
@@ -277,8 +278,9 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
         configBuilder.setHiddenSsid(TEST_HIDDEN);
         configBuilder.setMaxNumberOfClients(TEST_MAXNUMBEROFCLIENTS);
         configBuilder.setShutdownTimeoutMillis(TEST_SHUTDOWNTIMEOUTMILLIS);
-        configBuilder.enableClientControlByUser(TEST_CLIENTCONTROLENABLE);
-        configBuilder.setClientList(mTestBlockedList, mTestAllowedList);
+        configBuilder.setClientControlByUserEnabled(TEST_CLIENTCONTROLENABLE);
+        configBuilder.setBlockedClientList(mTestBlockedList);
+        configBuilder.setAllowedClientList(mTestAllowedList);
 
         // Toggle on when migrating.
         when(mOemMigrationData.isSoftApTimeoutEnabled()).thenReturn(true);
@@ -314,12 +316,66 @@ public class SoftApBackupRestoreTest extends WifiBaseTest {
         out.writeInt(config.getSecurityType());
         out.writeBoolean(config.isHiddenSsid());
         out.writeInt(config.getMaxNumberOfClients());
-        out.writeInt(config.getShutdownTimeoutMillis());
+        out.writeInt((int) config.getShutdownTimeoutMillis());
         out.writeBoolean(config.isClientControlByUserEnabled());
         writeMacAddressList(out, config.getBlockedClientList());
         writeMacAddressList(out, config.getAllowedClientList());
         return baos.toByteArray();
     }
+
+
+    /**
+     * Verifies that the restore of version 6 backup data will read the auto shutdown with int.
+     */
+    @Test
+    public void testSoftApConfigRestoreFromVersion6() throws Exception {
+        mTestBlockedList.add(MacAddress.fromString(TEST_BLOCKED_CLIENT));
+        mTestAllowedList.add(MacAddress.fromString(TEST_ALLOWED_CLIENT));
+        SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
+        configBuilder.setSsid(TEST_SSID);
+        configBuilder.setBand(TEST_BAND);
+        configBuilder.setChannel(TEST_CHANNEL, TEST_BAND);
+        configBuilder.setPassphrase(TEST_PASSPHRASE, TEST_SECURITY);
+        configBuilder.setHiddenSsid(TEST_HIDDEN);
+        configBuilder.setMaxNumberOfClients(TEST_MAXNUMBEROFCLIENTS);
+        configBuilder.setShutdownTimeoutMillis(TEST_SHUTDOWNTIMEOUTMILLIS);
+        configBuilder.setClientControlByUserEnabled(TEST_CLIENTCONTROLENABLE);
+        configBuilder.setBlockedClientList(mTestBlockedList);
+        configBuilder.setAllowedClientList(mTestAllowedList);
+
+        SoftApConfiguration expectedConfig = configBuilder.build();
+        SoftApConfiguration restoredConfig = mSoftApBackupRestore
+                .retrieveSoftApConfigurationFromBackupData(
+                retrieveVersion6BackupDataFromSoftApConfiguration(expectedConfig));
+        assertEquals(expectedConfig, restoredConfig);
+    }
+
+    /**
+     * This is a copy of the old serialization code (version 6)
+     *
+     * Changes: Version = 6, AutoShutdown use int type
+     */
+    private byte[] retrieveVersion6BackupDataFromSoftApConfiguration(SoftApConfiguration config)
+            throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputStream out = new DataOutputStream(baos);
+
+        out.writeInt(6);
+        BackupUtils.writeString(out, config.getSsid());
+        out.writeInt(config.getBand());
+        out.writeInt(config.getChannel());
+        BackupUtils.writeString(out, config.getPassphrase());
+        out.writeInt(config.getSecurityType());
+        out.writeBoolean(config.isHiddenSsid());
+        out.writeInt(config.getMaxNumberOfClients());
+        out.writeInt((int) config.getShutdownTimeoutMillis());
+        out.writeBoolean(config.isClientControlByUserEnabled());
+        writeMacAddressList(out, config.getBlockedClientList());
+        writeMacAddressList(out, config.getAllowedClientList());
+        out.writeBoolean(config.isAutoShutdownEnabled());
+        return baos.toByteArray();
+    }
+
 
     private void writeMacAddressList(DataOutputStream out, List<MacAddress> macList)
             throws IOException {

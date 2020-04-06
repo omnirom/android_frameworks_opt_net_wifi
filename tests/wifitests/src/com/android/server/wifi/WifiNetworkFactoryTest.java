@@ -2120,7 +2120,7 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
         reset(mNetworkRequestMatchCallback, mWifiScanner, mAlarmManager, mClientModeImpl);
 
         // 2. Simulate user forgeting the network.
-        when(mWifiConfigManager.wasEphemeralNetworkDeleted(
+        when(mWifiConfigManager.isNetworkTemporarilyDisabledByUser(
                 ScanResultUtil.createQuotedSSID(mTestScanDatas[0].getResults()[0].SSID)))
                 .thenReturn(true);
 
@@ -2971,6 +2971,7 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
         in.setInput(inputStream, StandardCharsets.UTF_8.name());
         mNetworkRequestStoreData.deserializeData(in, in.getDepth(),
                 WifiConfigStore.ENCRYPT_CREDENTIALS_CONFIG_STORE_DATA_VERSION,
-                mock(WifiConfigStoreEncryptionUtil.class));
+                mock(WifiConfigStoreEncryptionUtil.class),
+                mock(WifiConfigStoreMigrationDataHolder.class));
     }
 }

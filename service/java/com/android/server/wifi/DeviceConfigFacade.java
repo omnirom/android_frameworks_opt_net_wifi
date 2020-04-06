@@ -85,6 +85,8 @@ public class DeviceConfigFacade {
     // Connection or disconnection events with RSSI below this threshold are not
     // included in connection stats collection.
     static final int DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM = -68;
+    // Default minimum number of connection attempts to qualify daily detection
+    static final int DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT = 10;
 
     // Cached values of fields updated via updateDeviceConfigFlags()
     private boolean mIsAbnormalConnectionBugreportEnabled;
@@ -116,6 +118,8 @@ public class DeviceConfigFacade {
     private Set<String> mRandomizationFlakySsidHotlist;
     private Set<String> mAggressiveMacRandomizationSsidAllowlist;
     private Set<String> mAggressiveMacRandomizationSsidBlocklist;
+    private boolean mIsAbnormalEapAuthFailureBugreportEnabled;
+    private int mHealthMonitorMinNumConnectionAttempt;
 
     public DeviceConfigFacade(Context context, Handler handler, WifiMetrics wifiMetrics) {
         mContext = context;
@@ -213,6 +217,12 @@ public class DeviceConfigFacade {
                 getUnmodifiableSetQuoted("aggressive_randomization_ssid_allowlist");
         mAggressiveMacRandomizationSsidBlocklist =
                 getUnmodifiableSetQuoted("aggressive_randomization_ssid_blocklist");
+
+        mIsAbnormalEapAuthFailureBugreportEnabled = DeviceConfig.getBoolean(NAMESPACE,
+                "abnormal_eap_auth_failure_bugreport_enabled", false);
+        mHealthMonitorMinNumConnectionAttempt = DeviceConfig.getInt(NAMESPACE,
+                "health_monitor_min_num_connection_attempt",
+                DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT);
     }
 
     private Set<String> getUnmodifiableSetQuoted(String key) {
@@ -433,5 +443,19 @@ public class DeviceConfigFacade {
      */
     public Set<String> getAggressiveMacRandomizationSsidBlocklist() {
         return mAggressiveMacRandomizationSsidBlocklist;
+    }
+
+    /**
+     * Gets the feature flag for reporting abnormal EAP authentication failure.
+     */
+    public boolean isAbnormalEapAuthFailureBugreportEnabled() {
+        return mIsAbnormalEapAuthFailureBugreportEnabled;
+    }
+
+    /**
+     * Gets health monitor min number of connection attempt threshold
+     */
+    public int getHealthMonitorMinNumConnectionAttempt() {
+        return mHealthMonitorMinNumConnectionAttempt;
     }
 }

@@ -217,12 +217,6 @@ public class SupplicantStaNetworkHal {
                 config.preSharedKey = NativeUtil.hexStringFromByteArray(mPsk);
             } /* Do not read SAE password */
 
-            /** SAE Password id */
-            config.saePasswordId = null;
-            if (getSaePasswordId() && !TextUtils.isEmpty(mSaePasswordId)) {
-                config.saePasswordId = mSaePasswordId;
-            }
-
             /** allowedKeyManagement */
             if (getKeyMgmt()) {
                 BitSet keyMgmtMask = supplicantToWifiConfigurationKeyMgmtMask(mKeyMgmtMask);
@@ -334,14 +328,6 @@ public class SupplicantStaNetworkHal {
                         Log.e(TAG, "failed to set psk");
                         return false;
                     }
-                }
-            }
-
-            if (config.saePasswordId != null
-                    && config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
-                if (!setSaePasswordId(config.saePasswordId)) {
-                    Log.e(TAG, "failed to ste sae password id");
-                    return false;
                 }
             }
 
@@ -796,6 +782,15 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, "failed to set ocsp");
                 return false;
             }
+            /** EAP ERP */
+            eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.EAP_ERP);
+            if (!TextUtils.isEmpty(eapParam) && eapParam.equals("1")) {
+                if (!setEapErp(true)) {
+                    Log.e(TAG, ssid + ": failed to set eap erp");
+                    return false;
+                }
+            }
+
 
             return true;
         }
@@ -874,9 +869,15 @@ public class SupplicantStaNetworkHal {
                     mask |= android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.KeyMgmtMask
                             .WAPI_CERT;
                     break;
-                case WifiConfiguration.KeyMgmt.WPA2_PSK: // This should never happen
                 case WifiConfiguration.KeyMgmt.FILS_SHA256:
+                    mask |= android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.KeyMgmtMask
+                            .FILS_SHA256;
+                    break;
                 case WifiConfiguration.KeyMgmt.FILS_SHA384:
+                    mask |= android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.KeyMgmtMask
+                            .FILS_SHA384;
+                    break;
+                case WifiConfiguration.KeyMgmt.WPA2_PSK: // This should never happen
                 case WifiConfiguration.KeyMgmt.DPP:
                     break;
                 default:
@@ -1178,11 +1179,11 @@ public class SupplicantStaNetworkHal {
                 mask, android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.KeyMgmtMask
                         .WAPI_CERT, bitset, WifiConfiguration.KeyMgmt.WAPI_CERT);
         mask = supplicantMaskValueToWifiConfigurationBitSet(
-                mask, ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA256, bitset,
-                WifiConfiguration.KeyMgmt.FILS_SHA256);
+                mask, android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.KeyMgmtMask
+                      .FILS_SHA256, bitset, WifiConfiguration.KeyMgmt.FILS_SHA256);
         mask = supplicantMaskValueToWifiConfigurationBitSet(
-                mask, ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA384, bitset,
-                WifiConfiguration.KeyMgmt.FILS_SHA384);
+                mask, android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork.KeyMgmtMask
+                      .FILS_SHA384, bitset, WifiConfiguration.KeyMgmt.FILS_SHA384);
         if (mask != 0) {
             throw new IllegalArgumentException(
                     "invalid key mgmt mask from supplicant: " + mask);
@@ -2062,20 +2063,6 @@ public class SupplicantStaNetworkHal {
         }
     }
     /** See ISupplicantVendorStaNetwork.hal for documentation */
-    private boolean setEapErp(boolean enable) {
-        synchronized (mLock) {
-            final String methodStr = "setEapErp";
-            if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
-            try {
-                SupplicantStatus status =  mISupplicantVendorStaNetwork.setEapErp(enable);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-    /** See ISupplicantVendorStaNetwork.hal for documentation */
     private boolean setDppConnector(String connector) {
         synchronized (mLock) {
             final String methodStr = "setDppConnector";
@@ -2185,52 +2172,18 @@ public class SupplicantStaNetworkHal {
     }
 
     /** See ISupplicantStaNetwork.hal for documentation */
-    private boolean getSaePasswordId() {
+    private boolean setEapErp(boolean enable) {
         synchronized (mLock) {
-            final String methodStr = "getSaePasswordId";
+            final String methodStr = "setEapErp";
             if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
             try {
-                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
-                        iSupplicantStaNetworkV12;
+                android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
+                        iSupplicantStaNetworkV13;
 
-                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
-                if (iSupplicantStaNetworkV12 != null) {
-                    /* Support for SAE Requires HAL v1.2 or higher */
-                    MutableBoolean statusOk = new MutableBoolean(false);
-                    iSupplicantStaNetworkV12.getSaePasswordId((SupplicantStatus status,
-                            String saePasswordId) -> {
-                        statusOk.value = status.code == SupplicantStatusCode.SUCCESS;
-                        if (statusOk.value) {
-                            this.mSaePasswordId = saePasswordId;
-                        } else {
-                            checkStatusAndLogFailure(status, methodStr);
-                        }
-                    });
-                    return statusOk.value;
-                } else {
-                    return false;
-                }
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-
-    /** See ISupplicantStaNetwork.hal for documentation */
-    private boolean setSaePasswordId(String saePasswordId) {
-        synchronized (mLock) {
-            final String methodStr = "setSaePasswordId";
-            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
-            try {
-                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
-                        iSupplicantStaNetworkV12;
-
-                iSupplicantStaNetworkV12 = getV1_2StaNetwork();
-                if (iSupplicantStaNetworkV12 != null) {
-                    /* Support for SAE Requires HAL v1.2 or higher */
-                    SupplicantStatus status = iSupplicantStaNetworkV12
-                            .setSaePasswordId(saePasswordId);
+                iSupplicantStaNetworkV13 = getV1_3StaNetwork();
+                if (iSupplicantStaNetworkV13 != null) {
+                    /* Support for set ERP Requires HAL v1.3 or higher */
+                    SupplicantStatus status =  iSupplicantStaNetworkV13.setEapErp(enable);
                     return checkStatusAndLogFailure(status, methodStr);
                 } else {
                     return false;

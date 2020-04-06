@@ -94,13 +94,6 @@ public class PasspointNetworkNominateHelper {
                         + WifiNetworkSelector.toScanId(scanDetail.getScanResult()));
                 continue;
             }
-            if (mWifiConfigManager.wasEphemeralNetworkDeleted(
-                    ScanResultUtil.createQuotedSSID(scanDetail.getScanResult().SSID))) {
-                // If the user previously disconnects this network, don't select it.
-                mLocalLog.log("Ignoring disabled the SSID of Passpoint AP: "
-                        + WifiNetworkSelector.toScanId(scanDetail.getScanResult()));
-                continue;
-            }
             filteredScanDetails.add(scanDetail);
         }
 
@@ -170,6 +163,10 @@ public class PasspointNetworkNominateHelper {
                 if (config == null) {
                     continue;
                 }
+                if (mWifiConfigManager.isNetworkTemporarilyDisabledByUser(config.FQDN)) {
+                    mLocalLog.log("Ignoring user disabled FQDN: " + config.FQDN);
+                    continue;
+                }
                 results.add(Pair.create(candidate.mScanDetail, config));
             }
         }
@@ -187,6 +184,10 @@ public class PasspointNetworkNominateHelper {
         WifiConfiguration config = candidate.mProvider.getWifiConfig();
         config.SSID = ScanResultUtil.createQuotedSSID(candidate.mScanDetail.getSSID());
         config.isHomeProviderNetwork = candidate.mMatchStatus == PasspointMatch.HomeProvider;
+        if (candidate.mScanDetail.getNetworkDetail().getAnt()
+                == NetworkDetail.Ant.ChargeablePublic) {
+            config.meteredHint = true;
+        }
         WifiConfiguration existingNetwork = mWifiConfigManager.getConfiguredNetwork(
                 config.getKey());
         if (existingNetwork != null) {

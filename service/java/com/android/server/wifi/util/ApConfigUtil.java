@@ -27,6 +27,7 @@ import android.net.wifi.SoftApConfiguration.BandType;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.util.Log;
+import android.util.SparseArray;
 
 import com.android.server.wifi.WifiNative;
 import com.android.wifi.resources.R;
@@ -54,6 +55,39 @@ public class ApConfigUtil {
 
     /* Random number generator used for AP channel selection. */
     private static final Random sRandom = new Random();
+
+    /**
+     * Valid Global Operating classes in each wifi band
+     * Reference: Table E-4 in IEEE Std 802.11-2016.
+     */
+    private static final SparseArray<int[]> sBandToOperatingClass = new SparseArray<>();
+    static {
+        sBandToOperatingClass.append(SoftApConfiguration.BAND_2GHZ, new int[]{81, 82, 83, 84});
+        sBandToOperatingClass.append(SoftApConfiguration.BAND_5GHZ, new int[]{115, 116, 117, 118,
+                119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130});
+        sBandToOperatingClass.append(SoftApConfiguration.BAND_6GHZ, new int[]{131, 132, 133, 134});
+    }
+
+    /**
+     * Helper function to get the band corresponding to the operating class.
+     *
+     * @param operatingClass Global operating class.
+     * @return band, -1 if no match.
+     *
+     */
+    public static int getBandFromOperatingClass(int operatingClass) {
+        for (int i = 0; i < sBandToOperatingClass.size(); i++) {
+            int band = sBandToOperatingClass.keyAt(i);
+            int[] operatingClasses = sBandToOperatingClass.get(band);
+
+            for (int j = 0; j < operatingClasses.length; j++) {
+                if (operatingClasses[j] == operatingClass) {
+                    return band;
+                }
+            }
+        }
+        return -1;
+    }
 
     /**
      * Convert channel/band to frequency.
@@ -292,72 +326,42 @@ public class ApConfigUtil {
             return -1;
         }
 
-        int totalChannelCount = 0;
-        int size2gList = 0;
-        int size5gList = 0;
-        int size6gList = 0;
-        List<Integer> allowed2gFreqList = null;
-        List<Integer> allowed5gFreqList = null;
-        List<Integer> allowed6gFreqList = null;
+        List<Integer> allowedFreqList = null;
+
+        if ((apBand & SoftApConfiguration.BAND_6GHZ) != 0) {
+            allowedFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_6GHZ,
+                    wifiNative, resources);
+            if (allowedFreqList != null && allowedFreqList.size() > 0) {
+                return allowedFreqList.get(sRandom.nextInt(allowedFreqList.size())).intValue();
+            }
+        }
+
+        if ((apBand & SoftApConfiguration.BAND_5GHZ) != 0) {
+            allowedFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_5GHZ,
+                    wifiNative, resources);
+            if (allowedFreqList != null && allowedFreqList.size() > 0) {
+                return allowedFreqList.get(sRandom.nextInt(allowedFreqList.size())).intValue();
+            }
+        }
 
         if ((apBand & SoftApConfiguration.BAND_2GHZ) != 0) {
-            allowed2gFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_2GHZ,
+            allowedFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_2GHZ,
                     wifiNative, resources);
-            if (allowed2gFreqList != null) {
-                size2gList = allowed2gFreqList.size();
-                totalChannelCount += size2gList;
-            }
-        }
-        if ((apBand & SoftApConfiguration.BAND_5GHZ) != 0) {
-            allowed5gFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_5GHZ,
-                    wifiNative, resources);
-            if (allowed5gFreqList != null) {
-                size5gList = allowed5gFreqList.size();
-                totalChannelCount += size5gList;
-            }
-        }
-        if ((apBand & SoftApConfiguration.BAND_6GHZ) != 0) {
-            allowed6gFreqList = getAvailableChannelFreqsForBand(SoftApConfiguration.BAND_6GHZ,
-                    wifiNative, resources);
-            if (allowed6gFreqList != null) {
-                size6gList = allowed6gFreqList.size();
-                totalChannelCount += size6gList;
+            if (allowedFreqList != null && allowedFreqList.size() > 0) {
+                return allowedFreqList.get(sRandom.nextInt(allowedFreqList.size())).intValue();
             }
         }
 
-        if (totalChannelCount == 0) {
-            // If the default AP band is allowed, just use the default channel
-            if (containsBand(apBand, DEFAULT_AP_BAND)) {
-                Log.d(TAG, "Allowed channel list not specified, selecting default channel");
-                /* Use default channel. */
-                return convertChannelToFrequency(DEFAULT_AP_CHANNEL,
-                        DEFAULT_AP_BAND);
-            } else {
-                Log.e(TAG, "No available channels");
-                return -1;
-            }
+        // If the default AP band is allowed, just use the default channel
+        if (containsBand(apBand, DEFAULT_AP_BAND)) {
+            Log.e(TAG, "Allowed channel list not specified, selecting default channel");
+            /* Use default channel. */
+            return convertChannelToFrequency(DEFAULT_AP_CHANNEL,
+                    DEFAULT_AP_BAND);
         }
 
-        // Pick a channel
-        int selectedChannelIndex = sRandom.nextInt(totalChannelCount);
-
-        if (size2gList != 0) {
-            if (selectedChannelIndex < size2gList) {
-                return allowed2gFreqList.get(selectedChannelIndex).intValue();
-            } else {
-                selectedChannelIndex -= size2gList;
-            }
-        }
-
-        if (size5gList != 0) {
-            if (selectedChannelIndex < size5gList) {
-                return allowed5gFreqList.get(selectedChannelIndex).intValue();
-            } else {
-                selectedChannelIndex -= size5gList;
-            }
-        }
-
-        return allowed6gFreqList.get(selectedChannelIndex).intValue();
+        Log.e(TAG, "No available channels");
+        return -1;
     }
 
     /**
@@ -464,7 +468,7 @@ public class ApConfigUtil {
      */
     @NonNull
     public static SoftApCapability updateCapabilityFromResource(@NonNull Context context) {
-        int features = 0;
+        long features = 0;
         if (isAcsSupported(context)) {
             Log.d(TAG, "Update Softap capability, add acs feature support");
             features |= SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
@@ -534,7 +538,7 @@ public class ApConfigUtil {
     public static boolean checkConfigurationChangeNeedToRestart(
             SoftApConfiguration currentConfig, SoftApConfiguration newConfig) {
         return !Objects.equals(currentConfig.getSsid(), newConfig.getSsid())
-                || currentConfig.getBssid() != newConfig.getBssid()
+                || !Objects.equals(currentConfig.getBssid(), newConfig.getBssid())
                 || currentConfig.getSecurityType() != newConfig.getSecurityType()
                 || !Objects.equals(currentConfig.getPassphrase(), newConfig.getPassphrase())
                 || currentConfig.isHiddenSsid() != newConfig.isHiddenSsid()
@@ -552,14 +556,14 @@ public class ApConfigUtil {
      */
     public static boolean checkSupportAllConfiguration(SoftApConfiguration config,
             SoftApCapability capability) {
-        if (!capability.isFeatureSupported(
+        if (!capability.areFeaturesSupported(
                 SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT)
                 && (config.getMaxNumberOfClients() != 0 || config.isClientControlByUserEnabled())) {
             Log.d(TAG, "Error, Client control requires HAL support");
             return false;
         }
 
-        if (!capability.isFeatureSupported(SoftApCapability.SOFTAP_FEATURE_WPA3_SAE)
+        if (!capability.areFeaturesSupported(SoftApCapability.SOFTAP_FEATURE_WPA3_SAE)
                 && (config.getSecurityType()
                 == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION
                 || config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE)) {

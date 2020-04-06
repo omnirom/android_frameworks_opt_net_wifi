@@ -914,8 +914,8 @@ public class InformationElementUtil {
         private static final int RSN_AKM_OWE = 0x12ac0f00;
         private static final int RSN_AKM_EAP_SUITE_B_192 = 0x0cac0f00;
         private static final int RSN_OSEN = 0x019a6f50;
-        private static final int WPA2_AKM_FILS_SHA256 = 0x0eac0f00;
-        private static final int WPA2_AKM_FILS_SHA384 = 0x0fac0f00;
+        private static final int RSN_AKM_FILS_SHA256 = 0x0eac0f00;
+        private static final int RSN_AKM_FILS_SHA384 = 0x0fac0f00;
         private static final int WPA2_AKM_DPP = 0x029a6f50;
 
         private static final int WPA_CIPHER_NONE = 0x00f25000;
@@ -1010,12 +1010,6 @@ public class InformationElementUtil {
                         case RSN_AKM_PSK_SHA256:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_PSK_SHA256);
                             break;
-                        case WPA2_AKM_FILS_SHA256:
-                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA256);
-                            break;
-                        case WPA2_AKM_FILS_SHA384:
-                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA384);
-                            break;
                         case WPA2_AKM_DPP:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_DPP);
                             break;
@@ -1034,6 +1028,12 @@ public class InformationElementUtil {
                             break;
                         case RSN_OSEN:
                             rsnKeyManagement.add(ScanResult.KEY_MGMT_OSEN);
+                            break;
+                        case RSN_AKM_FILS_SHA256:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA256);
+                            break;
+                        case RSN_AKM_FILS_SHA384:
+                            rsnKeyManagement.add(ScanResult.KEY_MGMT_FILS_SHA384);
                             break;
                         default:
                             // do nothing

@@ -61,9 +61,9 @@
     <string name="wifi_cannot_connect_with_randomized_mac_title" msgid="3161171832972320854">"No es pot connectar a <xliff:g id="SSID">%1$s</xliff:g>"</string>
     <string name="wifi_cannot_connect_with_randomized_mac_message" msgid="3084495849409387375">"Toca per canviar la configuració de privadesa i torna-ho a provar"</string>
     <string name="wifi_disable_mac_randomization_dialog_title" msgid="7200723795776228456">"Vols canviar l\'opció de configuració de privadesa?"</string>
-    <string name="wifi_disable_mac_randomization_dialog_message" msgid="4240415044701814187">"És possible que <xliff:g id="SSID_0">%1$s</xliff:g> vulgui connectar-se utilitzant la teva adreça MAC del dispositiu, un identificador únic. Això pot permetre que altres dispositius propers facin un seguiment de la ubicació del teu dispositiu. \n\nSi continues, <xliff:g id="SSID_1">%1$s</xliff:g> canviarà l\'opció de configuració de privadesa i tornarà a provar de connectar-se."</string>
+    <string name="wifi_disable_mac_randomization_dialog_message" msgid="6780528750693169829">"Per connectar-se, <xliff:g id="SSID">%1$s</xliff:g> necessita utilitzar l\'adreça MAC del teu dispositiu, un identificador únic. Actualment, la configuració de privadesa d\'aquesta xarxa utilitza un identificador aleatori. \n\nAquest canvi pot permetre que altres dispositius propers facin un seguiment de la ubicació del teu dispositiu."</string>
     <string name="wifi_disable_mac_randomization_dialog_confirm_text" msgid="6592972299988727403">"Canvia l\'opció de configuració"</string>
-    <string name="wifi_disable_mac_randomization_dialog_success" msgid="8233753657756785734">"S\'ha actualitzat l\'opció de configuració. Torna a provar de connectar-te."</string>
+    <string name="wifi_disable_mac_randomization_dialog_success" msgid="7288972191769783828">"La configuració s\'ha actualitzat. Torna a provar de connectar-te."</string>
     <string name="wifi_disable_mac_randomization_dialog_failure" msgid="1823128152758990275">"No es pot canviar l\'opció de configuració de privadesa"</string>
     <string name="wifi_disable_mac_randomization_dialog_network_not_found" msgid="2352188098110676023">"No s\'ha trobat la xarxa"</string>
     <string name="wifi_eap_error_message_code_32760" msgid="2272296327034079386">"<xliff:g id="SSID">%1$s</xliff:g>: error d\'autenticació EAP 32760"</string>
@@ -77,5 +77,5 @@
     <string name="wifi_softap_auto_shutdown_timeout_expired_summary" msgid="2784340491027490290">"S\'ha desactivat el punt d\'accés mòbil"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_detail" msgid="7203939001058203709">"S\'ha desactivat el punt d\'accés mòbil perquè el temps d\'espera d\'inactivitat ha caducat."</string>
     <string name="wifi_sim_required_title" msgid="8362843050699015640">"La Wi‑Fi està desconnectada"</string>
-    <string name="wifi_sim_required_message" msgid="8337512370882674437">"Per connectar-te a <xliff:g id="SSID">%1$s</xliff:g>, insereix una SIM <xliff:g id="CARRIER_NAME">%2$s</xliff:g>."</string>
+    <string name="wifi_sim_required_message" msgid="6085636103482409595">"Per connectar-te a <xliff:g id="SSID">%1$s</xliff:g>, insereix una SIM de l\'operador<xliff:g id="CARRIER_NAME">%2$s</xliff:g>"</string>
 </resources>

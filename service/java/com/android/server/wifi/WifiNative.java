@@ -1708,7 +1708,7 @@ public class WifiNative {
                     result.getSignalMbm() / 100, result.getFrequencyMhz(), result.getTsf(), ies,
                     null, result.getInformationElements());
             ScanResult scanResult = scanDetail.getScanResult();
-            scanResult.setWifiStandard(networkDetail.getWifiMode());
+            scanResult.setWifiStandard(wifiModeToWifiStandard(networkDetail.getWifiMode()));
 
             // Fill up the radio chain info.
             scanResult.radioChainInfos =
@@ -1727,6 +1727,25 @@ public class WifiNative {
         }
 
         return results;
+    }
+
+    @WifiAnnotations.WifiStandard
+    private static int wifiModeToWifiStandard(int wifiMode) {
+        switch (wifiMode) {
+            case InformationElementUtil.WifiMode.MODE_11A:
+            case InformationElementUtil.WifiMode.MODE_11B:
+            case InformationElementUtil.WifiMode.MODE_11G:
+                return ScanResult.WIFI_STANDARD_LEGACY;
+            case InformationElementUtil.WifiMode.MODE_11N:
+                return ScanResult.WIFI_STANDARD_11N;
+            case InformationElementUtil.WifiMode.MODE_11AC:
+                return ScanResult.WIFI_STANDARD_11AC;
+            case InformationElementUtil.WifiMode.MODE_11AX:
+                return ScanResult.WIFI_STANDARD_11AX;
+            case InformationElementUtil.WifiMode.MODE_UNDEFINED:
+            default:
+                return ScanResult.WIFI_STANDARD_UNKNOWN;
+        }
     }
 
     private boolean mIsEnhancedOpenSupportedInitialized = false;
@@ -2265,8 +2284,8 @@ public class WifiNative {
      * @param hlpPacket Hlp Packet data in hex.
      * @return true if request is sent successfully, false otherwise.
      */
-    public boolean addHlpReq(@NonNull String ifaceName, String dst, String hlpPacket) {
-        return mSupplicantStaIfaceHal.addHlpReq(ifaceName, dst, hlpPacket);
+    public boolean addHlpReq(@NonNull String ifaceName, MacAddress dst, byte [] hlpPacket) {
+        return mSupplicantStaIfaceHal.addHlpReq(ifaceName, dst.toByteArray(), hlpPacket);
     }
 
     /**
@@ -3149,7 +3168,7 @@ public class WifiNative {
      * Class to retrieve connection capability parameters after association
      */
     public static class ConnectionCapabilities {
-        public @ScanResult.WifiStandard int wifiStandard;
+        public @WifiAnnotations.WifiStandard int wifiStandard;
         public int channelBandwidth;
         public int maxNumberTxSpatialStreams;
         public int maxNumberRxSpatialStreams;
@@ -3812,7 +3831,7 @@ public class WifiNative {
      * @return true if the wifi standard is supported on this interface, false otherwise.
      */
     public boolean isWifiStandardSupported(@NonNull String ifaceName,
-            @ScanResult.WifiStandard int standard) {
+            @WifiAnnotations.WifiStandard int standard) {
         synchronized (mLock) {
             Iface iface = mIfaceMgr.getIface(ifaceName);
             if (iface == null || iface.phyCapabilities == null) {

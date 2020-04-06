@@ -165,7 +165,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         mTestSoftApInfo.setFrequency(TEST_AP_FREQUENCY);
         mTestSoftApInfo.setBandwidth(TEST_AP_BANDWIDTH_IN_SOFTAPINFO);
         // Default set up all features support.
-        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT
+        long testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT
                 | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD
                 | SoftApCapability.SOFTAP_FEATURE_WPA3_SAE;
         mTestSoftApCapability = new SoftApCapability(testSoftApFeature);
@@ -1159,7 +1159,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
         configBuilder.setSsid(TEST_SSID);
-        configBuilder.enableClientControlByUser(true);
+        configBuilder.setClientControlByUserEnabled(true);
         SoftApModeConfiguration apConfig =
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
                 configBuilder.build(), mTestSoftApCapability);
@@ -1192,7 +1192,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
         configBuilder.setSsid(TEST_SSID);
-        configBuilder.enableClientControlByUser(true);
+        configBuilder.setClientControlByUserEnabled(true);
         SoftApModeConfiguration apConfig =
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
                 configBuilder.build(), mTestSoftApCapability);
@@ -1220,7 +1220,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         reset(mWifiNative);
         // Update configuration
         allowedClientList.add(TEST_MAC_ADDRESS);
-        configBuilder.setClientList(new ArrayList<MacAddress>(), allowedClientList);
+        configBuilder.setAllowedClientList(allowedClientList);
         mSoftApManager.updateConfiguration(configBuilder.build());
         mLooper.dispatchAll();
         // Client connected again
@@ -1248,7 +1248,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
         configBuilder.setSsid(TEST_SSID);
-        configBuilder.enableClientControlByUser(true);
+        configBuilder.setClientControlByUserEnabled(true);
         SoftApModeConfiguration apConfig =
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
                 configBuilder.build(), mTestSoftApCapability);
@@ -1276,7 +1276,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         reset(mWifiNative);
         // Update configuration
         blockedClientList.add(TEST_MAC_ADDRESS);
-        configBuilder.setClientList(blockedClientList, new ArrayList<MacAddress>());
+        configBuilder.setBlockedClientList(blockedClientList);
         mSoftApManager.updateConfiguration(configBuilder.build());
         mLooper.dispatchAll();
         // Client connected again
@@ -1308,9 +1308,9 @@ public class SoftApManagerTest extends WifiBaseTest {
         Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setBand(SoftApConfiguration.BAND_2GHZ);
         configBuilder.setSsid(TEST_SSID);
-        configBuilder.enableClientControlByUser(true);
+        configBuilder.setClientControlByUserEnabled(true);
         configBuilder.setMaxNumberOfClients(2);
-        configBuilder.setClientList(new ArrayList<MacAddress>(), allowedClientList);
+        configBuilder.setAllowedClientList(allowedClientList);
         SoftApModeConfiguration apConfig =
                 new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED,
                 configBuilder.build(), mTestSoftApCapability);
@@ -1350,7 +1350,8 @@ public class SoftApManagerTest extends WifiBaseTest {
         allowedClientList.add(TEST_MAC_ADDRESS_2);
 
         blockedClientList.add(TEST_MAC_ADDRESS);
-        configBuilder.setClientList(blockedClientList, allowedClientList);
+        configBuilder.setBlockedClientList(blockedClientList);
+        configBuilder.setAllowedClientList(allowedClientList);
         configBuilder.setMaxNumberOfClients(1);
         mSoftApManager.updateConfiguration(configBuilder.build());
         mLooper.dispatchAll();
@@ -1794,7 +1795,7 @@ public class SoftApManagerTest extends WifiBaseTest {
 
     @Test
     public void testForceClientDisconnectNotInvokeWhenNotSupport() throws Exception {
-        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_WPA3_SAE
+        long testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_WPA3_SAE
                 | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
         SoftApCapability noClientControlCapability = new SoftApCapability(testSoftApFeature);
         noClientControlCapability.setMaxSupportedClients(1);
@@ -1833,7 +1834,7 @@ public class SoftApManagerTest extends WifiBaseTest {
 
     @Test
     public void testSoftApEnableFailureBecauseSetMaxClientWhenNotSupport() throws Exception {
-        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_WPA3_SAE
+        long testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_WPA3_SAE
                 | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
         when(mWifiNative.setupInterfaceForSoftApMode(any())).thenReturn(TEST_INTERFACE_NAME);
         SoftApCapability noClientControlCapability = new SoftApCapability(testSoftApFeature);
@@ -1868,7 +1869,7 @@ public class SoftApManagerTest extends WifiBaseTest {
     @Test
     public void testSoftApEnableFailureBecauseSecurityTypeSaeSetupButSaeNotSupport()
             throws Exception {
-        int testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT
+        long testSoftApFeature = SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT
                 | SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD;
         when(mWifiNative.setupInterfaceForSoftApMode(any())).thenReturn(TEST_INTERFACE_NAME);
         SoftApCapability noSaeCapability = new SoftApCapability(testSoftApFeature);

@@ -61,9 +61,9 @@
     <string name="wifi_cannot_connect_with_randomized_mac_title" msgid="3161171832972320854">"Повезивање на мрежу <xliff:g id="SSID">%1$s</xliff:g> није успело"</string>
     <string name="wifi_cannot_connect_with_randomized_mac_message" msgid="3084495849409387375">"Додирните да бисте променили подешавања приватности и пробали поново"</string>
     <string name="wifi_disable_mac_randomization_dialog_title" msgid="7200723795776228456">"Желите ли да промените подешавања приватности?"</string>
-    <string name="wifi_disable_mac_randomization_dialog_message" msgid="4240415044701814187">"<xliff:g id="SSID_0">%1$s</xliff:g> можда жели да се повеже помоћу MAC адресе уређаја, јединственог идентификатора. То може да омогући уређајима у близини да прате локацију уређаја. \n\nАко наставите, <xliff:g id="SSID_1">%1$s</xliff:g> ће променити подешавања приватности и поново пробати да се повеже."</string>
+    <string name="wifi_disable_mac_randomization_dialog_message" msgid="6780528750693169829">"<xliff:g id="SSID">%1$s</xliff:g> треба да се повеже помоћу MAC адресе уређаја, јединственог идентификатора. Подешавање приватности за ову мрежу тренутно користи насумични идентификатор. \n\nОва измена може да омогући уређајима у близини да прате локацију уређаја."</string>
     <string name="wifi_disable_mac_randomization_dialog_confirm_text" msgid="6592972299988727403">"Промени подешавање"</string>
-    <string name="wifi_disable_mac_randomization_dialog_success" msgid="8233753657756785734">"Подешавање је ажурирано. Пробајте поново да се повежете."</string>
+    <string name="wifi_disable_mac_randomization_dialog_success" msgid="7288972191769783828">"Подешавање је ажурирано. Пробајте поново да се повежете."</string>
     <string name="wifi_disable_mac_randomization_dialog_failure" msgid="1823128152758990275">"Промена подешавања приватности није успела"</string>
     <string name="wifi_disable_mac_randomization_dialog_network_not_found" msgid="2352188098110676023">"Мрежа није пронађена"</string>
     <string name="wifi_eap_error_message_code_32760" msgid="2272296327034079386">"<xliff:g id="SSID">%1$s</xliff:g>: EAP грешка при потврди идентитета 32760"</string>
@@ -76,8 +76,6 @@
     <string name="wifi_softap_auto_shutdown_timeout_expired_title" msgid="6772994319428197481">"Мобилни хотспот је онемогућен"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_summary" msgid="2784340491027490290">"Мобилни хотспот је онемогућен"</string>
     <string name="wifi_softap_auto_shutdown_timeout_expired_detail" msgid="7203939001058203709">"Мобилни хотспот је онемогућен због истека временског ограничења за неактивност."</string>
-    <!-- no translation found for wifi_sim_required_title (8362843050699015640) -->
-    <skip />
-    <!-- no translation found for wifi_sim_required_message (8337512370882674437) -->
-    <skip />
+    <string name="wifi_sim_required_title" msgid="8362843050699015640">"Wi-Fi веза је прекинута"</string>
+    <string name="wifi_sim_required_message" msgid="6085636103482409595">"Да бисте се повезали на мрежу <xliff:g id="SSID">%1$s</xliff:g>, уметните <xliff:g id="CARRIER_NAME">%2$s</xliff:g> SIM картицу"</string>
 </resources>

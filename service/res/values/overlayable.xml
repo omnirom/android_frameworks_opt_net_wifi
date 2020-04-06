@@ -61,6 +61,7 @@
           <item type="integer" name="config_wifi_framework_associated_partial_scan_max_num_active_channels" />
           <item type="integer" name="config_wifi_framework_recovery_timeout_delay" />
           <item type="bool" name="config_wifi_framework_enable_associated_network_selection" />
+          <item type="integer" name="config_wifiSufficientDurationAfterUserSelectionMilliseconds" />
           <item type="bool" name="config_wifiEnablePartialInitialScan" />
           <item type="integer" name="config_wifiInitialPartialScanChannelMaxCount" />
           <item type="integer" name="config_wifiInitialPartialScanChannelCacheAgeMins" />
@@ -117,6 +118,9 @@
           <item type="bool" name="config_wifiPnoFrequencyCullingEnabled" />
           <item type="bool" name="config_wifiPnoRecencySortingEnabled" />
           <item type="bool" name="config_wifiSuspendOptimizationsEnabled" />
+          <item type="bool" name="config_wifiHighMovementNetworkSelectionOptimizationEnabled" />
+          <item type="integer" name="config_wifiHighMovementNetworkSelectionOptimizationScanDelayMs" />
+          <item type="integer" name="config_wifiHighMovementNetworkSelectionOptimizationRssiDelta" />
           <item type="integer" name="config_wifiRttBackgroundExecGapMs" />
           <item type="integer" name="config_wifiPollRssiIntervalMilliseconds" />
           <item type="bool" name="config_wifiSaeUpgradeEnabled" />

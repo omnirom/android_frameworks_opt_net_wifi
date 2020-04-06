@@ -497,7 +497,7 @@ public class PasspointProvider {
         if (!ArrayUtils.isEmpty(mConfig.getAaaServerTrustedNames())) {
             enterpriseConfig.setDomainSuffixMatch(
                     String.join(";", mConfig.getAaaServerTrustedNames()));
-            enterpriseConfig.setCaCertificateAliases(new String[] {SYSTEM_CA_STORE_PATH});
+            enterpriseConfig.setCaPath(SYSTEM_CA_STORE_PATH);
         }
         wifiConfig.enterpriseConfig = enterpriseConfig;
         // PPS MO Credential/CheckAAAServerCertStatus node contains a flag which indicates
@@ -691,6 +691,57 @@ public class PasspointProvider {
     }
 
     /**
+     * Match given OIs to the Roaming Consortium OIs
+     *
+     * @param providerOis Provider OIs to match against
+     * @param roamingConsortiumElement RCOIs in the ANQP element
+     * @param roamingConsortiumFromAp RCOIs in the AP scan results
+     * @param matchAll Indicates if all providerOis must match the RCOIs elements
+     * @return {@code true} if there is a match, {@code false} otherwise.
+     */
+    private boolean matchOis(long[] providerOis,
+            RoamingConsortiumElement roamingConsortiumElement,
+            RoamingConsortium roamingConsortiumFromAp,
+            boolean matchAll) {
+
+
+        // ANQP Roaming Consortium OI matching.
+        if (ANQPMatcher.matchRoamingConsortium(roamingConsortiumElement, providerOis, matchAll)) {
+            if (mVerboseLoggingEnabled) {
+                Log.e(TAG, "ANQP RCOI match " + roamingConsortiumElement);
+            }
+            return true;
+        }
+
+        // AP Roaming Consortium OI matching.
+        long[] apRoamingConsortiums = roamingConsortiumFromAp.getRoamingConsortiums();
+        if (apRoamingConsortiums == null || providerOis == null) {
+            return false;
+        }
+        // Roaming Consortium OI information element matching.
+        for (long apOi: apRoamingConsortiums) {
+            boolean matched = false;
+            for (long providerOi: providerOis) {
+                if (apOi == providerOi) {
+                    if (mVerboseLoggingEnabled) {
+                        Log.e(TAG, "AP RCOI match: " + apOi);
+                    }
+                    if (!matchAll) {
+                        return true;
+                    } else {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if (matchAll && !matched) {
+                return false;
+            }
+        }
+        return matchAll;
+    }
+
+    /**
      * Perform a provider match based on the given ANQP elements for FQDN and RCOI
      *
      * @param anqpElements List of ANQP elements
@@ -711,31 +762,54 @@ public class PasspointProvider {
             return PasspointMatch.HomeProvider;
         }
 
-        // ANQP Roaming Consortium OI matching.
-        long[] providerOIs = mConfig.getHomeSp().getRoamingConsortiumOis();
-        if (ANQPMatcher.matchRoamingConsortium(
-                (RoamingConsortiumElement) anqpElements.get(ANQPElementType.ANQPRoamingConsortium),
-                providerOIs)) {
+        // Other Home Partners matching.
+        if (mConfig.getHomeSp().getOtherHomePartners() != null) {
+            for (String otherHomePartner : mConfig.getHomeSp().getOtherHomePartners()) {
+                if (ANQPMatcher.matchDomainName(
+                        (DomainNameElement) anqpElements.get(ANQPElementType.ANQPDomName),
+                        otherHomePartner, null, null)) {
+                    if (mVerboseLoggingEnabled) {
+                        Log.d(TAG, "Other Home Partner " + otherHomePartner
+                                + " match: HomeProvider");
+                    }
+                    return PasspointMatch.HomeProvider;
+                }
+            }
+        }
+
+        // HomeOI matching
+        if (mConfig.getHomeSp().getMatchAllOis() != null) {
+            // Ensure that every HomeOI whose corresponding HomeOIRequired value is true shall match
+            // an OI in the Roaming Consortium advertised by the hotspot operator.
+            if (matchOis(mConfig.getHomeSp().getMatchAllOis(), (RoamingConsortiumElement)
+                            anqpElements.get(ANQPElementType.ANQPRoamingConsortium),
+                    roamingConsortiumFromAp, true)) {
+                if (mVerboseLoggingEnabled) {
+                    Log.e(TAG, "All HomeOI RCOI match: HomeProvider");
+                }
+                return PasspointMatch.HomeProvider;
+            }
+        } else if (mConfig.getHomeSp().getMatchAnyOis() != null) {
+            // Ensure that any HomeOI whose corresponding HomeOIRequired value is false shall match
+            // an OI in the Roaming Consortium advertised by the hotspot operator.
+            if (matchOis(mConfig.getHomeSp().getMatchAnyOis(), (RoamingConsortiumElement)
+                            anqpElements.get(ANQPElementType.ANQPRoamingConsortium),
+                    roamingConsortiumFromAp, false)) {
+                if (mVerboseLoggingEnabled) {
+                    Log.e(TAG, "Any HomeOI RCOI match: HomeProvider");
+                }
+                return PasspointMatch.HomeProvider;
+            }
+        }
+
+        // Roaming Consortium OI matching.
+        if (matchOis(mConfig.getHomeSp().getRoamingConsortiumOis(), (RoamingConsortiumElement)
+                anqpElements.get(ANQPElementType.ANQPRoamingConsortium),
+                roamingConsortiumFromAp, false)) {
             if (mVerboseLoggingEnabled) {
                 Log.e(TAG, "ANQP RCOI match: RoamingProvider");
             }
             return PasspointMatch.RoamingProvider;
-        }
-
-        // AP Roaming Consortium OI matching.
-        long[] roamingConsortiums = roamingConsortiumFromAp.getRoamingConsortiums();
-        // Roaming Consortium OI information element matching.
-        if (roamingConsortiums != null && providerOIs != null) {
-            for (long sta_oi: roamingConsortiums) {
-                for (long ap_oi: providerOIs) {
-                    if (sta_oi == ap_oi) {
-                        if (mVerboseLoggingEnabled) {
-                            Log.e(TAG, "AP RCOI match: RoamingProvider");
-                        }
-                        return PasspointMatch.RoamingProvider;
-                    }
-                }
-            }
         }
         if (mVerboseLoggingEnabled) {
             Log.e(TAG, "No domain name or RCOI match");
@@ -751,15 +825,21 @@ public class PasspointProvider {
      */
     private void buildEnterpriseConfigForUserCredential(WifiEnterpriseConfig config,
             Credential.UserCredential credential) {
-        byte[] pwOctets = Base64.decode(credential.getPassword(), Base64.DEFAULT);
-        String decodedPassword = new String(pwOctets, StandardCharsets.UTF_8);
+        String password;
+        try {
+            byte[] pwOctets = Base64.decode(credential.getPassword(), Base64.DEFAULT);
+            password = new String(pwOctets, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "Failed to decode password");
+            password = credential.getPassword();
+        }
         config.setEapMethod(WifiEnterpriseConfig.Eap.TTLS);
         config.setIdentity(credential.getUsername());
-        config.setPassword(decodedPassword);
+        config.setPassword(password);
         if (!ArrayUtils.isEmpty(mCaCertificateAliases)) {
             config.setCaCertificateAliases(mCaCertificateAliases.toArray(new String[0]));
         } else {
-            config.setCaCertificateAliases(new String[] {SYSTEM_CA_STORE_PATH});
+            config.setCaPath(SYSTEM_CA_STORE_PATH);
         }
         int phase2Method = WifiEnterpriseConfig.Phase2.NONE;
         switch (credential.getNonEapInnerMethod()) {
@@ -792,7 +872,7 @@ public class PasspointProvider {
         if (!ArrayUtils.isEmpty(mCaCertificateAliases)) {
             config.setCaCertificateAliases(mCaCertificateAliases.toArray(new String[0]));
         } else {
-            config.setCaCertificateAliases(new String[] {SYSTEM_CA_STORE_PATH});
+            config.setCaPath(SYSTEM_CA_STORE_PATH);
         }
     }
 
