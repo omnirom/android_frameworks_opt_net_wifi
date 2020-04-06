@@ -59,6 +59,7 @@ import android.net.NetworkProvider;
 import android.net.SocketKeepalive;
 import android.net.StaticIpConfiguration;
 import android.net.TcpKeepalivePacketData;
+import android.net.Uri;
 import android.net.ip.IIpClient;
 import android.net.ip.IpClientCallbacks;
 import android.net.ip.IpClientManager;
@@ -151,6 +152,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -3797,6 +3799,7 @@ public class ClientModeImpl extends StateMachine {
 
         // Let's remove any ephemeral or passpoint networks.
         mWifiConfigManager.removeAllEphemeralOrPasspointConfiguredNetworks();
+        mWifiConfigManager.clearUserTemporarilyDisabledList();
     }
 
     void registerConnected() {
@@ -4791,7 +4794,7 @@ public class ClientModeImpl extends StateMachine {
         }
 
         @Override
-        public void onValidationStatus(int status, @Nullable String redirectUrl) {
+        public void onValidationStatus(int status, @Nullable Uri redirectUri) {
             if (this != mNetworkAgent) return;
             if (status == mLastNetworkStatus) return;
             mLastNetworkStatus = status;
@@ -4818,10 +4821,10 @@ public class ClientModeImpl extends StateMachine {
         }
 
         @Override
-        public void onStartSocketKeepalive(int slot, int intervalSeconds,
+        public void onStartSocketKeepalive(int slot, @NonNull Duration interval,
                 @NonNull KeepalivePacketData packet) {
             ClientModeImpl.this.sendMessage(
-                    CMD_START_IP_PACKET_OFFLOAD, slot, intervalSeconds, packet);
+                    CMD_START_IP_PACKET_OFFLOAD, slot, (int) interval.getSeconds(), packet);
         }
 
         @Override
@@ -4952,6 +4955,10 @@ public class ClientModeImpl extends StateMachine {
                     .build();
             final NetworkCapabilities nc = getCapabilities(getCurrentWifiConfiguration());
             synchronized (mNetworkAgentLock) {
+                // This should never happen.
+                if (mNetworkAgent != null) {
+                    Log.wtf(TAG, "mNetworkAgent is not null: " + mNetworkAgent);
+                }
                 mNetworkAgent = new WifiNetworkAgent(mContext, getHandler().getLooper(),
                         "WifiNetworkAgent", nc, mLinkProperties, 60, naConfig,
                         mNetworkFactory.getProvider());
@@ -5401,7 +5408,7 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void sendConnectedState() {
-        mNetworkAgent.setConnected();
+        mNetworkAgent.markConnected();
         sendNetworkChangeBroadcast(DetailedState.CONNECTED);
     }
 
@@ -6743,11 +6750,6 @@ public class ClientModeImpl extends StateMachine {
             return;
         }
 
-        boolean isImminentBit = (frameData.mBssTmDataFlagsMask
-                & (MboOceConstants.BTM_DATA_FLAG_DISASSOCIATION_IMMINENT
-                | MboOceConstants.BTM_DATA_FLAG_BSS_TERMINATION_INCLUDED
-                | MboOceConstants.BTM_DATA_FLAG_ESS_DISASSOCIATION_IMMINENT)) != 0;
-
         if ((frameData.mBssTmDataFlagsMask
                 & MboOceConstants.BTM_DATA_FLAG_MBO_CELL_DATA_CONNECTION_PREFERENCE_INCLUDED)
                 != 0) {
@@ -6755,12 +6757,13 @@ public class ClientModeImpl extends StateMachine {
         }
 
 
-        if (isImminentBit) {
+        if ((frameData.mBssTmDataFlagsMask
+                & MboOceConstants.BTM_DATA_FLAG_MBO_ASSOC_RETRY_DELAY_INCLUDED)
+                != 0) {
             long duration = frameData.mBlackListDurationMs;
             if (duration == 0) {
                 /*
-                 * When AP sets one of the imminent bits and disassociation timer / BSS termination
-                 * duration / MBO assoc retry delay is set to zero(reserved as per spec),
+                 * When MBO assoc retry delay is set to zero(reserved as per spec),
                  * blacklist the BSS for sometime to avoid AP rejecting the re-connect request.
                  */
                 duration = MboOceConstants.DEFAULT_BLACKLIST_DURATION_MS;

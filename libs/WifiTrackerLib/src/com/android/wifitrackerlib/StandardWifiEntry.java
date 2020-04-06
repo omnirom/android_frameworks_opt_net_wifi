@@ -46,6 +46,7 @@ import android.os.Handler;
 import android.os.SystemClock;
 import android.text.TextUtils;
 
+import androidx.annotation.GuardedBy;
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -98,7 +99,10 @@ public class StandardWifiEntry extends WifiEntry {
     private static final int PSK_WPA_WPA2 = 2;
     private static final int PSK_UNKNOWN = 3;
 
-    private final List<ScanResult> mCurrentScanResults = new ArrayList<>();
+    private final Object mLock = new Object();
+    // Scan result list must be thread safe for generating the verbose scan summary
+    @GuardedBy("mLock")
+    @NonNull private final List<ScanResult> mCurrentScanResults = new ArrayList<>();
 
     @NonNull private final String mKey;
     @NonNull private final String mSsid;
@@ -107,6 +111,7 @@ public class StandardWifiEntry extends WifiEntry {
     private @EapType int mEapType = EAP_UNKNOWN;
     private @PskType int mPskType = PSK_UNKNOWN;
     @Nullable private WifiConfiguration mWifiConfig;
+    private boolean mIsUserShareable = false;
     @Nullable private String mRecommendationServiceLabel;
 
     private boolean mShouldAutoOpenCaptivePortal = false;
@@ -225,20 +230,20 @@ public class StandardWifiEntry extends WifiEntry {
     private String getConnectStateDescription() {
         if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
             if (!isSaved()) {
-                // For ephemeral networks.
-                final String suggestionOrSpecifierPackageName = mWifiInfo != null
-                        ? mWifiInfo.getRequestingPackageName() : null;
-                if (!TextUtils.isEmpty(suggestionOrSpecifierPackageName)) {
-                    return mContext.getString(R.string.connected_via_app,
-                            getAppLabel(mContext, suggestionOrSpecifierPackageName));
-                }
-
                 // Special case for connected + ephemeral networks.
                 if (!TextUtils.isEmpty(mRecommendationServiceLabel)) {
                     return String.format(mContext.getString(R.string.connected_via_network_scorer),
                             mRecommendationServiceLabel);
                 }
                 return mContext.getString(R.string.connected_via_network_scorer_default);
+            }
+
+            // For network suggestions
+            final String suggestionOrSpecifierPackageName = mWifiInfo != null
+                    ? mWifiInfo.getRequestingPackageName() : null;
+            if (!TextUtils.isEmpty(suggestionOrSpecifierPackageName)) {
+                return mContext.getString(R.string.connected_via_app,
+                        getAppLabel(mContext, suggestionOrSpecifierPackageName));
             }
 
             String networkCapabilitiesinformation =
@@ -300,7 +305,10 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public WifiConfiguration getWifiConfiguration() {
-        return mWifiConfig;
+        if (mWifiConfig != null && !mWifiConfig.fromWifiNetworkSuggestion) {
+            return mWifiConfig;
+        }
+        return null;
     }
 
     @Override
@@ -373,12 +381,12 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canForget() {
-        return isSaved();
+        return getWifiConfiguration() != null;
     }
 
     @Override
     public void forget(@Nullable ForgetCallback callback) {
-        if (mWifiConfig != null) {
+        if (canForget()) {
             mForgetCallback = callback;
             mWifiManager.forget(mWifiConfig.networkId, new ForgetActionListener());
         }
@@ -407,7 +415,7 @@ public class StandardWifiEntry extends WifiEntry {
      */
     @Override
     public boolean canShare() {
-        if (!isSaved()) {
+        if (getWifiConfiguration() == null) {
             return false;
         }
 
@@ -429,7 +437,7 @@ public class StandardWifiEntry extends WifiEntry {
      */
     @Override
     public boolean canEasyConnect() {
-        if (!isSaved()) {
+        if (getWifiConfiguration() == null) {
             return false;
         }
 
@@ -467,8 +475,8 @@ public class StandardWifiEntry extends WifiEntry {
     @Override
     @MeteredChoice
     public int getMeteredChoice() {
-        if (mWifiConfig != null) {
-            final int meteredOverride = mWifiConfig.meteredOverride;
+        if (getWifiConfiguration() != null) {
+            final int meteredOverride = getWifiConfiguration().meteredOverride;
             if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_METERED) {
                 return METERED_CHOICE_METERED;
             } else if (meteredOverride == WifiConfiguration.METERED_OVERRIDE_NOT_METERED) {
@@ -480,12 +488,12 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canSetMeteredChoice() {
-        return isSaved();
+        return getWifiConfiguration() != null;
     }
 
     @Override
     public void setMeteredChoice(int meteredChoice) {
-        if (mWifiConfig == null) {
+        if (!canSetMeteredChoice()) {
             return;
         }
 
@@ -501,17 +509,14 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canSetPrivacy() {
-        return isSaved();
+        return getWifiConfiguration() != null;
     }
 
     @Override
     @Privacy
     public int getPrivacy() {
-        if (mWifiConfig == null) {
-            return PRIVACY_UNKNOWN;
-        }
-
-        if (mWifiConfig.macRandomizationSetting == WifiConfiguration.RANDOMIZATION_NONE) {
+        if (mWifiConfig != null
+                && mWifiConfig.macRandomizationSetting == WifiConfiguration.RANDOMIZATION_NONE) {
             return PRIVACY_DEVICE_MAC;
         } else {
             return PRIVACY_RANDOMIZED_MAC;
@@ -531,7 +536,7 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean isAutoJoinEnabled() {
-        if (mWifiConfig == null) {
+        if (!isSaved()) {
             return false;
         }
 
@@ -616,10 +621,12 @@ public class StandardWifiEntry extends WifiEntry {
             }
         }
 
-        mCurrentScanResults.clear();
-        mCurrentScanResults.addAll(scanResults);
+        synchronized (mLock) {
+            mCurrentScanResults.clear();
+            mCurrentScanResults.addAll(scanResults);
+        }
 
-        final ScanResult bestScanResult = getBestScanResultByLevel(mCurrentScanResults);
+        final ScanResult bestScanResult = getBestScanResultByLevel(scanResults);
         if (bestScanResult == null) {
             mLevel = WIFI_LEVEL_UNREACHABLE;
         } else {
@@ -697,6 +704,22 @@ public class StandardWifiEntry extends WifiEntry {
         notifyOnUpdated();
     }
 
+    /**
+     * Sets whether the suggested config for this entry is shareable to the user or not.
+     */
+    @WorkerThread
+    void setUserShareable(boolean isUserShareable) {
+        mIsUserShareable = isUserShareable;
+    }
+
+    /**
+     * Returns whether the suggested config for this entry is shareable to the user or not.
+     */
+    @WorkerThread
+    boolean isUserShareable() {
+        return mIsUserShareable;
+    }
+
     @WorkerThread
     protected boolean connectionInfoMatches(@NonNull WifiInfo wifiInfo,
             @NonNull NetworkInfo networkInfo) {
@@ -704,7 +727,16 @@ public class StandardWifiEntry extends WifiEntry {
             return false;
         }
 
-        return mWifiConfig != null && mWifiConfig.networkId == wifiInfo.getNetworkId();
+        if (mWifiConfig != null) {
+            if (mWifiConfig.fromWifiNetworkSuggestion) {
+                // Match network suggestions with SSID since the net id is prone to change.
+                return TextUtils.equals(mSsid, sanitizeSsid(wifiInfo.getSSID()));
+            }
+            if (mWifiConfig.networkId == wifiInfo.getNetworkId()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void updateRecommendationServiceLabel() {
@@ -731,8 +763,10 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     String getScanResultDescription() {
-        if (mCurrentScanResults.size() == 0) {
-            return "";
+        synchronized (mLock) {
+            if (mCurrentScanResults.size() == 0) {
+                return "";
+            }
         }
 
         final StringBuilder description = new StringBuilder();
@@ -745,11 +779,14 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     private String getScanResultDescription(int minFrequency, int maxFrequency) {
-        final List<ScanResult> scanResults = mCurrentScanResults.stream()
-                .filter(scanResult -> scanResult.frequency >= minFrequency
-                        && scanResult.frequency <= maxFrequency)
-                .sorted(Comparator.comparingInt(scanResult -> -1 * scanResult.level))
-                .collect(Collectors.toList());
+        final List<ScanResult> scanResults;
+        synchronized (mLock) {
+            scanResults = mCurrentScanResults.stream()
+                    .filter(scanResult -> scanResult.frequency >= minFrequency
+                            && scanResult.frequency <= maxFrequency)
+                    .sorted(Comparator.comparingInt(scanResult -> -1 * scanResult.level))
+                    .collect(Collectors.toList());
+        }
 
         final int scanResultCount = scanResults.size();
         if (scanResultCount == 0) {
