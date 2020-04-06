@@ -332,6 +332,8 @@ public class SoftApManager implements ActiveModeManager {
      * Teardown soft AP and teardown the interface.
      */
     private void stopSoftAp() {
+        Log.d(TAG, "Soft AP deauth_all before stop Soft AP");
+        mWifiNative.setHostapdParams("deauth_all");
         if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
             mDualSapIfacesDestroyed = true;
             mWifiNative.teardownInterface(mdualApInterfaces[0]);
