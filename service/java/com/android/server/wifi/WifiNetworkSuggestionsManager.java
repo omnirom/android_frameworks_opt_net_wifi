@@ -126,7 +126,7 @@ public class WifiNetworkSuggestionsManager {
      */
     private static final int NUMBER_OF_HIDDEN_NETWORK_FOR_ONE_SCAN = 100;
 
-    private final Context mContext;
+    private final WifiContext mContext;
     private final Resources mResources;
     private final Handler mHandler;
     private final AppOpsManager mAppOps;
@@ -568,7 +568,7 @@ public class WifiNetworkSuggestionsManager {
                 }
             };
 
-    public WifiNetworkSuggestionsManager(Context context, Handler handler,
+    public WifiNetworkSuggestionsManager(WifiContext context, Handler handler,
             WifiInjector wifiInjector, WifiPermissionsUtil wifiPermissionsUtil,
             WifiConfigManager wifiConfigManager, WifiConfigStore wifiConfigStore,
             WifiMetrics wifiMetrics, TelephonyUtil telephonyUtil,
@@ -800,15 +800,15 @@ public class WifiNetworkSuggestionsManager {
     public @WifiManager.NetworkSuggestionsStatusCode int add(
             List<WifiNetworkSuggestion> networkSuggestions, int uid, String packageName,
             @Nullable String featureId) {
-        if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "Adding " + networkSuggestions.size() + " networks from " + packageName);
-        }
-        if (networkSuggestions.isEmpty()) {
+        if (networkSuggestions == null || networkSuggestions.isEmpty()) {
             Log.w(TAG, "Empty list of network suggestions for " + packageName + ". Ignoring");
             return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
         }
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Adding " + networkSuggestions.size() + " networks from " + packageName);
+        }
         if (!validateNetworkSuggestions(networkSuggestions)) {
-            Log.e(TAG, "Invalid suggestion from app: " + packageName);
+            Log.e(TAG, "Invalid suggestion add from app: " + packageName);
             return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID;
         }
         if (!validateCarrierNetworkSuggestions(networkSuggestions, uid, packageName)) {
@@ -928,6 +928,9 @@ public class WifiNetworkSuggestionsManager {
 
     private boolean validateNetworkSuggestions(List<WifiNetworkSuggestion> networkSuggestions) {
         for (WifiNetworkSuggestion wns : networkSuggestions) {
+            if (wns == null || wns.wifiConfiguration == null) {
+                return false;
+            }
             if (wns.passpointConfiguration == null) {
                 if (!WifiConfigurationUtil.validate(wns.wifiConfiguration,
                         WifiConfigurationUtil.VALIDATE_FOR_ADD)) {
@@ -1037,8 +1040,17 @@ public class WifiNetworkSuggestionsManager {
      */
     public @WifiManager.NetworkSuggestionsStatusCode int remove(
             List<WifiNetworkSuggestion> networkSuggestions, int uid, String packageName) {
+        if (networkSuggestions == null) {
+            Log.w(TAG, "Null list of network suggestions for " + packageName + ". Ignoring");
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        }
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Removing " + networkSuggestions.size() + " networks from " + packageName);
+        }
+
+        if (!validateNetworkSuggestions(networkSuggestions)) {
+            Log.e(TAG, "Invalid suggestion remove from app: " + packageName);
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
         }
         PerAppInfo perAppInfo = mActiveNetworkSuggestionsPerApp.get(packageName);
         if (perAppInfo == null) {
@@ -1305,7 +1317,7 @@ public class WifiNetworkSuggestionsManager {
         CharSequence appName = getAppName(packageName, uid);
         Notification notification = mFrameworkFacade.makeNotificationBuilder(
                 mContext, WifiService.NOTIFICATION_NETWORK_STATUS)
-                .setSmallIcon(Icon.createWithResource(WifiContext.WIFI_OVERLAY_APK_PKG_NAME,
+                .setSmallIcon(Icon.createWithResource(mContext.getWifiOverlayApkPkgName(),
                         com.android.wifi.resources.R.drawable.stat_notify_wifi_in_range))
                 .setTicker(mResources.getString(R.string.wifi_suggestion_title))
                 .setContentTitle(mResources.getString(R.string.wifi_suggestion_title))
@@ -1347,7 +1359,7 @@ public class WifiNetworkSuggestionsManager {
 
         Notification notification = mFrameworkFacade.makeNotificationBuilder(
                 mContext, WifiService.NOTIFICATION_NETWORK_STATUS)
-                .setSmallIcon(Icon.createWithResource(WifiContext.WIFI_OVERLAY_APK_PKG_NAME,
+                .setSmallIcon(Icon.createWithResource(mContext.getWifiOverlayApkPkgName(),
                         com.android.wifi.resources.R.drawable.stat_notify_wifi_in_range))
                 .setTicker(mResources.getString(
                         R.string.wifi_suggestion_imsi_privacy_title, carrierName))
@@ -1979,11 +1991,12 @@ public class WifiNetworkSuggestionsManager {
                 continue;
             }
             if (carrierId == TelephonyManager.UNKNOWN_CARRIER_ID) {
-                Log.v(TAG, "Carrier privilege revoked for " + appInfo.packageName);
+                Log.i(TAG, "Carrier privilege revoked for " + appInfo.packageName);
                 removeInternal(Collections.EMPTY_LIST, appInfo.packageName, appInfo);
                 mActiveNetworkSuggestionsPerApp.remove(appInfo.packageName);
                 continue;
             }
+            Log.i(TAG, "Carrier privilege granted for " + appInfo.packageName);
             appInfo.carrierId = carrierId;
             for (ExtendedWifiNetworkSuggestion ewns : appInfo.extNetworkSuggestions) {
                 ewns.wns.wifiConfiguration.carrierId = carrierId;
@@ -2031,7 +2044,14 @@ public class WifiNetworkSuggestionsManager {
             @NonNull List<WifiNetworkSuggestion> wifiNetworkSuggestions,
             @NonNull List<ScanResult> scanResults) {
         Map<WifiNetworkSuggestion, List<ScanResult>> filteredScanResults = new HashMap<>();
+        if (wifiNetworkSuggestions == null || wifiNetworkSuggestions.isEmpty()
+                || scanResults == null || scanResults.isEmpty()) {
+            return filteredScanResults;
+        }
         for (WifiNetworkSuggestion suggestion : wifiNetworkSuggestions) {
+            if (suggestion == null || suggestion.wifiConfiguration == null) {
+                continue;
+            }
             if (suggestion.passpointConfiguration != null) {
                 filteredScanResults.put(suggestion,
                         mWifiInjector.getPasspointManager().getMatchingScanResults(

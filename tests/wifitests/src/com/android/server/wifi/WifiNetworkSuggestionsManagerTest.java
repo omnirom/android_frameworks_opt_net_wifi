@@ -124,7 +124,7 @@ public class WifiNetworkSuggestionsManagerTest extends WifiBaseTest {
     private static final int TEST_NETWORK_ID = 110;
     private static final int TEST_CARRIER_ID = 1911;
 
-    private @Mock Context mContext;
+    private @Mock WifiContext mContext;
     private @Mock Resources mResources;
     private @Mock AppOpsManager mAppOpsManager;
     private @Mock NotificationManager mNotificationManger;
@@ -210,6 +210,7 @@ public class WifiNetworkSuggestionsManagerTest extends WifiBaseTest {
         when(mContext.getSystemService(ActivityManager.class)).thenReturn(mActivityManager);
         when(mContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE))
                 .thenReturn(mock(LayoutInflater.class));
+        when(mContext.getWifiOverlayApkPkgName()).thenReturn("test.com.android.wifi.resources");
         when(mActivityManager.isLowRamDevice()).thenReturn(false);
         when(mActivityManager.getPackageImportance(any())).thenReturn(
                 IMPORTANCE_FOREGROUND_SERVICE);
@@ -646,6 +647,24 @@ public class WifiNetworkSuggestionsManagerTest extends WifiBaseTest {
                     add(networkSuggestion);
                 }};
         assertSuggestionsEquals(expectedMatchingNetworkSuggestions, matchingExtNetworkSuggestions);
+    }
+
+    /**
+     * Verify add or remove suggestion list with null object will result error code.
+     */
+    @Test
+    public void testAddRemoveNetworkSuggestionWithNullObject() {
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_INVALID,
+                mWifiNetworkSuggestionsManager.add(Collections.singletonList(null),
+                        TEST_UID_1, TEST_PACKAGE_1, TEST_FEATURE));
+        WifiNetworkSuggestion networkSuggestion = new WifiNetworkSuggestion(
+                WifiConfigurationTestUtil.createOpenNetwork(), null, false, false, true, true);
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                mWifiNetworkSuggestionsManager.add(Collections.singletonList(networkSuggestion),
+                        TEST_UID_1, TEST_PACKAGE_1, TEST_FEATURE));
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID,
+                mWifiNetworkSuggestionsManager.remove(Collections.singletonList(null),
+                        TEST_UID_1, TEST_PACKAGE_1));
     }
 
     /**
@@ -3292,6 +3311,7 @@ public class WifiNetworkSuggestionsManagerTest extends WifiBaseTest {
         List<ScanResult> allSrList = new ArrayList<>() {{
                 add(passpointScanResult);
                 add(nonPasspointScanResult);
+                add(null);
                 }};
         when(mPasspointManager.getMatchingScanResults(eq(mockPasspoint), eq(allSrList)))
                 .thenReturn(ppSrList);

@@ -403,9 +403,6 @@
     <!-- Enable WPA2 to WPA3 auto-upgrade offload to capable Driver/Firmware -->
     <bool translatable="false" name="config_wifiSaeUpgradeOffloadEnabled">false</bool>
 
-    <!-- Package name for the OSU Login APK -->
-    <string translatable="false" name="config_wifiOsuLoginPackage">com.android.hotspot2.osulogin</string>
-
     <!-- Do not translate. Default bridge interface name for Dual SAP tethering -->
     <string name="config_vendor_wifi_tether_bridge_interface_name" translatable="false">wifi_br0</string>
 </resources>
