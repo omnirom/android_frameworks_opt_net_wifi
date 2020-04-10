@@ -1167,12 +1167,31 @@ public class ClientModeImpl extends StateMachine {
             mWifiNative.removeNetworkCachedData(config.networkId);
         }
 
-
         @Override
-        public void onNetworkUpdated(WifiConfiguration config) {
-            // User might have changed meteredOverride, so update capabilities
-            if (config.networkId == mLastNetworkId) {
-                updateCapabilities();
+        public void onNetworkUpdated(WifiConfiguration newConfig, WifiConfiguration oldConfig) {
+            // Check if user/app change meteredOverride for connected network.
+            if (newConfig.networkId != mLastNetworkId
+                    || newConfig.meteredOverride == oldConfig.meteredOverride) {
+                // nothing to do.
+                return;
+            }
+            boolean isMetered = WifiConfiguration.isMetered(newConfig, mWifiInfo);
+            boolean wasMetered = WifiConfiguration.isMetered(oldConfig, mWifiInfo);
+            if (isMetered == wasMetered) {
+                // no meteredness change, nothing to do.
+                if (mVerboseLoggingEnabled) {
+                    Log.v(TAG, "User/app changed meteredOverride, but no change in meteredness");
+                }
+                return;
+            }
+            // If unmetered->metered trigger a disconnect.
+            // If metered->unmetered update capabilities.
+            if (isMetered) {
+                Log.w(TAG, "Network marked metered, triggering disconnect");
+                sendMessage(CMD_DISCONNECT);
+            } else {
+                Log.i(TAG, "Network marked unmetered, triggering capabilities update");
+                updateCapabilities(newConfig);
             }
         }
 
@@ -1678,6 +1697,32 @@ public class ClientModeImpl extends StateMachine {
         // use the CMD_SET_OPERATIONAL_MODE to force the transitions before other messages are
         // handled.
         sendMessageAtFrontOfQueue(CMD_SET_OPERATIONAL_MODE);
+    }
+
+    private void checkAbnormalConnectionFailureAndTakeBugReport(String ssid) {
+        if (mWifiInjector.getDeviceConfigFacade()
+                .isAbnormalConnectionFailureBugreportEnabled()) {
+            int reasonCode = mWifiScoreCard.detectAbnormalConnectionFailure(ssid);
+            if (reasonCode != WifiHealthMonitor.REASON_NO_FAILURE) {
+                String bugTitle = "Wi-Fi BugReport";
+                String bugDetail = "Detect abnormal "
+                        + WifiHealthMonitor.FAILURE_REASON_NAME[reasonCode];
+                takeBugReport(bugTitle, bugDetail);
+            }
+        }
+    }
+
+    private void checkAbnormalDisconnectionAndTakeBugReport() {
+        if (mWifiInjector.getDeviceConfigFacade()
+                .isAbnormalDisconnectionBugreportEnabled()) {
+            int reasonCode = mWifiScoreCard.detectAbnormalDisconnection();
+            if (reasonCode != WifiHealthMonitor.REASON_NO_FAILURE) {
+                String bugTitle = "Wi-Fi BugReport";
+                String bugDetail = "Detect abnormal "
+                        + WifiHealthMonitor.FAILURE_REASON_NAME[reasonCode];
+                takeBugReport(bugTitle, bugDetail);
+            }
+        }
     }
 
     /**
@@ -2863,6 +2908,7 @@ public class ClientModeImpl extends StateMachine {
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
         mLastSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         mLastSimBasedConnectionCarrierName = null;
+        checkAbnormalDisconnectionAndTakeBugReport();
         mWifiScoreCard.resetConnectionState();
         mWifiDataStall.reset();
         updateL2KeyAndGroupHint();
@@ -3093,18 +3139,7 @@ public class ClientModeImpl extends StateMachine {
                         : configuration.networkId;
                 int scanRssi = mWifiConfigManager.findScanRssi(networkId, SCAN_RSSI_VALID_TIME_MS);
                 mWifiScoreCard.noteConnectionFailure(mWifiInfo, scanRssi, ssid, blocklistReason);
-                boolean isNonWrongPwdAuthFailure =
-                        blocklistReason == BssidBlocklistMonitor.REASON_AUTHENTICATION_FAILURE
-                        || blocklistReason == BssidBlocklistMonitor.REASON_EAP_FAILURE;
-                boolean isEnterpriseNetwork = configuration != null && configuration.isEnterprise();
-                if (isNonWrongPwdAuthFailure && isEnterpriseNetwork && mWifiInjector
-                        .getDeviceConfigFacade().isAbnormalEapAuthFailureBugreportEnabled()
-                        && mWifiScoreCard.detectAbnormalAuthFailure(ssid)) {
-                    String bugTitle = "Wi-Fi BugReport";
-                    String bugDetail = "Abnormal authentication failure with enterprise network";
-                    mWifiDiagnostics.takeBugReport(bugTitle, bugDetail);
-                }
-
+                checkAbnormalConnectionFailureAndTakeBugReport(ssid);
                 boolean isLowRssi = false;
                 int sufficientRssi = getSufficientRssi(networkId, bssid);
                 if (scanRssi != WifiInfo.INVALID_RSSI && sufficientRssi != WifiInfo.INVALID_RSSI) {
@@ -4750,10 +4785,14 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void updateCapabilities(WifiConfiguration currentWifiConfiguration) {
+        updateCapabilities(getCapabilities(currentWifiConfiguration));
+    }
+
+    private void updateCapabilities(NetworkCapabilities networkCapabilities) {
         if (mNetworkAgent == null) {
             return;
         }
-        mNetworkAgent.sendNetworkCapabilities(getCapabilities(currentWifiConfiguration));
+        mNetworkAgent.sendNetworkCapabilities(networkCapabilities);
     }
 
     private void handleEapAuthFailure(int networkId, int errorCode) {
@@ -5598,6 +5637,7 @@ public class ClientModeImpl extends StateMachine {
             WifiLockManager wifiLockManager = mWifiInjector.getWifiLockManager();
             wifiLockManager.updateWifiClientConnected(true);
             mWifiScoreReport.startConnectedNetworkScorer(mNetworkAgent.getNetwork().getNetId());
+            updateLinkLayerStatsRssiAndScoreReport();
         }
         @Override
         public boolean processMessage(Message message) {
@@ -6375,6 +6415,22 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
+     * Approve all access points from {@link WifiNetworkFactory} for the provided package.
+     * Used by shell commands.
+     */
+    public void setNetworkRequestUserApprovedApp(@NonNull String packageName, boolean approved) {
+        mNetworkFactory.setUserApprovedApp(packageName, approved);
+    }
+
+    /**
+     * Whether all access points are approved for the specified app.
+     * Used by shell commands.
+     */
+    public boolean hasNetworkRequestUserApprovedApp(@NonNull String packageName) {
+        return mNetworkFactory.hasUserApprovedApp(packageName);
+    }
+
+    /**
      * Remove all approved access points from {@link WifiNetworkFactory} for the provided package.
      */
     public void removeNetworkRequestUserApprovedAccessPointsForApp(@NonNull String packageName) {
@@ -6761,6 +6817,7 @@ public class ClientModeImpl extends StateMachine {
                 & MboOceConstants.BTM_DATA_FLAG_MBO_ASSOC_RETRY_DELAY_INCLUDED)
                 != 0) {
             long duration = frameData.mBlackListDurationMs;
+            mWifiMetrics.incrementSteeringRequestCountIncludingMboAssocRetryDelay();
             if (duration == 0) {
                 /*
                  * When MBO assoc retry delay is set to zero(reserved as per spec),

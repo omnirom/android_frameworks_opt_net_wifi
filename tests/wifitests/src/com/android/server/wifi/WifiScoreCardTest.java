@@ -29,6 +29,7 @@ import static com.android.server.wifi.WifiScoreCard.CNT_AUTHENTICATION_FAILURE;
 import static com.android.server.wifi.WifiScoreCard.CNT_CONNECTION_ATTEMPT;
 import static com.android.server.wifi.WifiScoreCard.CNT_CONNECTION_DURATION_SEC;
 import static com.android.server.wifi.WifiScoreCard.CNT_CONNECTION_FAILURE;
+import static com.android.server.wifi.WifiScoreCard.CNT_CONSECUTIVE_CONNECTION_FAILURE;
 import static com.android.server.wifi.WifiScoreCard.CNT_DISCONNECTION_NONLOCAL;
 import static com.android.server.wifi.WifiScoreCard.CNT_SHORT_CONNECTION_NONLOCAL;
 import static com.android.server.wifi.util.NativeUtil.hexStringFromByteArray;
@@ -154,6 +155,7 @@ public class WifiScoreCardTest extends WifiBaseTest {
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_RATIO_THR_NUMERATOR);
         when(mDeviceConfigFacade.getHealthMonitorMinNumConnectionAttempt()).thenReturn(
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT);
+        when(mDeviceConfigFacade.getBugReportThresholdExtraRatio()).thenReturn(1);
         mWifiScoreCard.enableVerboseLogging(true);
     }
 
@@ -757,6 +759,7 @@ public class WifiScoreCardTest extends WifiBaseTest {
         assertEquals(0, dailyStats.getCount(CNT_ASSOCIATION_REJECTION));
         assertEquals(1, dailyStats.getCount(CNT_ASSOCIATION_TIMEOUT));
         assertEquals(0, dailyStats.getCount(CNT_AUTHENTICATION_FAILURE));
+        assertEquals(1, dailyStats.getCount(CNT_CONSECUTIVE_CONNECTION_FAILURE));
     }
 
     private void makeAuthFailureAndWrongPassword() {
@@ -793,6 +796,10 @@ public class WifiScoreCardTest extends WifiBaseTest {
         assertEquals(0, dailyStats.getCount(CNT_ASSOCIATION_REJECTION));
         assertEquals(0, dailyStats.getCount(CNT_ASSOCIATION_TIMEOUT));
         assertEquals(1, dailyStats.getCount(CNT_AUTHENTICATION_FAILURE));
+        assertEquals(1, dailyStats.getCount(CNT_CONSECUTIVE_CONNECTION_FAILURE));
+
+        makeNormalConnectionExample();
+        assertEquals(0, dailyStats.getCount(CNT_CONSECUTIVE_CONNECTION_FAILURE));
     }
 
     /**
@@ -877,6 +884,7 @@ public class WifiScoreCardTest extends WifiBaseTest {
         assertEquals(0, stats.getCount(CNT_AUTHENTICATION_FAILURE));
         assertEquals(1 * scale, stats.getCount(CNT_SHORT_CONNECTION_NONLOCAL));
         assertEquals(1 * scale, stats.getCount(CNT_DISCONNECTION_NONLOCAL));
+        assertEquals(0, stats.getCount(CNT_CONSECUTIVE_CONNECTION_FAILURE));
     }
 
     private void makeShortConnectionOldRssiPollingExample() {
@@ -1106,6 +1114,8 @@ public class WifiScoreCardTest extends WifiBaseTest {
         perNetwork.updateAfterDailyDetection();
         checkShortConnectionExample(perNetwork.getRecentStats(), 1);
         checkShortConnectionExample(perNetwork.getStatsPrevBuild(), 0);
+        assertEquals(WifiHealthMonitor.REASON_NO_FAILURE,
+                mWifiScoreCard.detectAbnormalConnectionFailure(mWifiInfo.getSSID()));
     }
 
     /**
@@ -1131,11 +1141,13 @@ public class WifiScoreCardTest extends WifiBaseTest {
         // Add >2x failures after the SW build change
         int numBadConnectionDays = 4;
         for (int i = 0; i < numBadConnectionDays; i++) {
-            makeRecentStatsWithShortConnection();
             makeRecentStatsWithAssocTimeOut();
             makeRecentStatsWithAuthFailure();
+            makeRecentStatsWithShortConnection();
         }
 
+        assertEquals(WifiHealthMonitor.REASON_SHORT_CONNECTION_NONLOCAL,
+                mWifiScoreCard.detectAbnormalDisconnection());
         FailureStats statsDec = new FailureStats();
         FailureStats statsInc = new FailureStats();
         FailureStats statsHigh = new FailureStats();
@@ -1175,6 +1187,8 @@ public class WifiScoreCardTest extends WifiBaseTest {
         checkStatsDeltaExample(statsDec, 0);
         checkStatsDeltaExample(statsInc, 0);
         checkStatsDeltaExample(statsHigh, 0);
+        assertEquals(WifiHealthMonitor.REASON_NO_FAILURE,
+                mWifiScoreCard.detectAbnormalConnectionFailure(mWifiInfo.getSSID()));
     }
 
     /**
@@ -1197,10 +1211,12 @@ public class WifiScoreCardTest extends WifiBaseTest {
         for (int i = 0; i < numGoodConnectionDays; i++) {
             makeRecentStatsWithGoodConnection();
         }
-        makeRecentStatsWithShortConnection();
         makeRecentStatsWithAssocTimeOut();
         makeRecentStatsWithAuthFailure();
+        makeRecentStatsWithShortConnection();
 
+        assertEquals(WifiHealthMonitor.REASON_NO_FAILURE,
+                mWifiScoreCard.detectAbnormalConnectionFailure(mWifiInfo.getSSID()));
         FailureStats statsDec = new FailureStats();
         FailureStats statsInc = new FailureStats();
         FailureStats statsHigh = new FailureStats();
@@ -1215,9 +1231,11 @@ public class WifiScoreCardTest extends WifiBaseTest {
         PerNetwork perNetwork = mWifiScoreCard.lookupNetwork(mWifiInfo.getSSID());
 
         makeRecentStatsWithShortConnection(); // Day 1
-        makeRecentStatsWithAssocTimeOut();
         makeRecentStatsWithAuthFailure();
+        makeRecentStatsWithAssocTimeOut();
 
+        assertEquals(WifiHealthMonitor.REASON_ASSOC_TIMEOUT,
+                mWifiScoreCard.detectAbnormalConnectionFailure(mWifiInfo.getSSID()));
         FailureStats statsDec = new FailureStats();
         FailureStats statsInc = new FailureStats();
         FailureStats statsHigh = new FailureStats();
@@ -1226,12 +1244,13 @@ public class WifiScoreCardTest extends WifiBaseTest {
         checkStatsDeltaExample(statsDec, 0);
         checkStatsDeltaExample(statsInc, 0);
         checkStatsDeltaExample(statsHigh, 1);
-        assertEquals(false, mWifiScoreCard.detectAbnormalAuthFailure(mWifiInfo.getSSID()));
     }
 
     @Test
     public void testHighAuthFailureRate() throws Exception {
+        makeRecentStatsWithGoodConnection();
         makeRecentStatsWithAuthFailure();
-        assertEquals(true, mWifiScoreCard.detectAbnormalAuthFailure(mWifiInfo.getSSID()));
+        assertEquals(WifiHealthMonitor.REASON_AUTH_FAILURE,
+                mWifiScoreCard.detectAbnormalConnectionFailure(mWifiInfo.getSSID()));
     }
 }

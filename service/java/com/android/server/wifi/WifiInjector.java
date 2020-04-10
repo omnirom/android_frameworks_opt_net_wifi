@@ -264,6 +264,7 @@ public class WifiInjector {
                 mFrameworkFacade, mContext, wifiHandler);
         String l2KeySeed = Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID);
         mWifiScoreCard = new WifiScoreCard(mClock, l2KeySeed, mDeviceConfigFacade);
+        mWifiMetrics.setWifiScoreCard(mWifiScoreCard);
         mLruConnectionTracker = new LruConnectionTracker(MAX_RECENTLY_CONNECTED_NETWORK,
                 mContext);
         // Config Manager
@@ -624,7 +625,7 @@ public class WifiInjector {
                 mWifiNetworkSelector, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier,
                 mWifiMetrics, new Handler(mWifiHandlerThread.getLooper()),
-                mClock, mConnectivityLocalLog);
+                mClock, mConnectivityLocalLog, mWifiScoreCard);
     }
 
     /**
