@@ -2942,6 +2942,7 @@ public class WifiMetrics {
     public void updateSavedNetworks(List<WifiConfiguration> networks) {
         synchronized (mLock) {
             mWifiLogProto.numSavedNetworks = networks.size();
+            mWifiLogProto.numSavedNetworksWithMacRandomization = 0;
             mWifiLogProto.numOpenNetworks = 0;
             mWifiLogProto.numLegacyPersonalNetworks = 0;
             mWifiLogProto.numLegacyEnterpriseNetworks = 0;
@@ -4626,6 +4627,7 @@ public class WifiMetrics {
                 }
             }
             mWifiUsabilityStatsCounter = 0;
+            mWifiUsabilityStatsEntriesList.clear();
         }
     }
 
