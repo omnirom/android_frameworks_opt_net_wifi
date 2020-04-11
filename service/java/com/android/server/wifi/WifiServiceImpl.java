@@ -1198,6 +1198,15 @@ public class WifiServiceImpl extends BaseWifiService {
                     iterator.remove();
                 }
             }
+
+            if ((getState() == WifiManager.WIFI_AP_STATE_DISABLED) && mRestartWifiApIfRequired) {
+                mWifiThreadRunner.post(() -> {
+                    Log.d(TAG ,"Repeater mode: Restart SoftAP.");
+                    mRestartWifiApIfRequired = false;
+                    startSoftAp(null);
+                });
+            }
+
         }
 
         /**
@@ -4288,8 +4297,10 @@ public class WifiServiceImpl extends BaseWifiService {
 
         // Remove double quotes in SSID and psk
         softApConfigBuilder.setSsid(WifiInfo.removeDoubleQuotes(currentStaConfig.SSID));
-        softApConfigBuilder.setPassphrase(WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey),
-            SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+        if (currentStaConfig.getAuthType() == WifiConfiguration.KeyMgmt.WPA_PSK) {
+            softApConfigBuilder.setPassphrase(WifiInfo.removeDoubleQuotes(currentStaConfig.preSharedKey),
+                SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+        }
 
         // Get band info from SoftAP configuration
         if (apConfig == null)
