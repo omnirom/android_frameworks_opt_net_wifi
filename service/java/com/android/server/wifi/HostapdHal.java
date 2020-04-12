@@ -1300,29 +1300,6 @@ public class HostapdHal {
         }
     }
 
-
-    /**
-     * Set hostapd parameters via QSAP command.
-     *
-     * This would call QSAP library APIs via hostapd hidl.
-     *
-     * @param cmd QSAP command.
-     * @return true on success, false otherwise.
-     */
-    public boolean setHostapdParams(@NonNull String cmd) {
-        synchronized (mLock) {
-            final String methodStr = "setHostapdParams";
-            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
-            try {
-                HostapdStatus status = mIHostapdVendor.setHostapdParams(cmd);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-
     @VisibleForTesting
     protected IHostapdVendor getHostapdVendorMockable() throws RemoteException {
         synchronized (mLock) {

@@ -1321,6 +1321,16 @@ public class WifiNative {
         }
     }
 
+    /* Set interface UP. */
+    public boolean setInterfaceUp(String ifname) {
+        if (TextUtils.isEmpty(ifname))
+            return false;
+
+        mNetdWrapper.setInterfaceUp(ifname);
+
+        return isInterfaceUp(ifname);
+    }
+
     /**
      * Setup an interface for Bridge mode operations.
      *
@@ -3203,18 +3213,6 @@ public class WifiNative {
     public boolean setCountryCodeHal(@NonNull String ifaceName, String countryCode) {
         mHostapdHal.setCountryCode(countryCode);
         return mWifiVendorHal.setCountryCodeHal(ifaceName, countryCode);
-    }
-
-    /**
-     * Set hostapd parameters via QSAP command.
-     *
-     * This would call QSAP library APIs via hostapd hidl.
-     *
-     * @param cmd QSAP command.
-     * @return true on success, false otherwise.
-     */
-    public boolean setHostapdParams(@NonNull String cmd) {
-        return mHostapdHal.setHostapdParams(cmd);
     }
 
     //---------------------------------------------------------------------------------

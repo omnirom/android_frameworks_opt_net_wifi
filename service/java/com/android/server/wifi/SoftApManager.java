@@ -603,7 +603,7 @@ public class SoftApManager implements ActiveModeManager {
                 mModeListener.onStartFailure();
                 return false;
             }
-            if (!mWifiNative.setHostapdParams("softap bridge up " +mApInterfaceName)) {
+            if (!mWifiNative.setInterfaceUp(mApInterfaceName)) {
                Log.e(TAG, "Failed to set interface up " +mApInterfaceName);
                return false;
             }
