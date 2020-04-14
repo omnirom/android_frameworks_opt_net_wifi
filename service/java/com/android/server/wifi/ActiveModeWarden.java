@@ -998,8 +998,11 @@ public class ActiveModeWarden {
                         if (msg.arg1 != SelfRecovery.REASON_LAST_RESORT_WATCHDOG) {
                             mHandler.post(() -> mClientModeImpl.takeBugReport(bugTitle, bugDetail));
                         }
-                        // after the bug report trigger, more handling needs to be done
-                        return NOT_HANDLED;
+                        log("Recovery triggered, disable wifi");
+                        deferMessage(obtainMessage(CMD_DEFERRED_RECOVERY_RESTART_WIFI));
+                        shutdownWifi();
+                        // onStopped will move the state machine to "DisabledState".
+                        break;
                     default:
                         return NOT_HANDLED;
                 }
