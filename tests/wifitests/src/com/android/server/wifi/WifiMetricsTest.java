@@ -111,6 +111,7 @@ import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStatsEnt
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WpsMetrics;
 import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.ExternalCallbackTracker;
+import com.android.server.wifi.util.InformationElementUtil;
 import com.android.wifi.resources.R;
 
 import org.junit.Before;
@@ -346,7 +347,6 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_RSSI_LEVELS_TO_INCREMENT = 20;
     private static final int NUM_OPEN_NETWORK_SCAN_RESULTS = 1;
     private static final int NUM_LEGACY_PERSONAL_NETWORK_SCAN_RESULTS = 4;
-    private static final int NUM_LEGACY_ENTERPRISE_NETWORK_SCAN_RESULTS = 3;
     private static final int NUM_ENHANCED_OPEN_NETWORK_SCAN_RESULTS = 1;
     private static final int NUM_WPA3_PERSONAL_NETWORK_SCAN_RESULTS = 2;
     private static final int NUM_WPA3_ENTERPRISE_NETWORK_SCAN_RESULTS = 1;
@@ -355,6 +355,10 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_HIDDEN_NETWORK_SCAN_RESULTS = 1;
     private static final int NUM_HOTSPOT2_R1_NETWORK_SCAN_RESULTS = 1;
     private static final int NUM_HOTSPOT2_R2_NETWORK_SCAN_RESULTS = 2;
+    private static final int NUM_HOTSPOT2_R3_NETWORK_SCAN_RESULTS = 1;
+    private static final int NUM_LEGACY_ENTERPRISE_NETWORK_SCAN_RESULTS =
+            NUM_HOTSPOT2_R1_NETWORK_SCAN_RESULTS + NUM_HOTSPOT2_R2_NETWORK_SCAN_RESULTS
+            + NUM_HOTSPOT2_R3_NETWORK_SCAN_RESULTS;
     private static final int NUM_SCANS = 5;
     private static final int NUM_CONNECTIVITY_ONESHOT_SCAN_EVENT = 4;
     private static final int NUM_EXTERNAL_APP_ONESHOT_SCAN_REQUESTS = 15;
@@ -474,6 +478,8 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final long NUM_MBO_CELL_DATA_AWARE_NETWORKS_SCAN_RESULTS = 2;
     private static final long NUM_OCE_SUPPORTED_NETWORKS_SCAN_RESULTS = 2;
     private static final long NUM_FILS_SUPPORTED_NETWORKS_SCAN_RESULTS = 2;
+    private static final long NUM_11AX_NETWORKS_SCAN_RESULTS = 3;
+    private static final long NUM_6G_NETWORKS_SCAN_RESULTS = 2;
     private static final long NUM_BSSID_FILTERED_DUE_TO_MBO_ASSOC_DISALLOW_IND = 3;
     private static final long NUM_CONNECT_TO_MBO_SUPPORTED_NETWORKS = 4;
     private static final long NUM_CONNECT_TO_OCE_SUPPORTED_NETWORKS = 3;
@@ -486,6 +492,8 @@ public class WifiMetricsTest extends WifiBaseTest {
     public static final int FEATURE_MBO = 1 << 0;
     public static final int FEATURE_MBO_CELL_DATA_AWARE = 1 << 1;
     public static final int FEATURE_OCE = 1 << 2;
+    public static final int FEATURE_11AX = 1 << 3;
+    public static final int FEATURE_6G = 1 << 4;
 
     private ScanDetail buildMockScanDetail(boolean hidden, NetworkDetail.HSRelease hSRelease,
             String capabilities, int supportedFeatures) {
@@ -505,6 +513,13 @@ public class WifiMetricsTest extends WifiBaseTest {
         }
         if ((supportedFeatures & FEATURE_OCE) != 0) {
             when(mockNetworkDetail.isOceSupported()).thenReturn(true);
+        }
+        if ((supportedFeatures & FEATURE_11AX) != 0) {
+            when(mockNetworkDetail.getWifiMode())
+                    .thenReturn(InformationElementUtil.WifiMode.MODE_11AX);
+        }
+        if ((supportedFeatures & FEATURE_6G) != 0) {
+            when(mockScanResult.is6GHz()).thenReturn(true);
         }
         return mockScanDetail;
     }
@@ -555,24 +570,31 @@ public class WifiMetricsTest extends WifiBaseTest {
     private List<ScanDetail> buildMockScanDetailList() {
         List<ScanDetail> mockScanDetails = new ArrayList<ScanDetail>();
         mockScanDetails.add(buildMockScanDetail(true, null, "[ESS]", 0));
-        mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-PSK-CCMP][ESS]", 0));
+        mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-PSK-CCMP][ESS]", FEATURE_11AX));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WPA-PSK-CCMP]", 0));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-SAE-CCMP]", FEATURE_MBO));
-        mockScanDetails.add(buildMockScanDetail(false, null, "[WPA-PSK-CCMP]", 0));
+        mockScanDetails.add(buildMockScanDetail(false, null, "[WPA-PSK-CCMP]",
+                FEATURE_11AX | FEATURE_6G));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WEP]", 0));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-SAE-CCMP]",
                 FEATURE_MBO | FEATURE_MBO_CELL_DATA_AWARE));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-OWE-CCMP]",
                 FEATURE_MBO | FEATURE_MBO_CELL_DATA_AWARE | FEATURE_OCE));
-        mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-EAP-SUITE-B-192]", 0));
+        mockScanDetails.add(buildMockScanDetail(false, null, "[WPA2-EAP-SUITE-B-192]",
+                FEATURE_11AX | FEATURE_6G));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WAPI-WAPI-PSK-SMS4-SMS4]", 0));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WAPI-WAPI-CERT-SMS4-SMS4]", 0));
         mockScanDetails.add(buildMockScanDetail(false, null, "[WAPI-WAPI-CERT-SMS4-SMS4]", 0));
+        // Number of scans of R2 networks must be equal to NUM_HOTSPOT2_R2_NETWORK_SCAN_RESULTS
         mockScanDetails.add(buildMockScanDetail(false, NetworkDetail.HSRelease.R2,
                 "[WPA-EAP-CCMP+FILS-SHA256-CCMP]", FEATURE_MBO | FEATURE_OCE));
         mockScanDetails.add(buildMockScanDetail(false, NetworkDetail.HSRelease.R2,
                 "[WPA2-EAP+FT/EAP-CCMP+FILS-SHA256-CCMP]", 0));
+        // Number of scans of R1 networks must be equal to NUM_HOTSPOT2_R1_NETWORK_SCAN_RESULTS
         mockScanDetails.add(buildMockScanDetail(false, NetworkDetail.HSRelease.R1,
+                "[WPA-EAP-CCMP]", 0));
+        // Number of scans of R3 networks must be equal to NUM_HOTSPOT2_R3_NETWORK_SCAN_RESULTS
+        mockScanDetails.add(buildMockScanDetail(false, NetworkDetail.HSRelease.R3,
                 "[WPA-EAP-CCMP]", 0));
         return mockScanDetails;
     }
@@ -1209,6 +1231,8 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numHotspot2R1NetworkScanResults);
         assertEquals(NUM_HOTSPOT2_R2_NETWORK_SCAN_RESULTS * NUM_SCANS,
                 mDecodedProto.numHotspot2R2NetworkScanResults);
+        assertEquals(NUM_HOTSPOT2_R3_NETWORK_SCAN_RESULTS * NUM_SCANS,
+                mDecodedProto.numHotspot2R3NetworkScanResults);
 
         assertEquals(NUM_MBO_SUPPORTED_NETWORKS_SCAN_RESULTS * NUM_SCANS,
                 mDecodedProto.numMboSupportedNetworkScanResults);
@@ -1218,6 +1242,10 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numOceSupportedNetworkScanResults);
         assertEquals(NUM_FILS_SUPPORTED_NETWORKS_SCAN_RESULTS * NUM_SCANS,
                 mDecodedProto.numFilsSupportedNetworkScanResults);
+        assertEquals(NUM_11AX_NETWORKS_SCAN_RESULTS * NUM_SCANS,
+                mDecodedProto.num11AxNetworkScanResults);
+        assertEquals(NUM_6G_NETWORKS_SCAN_RESULTS * NUM_SCANS,
+                mDecodedProto.num6GNetworkScanResults);
         assertEquals(NUM_SCANS,
                 mDecodedProto.numScans);
         assertEquals(NUM_CONNECTIVITY_ONESHOT_SCAN_EVENT,
@@ -2479,15 +2507,25 @@ public class WifiMetricsTest extends WifiBaseTest {
                 anqpDomainId3, NetworkDetail.HSRelease.R2, false));
         scan.add(buildMockScanDetailPasspoint("PASSPOINT_Z", "AB:02:03:04:05:06", hessid3,
                 anqpDomainId3, NetworkDetail.HSRelease.R2, true));
+        // 2 R3 Passpoint APs belonging to a single provider: hessid4
+        long hessid4 = 17;
+        int anqpDomainId4 = 2;
+        scan.add(buildMockScanDetailPasspoint("PASSPOINT_R3", "0C:02:03:04:05:01", hessid4,
+                anqpDomainId4, NetworkDetail.HSRelease.R3, true));
+        scan.add(buildMockScanDetailPasspoint("PASSPOINT_R3_2", "0C:02:03:04:05:02", hessid4,
+                anqpDomainId4, NetworkDetail.HSRelease.R3, true));
         mWifiMetrics.incrementAvailableNetworksHistograms(scan, true);
         dumpProtoAndDeserialize();
 
         verifyHist(mDecodedProto.observedHotspotR1ApsInScanHistogram, 2, a(0, 2), a(1, 1));
         verifyHist(mDecodedProto.observedHotspotR2ApsInScanHistogram, 2, a(2, 3), a(1, 1));
+        verifyHist(mDecodedProto.observedHotspotR3ApsInScanHistogram, 2, a(0, 2), a(1, 1));
         verifyHist(mDecodedProto.observedHotspotR1EssInScanHistogram, 2, a(0, 1), a(1, 1));
         verifyHist(mDecodedProto.observedHotspotR2EssInScanHistogram, 1, a(1), a(2));
+        verifyHist(mDecodedProto.observedHotspotR3EssInScanHistogram, 2, a(0, 1), a(1, 1));
         verifyHist(mDecodedProto.observedHotspotR1ApsPerEssInScanHistogram, 1, a(2), a(1));
         verifyHist(mDecodedProto.observedHotspotR2ApsPerEssInScanHistogram, 2, a(2, 3), a(1, 1));
+        verifyHist(mDecodedProto.observedHotspotR3ApsPerEssInScanHistogram, 1, a(2), a(1));
 
         // check bounds
         scan.clear();
@@ -2498,6 +2536,8 @@ public class WifiMetricsTest extends WifiBaseTest {
                     i + 10, NetworkDetail.HSRelease.R1, true));
             scan.add(buildMockScanDetailPasspoint("PASSPOINT_XY" + i, "AA:02:03:04:05:06", 1000 * i,
                     i + 10, NetworkDetail.HSRelease.R2, false));
+            scan.add(buildMockScanDetailPasspoint("PASSPOINT_XZ" + i, "0B:02:03:04:05:06", 101 * i,
+                    i + 10, NetworkDetail.HSRelease.R3, false));
         }
         mWifiMetrics.incrementAvailableNetworksHistograms(scan, true);
         dumpProtoAndDeserialize();
@@ -2505,9 +2545,13 @@ public class WifiMetricsTest extends WifiBaseTest {
                 a(WifiMetrics.MAX_TOTAL_PASSPOINT_APS_BUCKET), a(1));
         verifyHist(mDecodedProto.observedHotspotR2ApsInScanHistogram, 1,
                 a(WifiMetrics.MAX_TOTAL_PASSPOINT_APS_BUCKET), a(1));
+        verifyHist(mDecodedProto.observedHotspotR3ApsInScanHistogram, 1,
+                a(WifiMetrics.MAX_TOTAL_PASSPOINT_APS_BUCKET), a(1));
         verifyHist(mDecodedProto.observedHotspotR1EssInScanHistogram, 1,
                 a(WifiMetrics.MAX_TOTAL_PASSPOINT_UNIQUE_ESS_BUCKET), a(1));
         verifyHist(mDecodedProto.observedHotspotR2EssInScanHistogram, 1,
+                a(WifiMetrics.MAX_TOTAL_PASSPOINT_UNIQUE_ESS_BUCKET), a(1));
+        verifyHist(mDecodedProto.observedHotspotR3EssInScanHistogram, 1,
                 a(WifiMetrics.MAX_TOTAL_PASSPOINT_UNIQUE_ESS_BUCKET), a(1));
     }
 
@@ -4661,5 +4705,52 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.throughputMbpsHistogram.rx2G);
         assertHistogramBucketsEqual(expectedRxAbove2GHistogramMbps,
                 mDecodedProto.throughputMbpsHistogram.rxAbove2G);
+    }
+
+    /**
+     * Test the Initial partial scan statistics
+     */
+    @Test
+    public void testInitPartialScan() throws Exception {
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(4, true);
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(2, false);
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(1, false);
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(7, true);
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(15, false);
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(2, true);
+        mWifiMetrics.incrementInitialPartialScanCount();
+        mWifiMetrics.reportInitialPartialScan(10, true);
+
+        dumpProtoAndDeserialize();
+
+        assertEquals(9, mDecodedProto.initPartialScanStats.numScans);
+        assertEquals(4, mDecodedProto.initPartialScanStats.numSuccessScans);
+        assertEquals(3, mDecodedProto.initPartialScanStats.numFailureScans);
+
+        HistogramBucketInt32[] expectedSuccessScanHistogram = {
+                buildHistogramBucketInt32(1, 3, 1),
+                buildHistogramBucketInt32(3, 5, 1),
+                buildHistogramBucketInt32(5, 10, 1),
+                buildHistogramBucketInt32(10, Integer.MAX_VALUE, 1),
+        };
+
+        HistogramBucketInt32[] expectedFailureScanHistogram = {
+                buildHistogramBucketInt32(1, 3, 2),
+                buildHistogramBucketInt32(10, Integer.MAX_VALUE, 1),
+        };
+
+        assertHistogramBucketsEqual(expectedSuccessScanHistogram,
+                mDecodedProto.initPartialScanStats.successfulScanChannelCountHistogram);
+
+        assertHistogramBucketsEqual(expectedFailureScanHistogram,
+                mDecodedProto.initPartialScanStats.failedScanChannelCountHistogram);
     }
 }
