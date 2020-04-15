@@ -1853,6 +1853,7 @@ public class WifiNative {
            }
         }
 
+        Log.i(TAG, ifaceName + ": SoftAp Wifi Generation: " + wifiGeneration);
         WifiInjector.getInstance().getWifiApConfigStore().setWifiGeneration(wifiGeneration);
 
         return true;
