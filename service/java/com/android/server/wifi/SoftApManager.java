@@ -108,7 +108,6 @@ public class SoftApManager implements ActiveModeManager {
     private SoftApCapability mCurrentSoftApCapability;
 
     private List<WifiClient> mConnectedClients = new ArrayList<>();
-    private int mQCNumAssociatedStations = 0;
     private boolean mTimeoutEnabled = false;
     private String[] mdualApInterfaces;
     private boolean mDualSapIfacesDestroyed = false;
@@ -159,18 +158,6 @@ public class SoftApManager implements ActiveModeManager {
                 @WifiAnnotations.Bandwidth int bandwidth) {
             mStateMachine.sendMessage(
                     SoftApStateMachine.CMD_SOFT_AP_CHANNEL_SWITCHED, frequency, bandwidth);
-        }
-
-        @Override
-        public void onStaConnected(String Macaddr) {
-            mStateMachine.sendMessage(
-                    SoftApStateMachine.CMD_CONNECTED_STATIONS, Macaddr);
-        }
-
-        @Override
-        public void onStaDisconnected(String Macaddr) {
-            mStateMachine.sendMessage(
-                    SoftApStateMachine.CMD_DISCONNECTED_STATIONS, Macaddr);
         }
     };
 
@@ -530,8 +517,6 @@ public class SoftApManager implements ActiveModeManager {
         public static final int CMD_SOFT_AP_CHANNEL_SWITCHED = 9;
         public static final int CMD_UPDATE_CAPABILITY = 10;
         public static final int CMD_UPDATE_CONFIG = 11;
-        public static final int CMD_CONNECTED_STATIONS = 12;
-        public static final int CMD_DISCONNECTED_STATIONS = 13;
         public static final int CMD_DUAL_SAP_INTERFACE_DESTROYED = 50;
 
         private final State mIdleState = new IdleState();
@@ -803,7 +788,7 @@ public class SoftApManager implements ActiveModeManager {
             private WakeupMessage mSoftApTimeoutMessage;
 
             private void scheduleTimeoutMessage() {
-                if (!mTimeoutEnabled || mQCNumAssociatedStations != 0) {
+                if (!mTimeoutEnabled) {
                     cancelTimeoutMessage();
                     return;
                 }
@@ -922,39 +907,6 @@ public class SoftApManager implements ActiveModeManager {
                 scheduleTimeoutMessage();
             }
 
-            /**
-             * Set New connected stations with this soft AP
-             * @param Macaddr Mac address of connected stations
-             */
-            private void setConnectedStations(String Macaddr) {
-
-                mQCNumAssociatedStations++;
-                if (mSoftApCallback != null) {
-                    mSoftApCallback.onStaConnected(Macaddr,mQCNumAssociatedStations);
-                } else {
-                    Log.e(TAG, "SoftApCallback is null. Dropping onStaConnected event.");
-                }
-                if (mQCNumAssociatedStations > 0)
-                    cancelTimeoutMessage();
-            }
-
-            /**
-             * Set Disconnected stations with this soft AP
-             * @param Macaddr Mac address of Disconnected stations
-             */
-            private void setDisConnectedStations(String Macaddr) {
-
-                if (mQCNumAssociatedStations > 0)
-                     mQCNumAssociatedStations--;
-                if (mSoftApCallback != null) {
-                    mSoftApCallback.onStaDisconnected(Macaddr, mQCNumAssociatedStations);
-                } else {
-                    Log.e(TAG, "SoftApCallback is null. Dropping onStaDisconnected event.");
-                }
-                if (mQCNumAssociatedStations == 0)
-                    scheduleTimeoutMessage();
-            }
-
             private void setSoftApChannel(int freq, @WifiAnnotations.Bandwidth int apBandwidth) {
                 Log.d(TAG, "Channel switched. Frequency: " + freq
                         + " Bandwidth: " + apBandwidth);
@@ -990,7 +942,6 @@ public class SoftApManager implements ActiveModeManager {
                     mWifiMetrics.incrementSoftApStartResult(true, 0);
                     if (mSoftApCallback != null) {
                         mSoftApCallback.onConnectedClientsChanged(mConnectedClients);
-                        mSoftApCallback.onStaConnected("", mQCNumAssociatedStations);
                     }
                 } else {
                     // the interface was up, but goes down
@@ -1023,7 +974,6 @@ public class SoftApManager implements ActiveModeManager {
                 Log.d(TAG, "Resetting connected clients on start");
                 mConnectedClients.clear();
                 mEverReportMetricsForMaxClient = false;
-                mQCNumAssociatedStations = 0;
                 scheduleTimeoutMessage();
             }
 
@@ -1034,7 +984,6 @@ public class SoftApManager implements ActiveModeManager {
                 }
 
                 Log.d(TAG, "Resetting num stations on stop");
-                mQCNumAssociatedStations = 0;
                 if (mConnectedClients.size() != 0) {
                     mConnectedClients.clear();
                     if (mSoftApCallback != null) {
@@ -1108,22 +1057,6 @@ public class SoftApManager implements ActiveModeManager {
                             break;
                         }
                         setSoftApChannel(message.arg1, message.arg2);
-                        break;
-                    case CMD_CONNECTED_STATIONS:
-                        if (message.obj == null) {
-                            Log.e(TAG, "Invalid Macaddr of connected station: " + message.obj);
-                            break;
-                        }
-                        Log.d(TAG, "Setting Macaddr of stations on CMD_CONNECTED_STATIONS");
-                        setConnectedStations((String) message.obj);
-                        break;
-                    case CMD_DISCONNECTED_STATIONS:
-                        if (message.obj == null) {
-                            Log.e(TAG, "Invalid Macaddr of disconnected station: " + message.obj);
-                            break;
-                        }
-                        Log.d(TAG, "Setting Macaddr of stations on CMD_DISCONNECTED_STATIONS");
-                        setDisConnectedStations((String) message.obj);
                         break;
                     case CMD_INTERFACE_STATUS_CHANGED:
                         boolean isUp = message.arg1 == 1;
