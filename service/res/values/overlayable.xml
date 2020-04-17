@@ -23,6 +23,8 @@
           <item type="bool" name="config_wifi5ghzSupport" />
           <item type="bool" name="config_wifi6ghzSupport" />
           <item type="bool" name="config_wifi11axSupportOverride" />
+          <item type="bool" name="config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideEnable" />
+          <item type="integer" name="config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideValue" />
           <item type="bool" name="config_wifi_fast_bss_transition_enabled" />
           <item type="string" name="config_wifi_p2p_device_type" />
           <item type="bool" name="config_wifi_background_scan_support" />
@@ -36,7 +38,8 @@
           <item type="integer" name="config_wifiFrameworkThroughputBonusLimit" />
           <item type="integer" name="config_wifiFrameworkSavedNetworkBonus" />
           <item type="integer" name="config_wifiFrameworkUnmeteredNetworkBonus" />
-          <item type="integer" name="config_wifiFrameworkCurrentNetworkBonus" />
+          <item type="integer" name="config_wifiFrameworkCurrentNetworkBonusMin" />
+          <item type="integer" name="config_wifiFrameworkCurrentNetworkBonusPercent" />
           <item type="integer" name="config_wifiFrameworkSecureNetworkBonus" />
           <item type="integer" name="config_wifiFrameworkLastSelectionMinutes" />
           <item type="integer" name="config_wifiFrameworkMinPacketPerSecondActiveTraffic" />
@@ -127,6 +130,7 @@
           <item type="integer" name="config_wifiPollRssiIntervalMilliseconds" />
           <item type="bool" name="config_wifiSaeUpgradeEnabled" />
           <item type="bool" name="config_wifiSaeUpgradeOffloadEnabled" />
+          <item type="integer" name="config_wifiMaxNativeFailureSelfRecoveryPerHour" />
           <!-- Params from config.xml that can be overlayed -->
 
           <!-- Params from strings.xml that can be overlayed -->
