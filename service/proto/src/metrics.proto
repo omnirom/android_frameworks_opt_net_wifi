@@ -649,6 +649,32 @@ message WifiLog {
 
   // Total number of steering requests which include MBO assoc retry delay
   optional int32 num_steering_request_including_mbo_assoc_retry_delay = 181;
+
+  // Total number of scan results from 11ax network
+  optional int32 num_11ax_network_scan_results = 182;
+
+  // Total number of scan results from 6GHz band
+  optional int32 num_6g_network_scan_results = 183;
+
+  // Initial partial scan stats
+  optional InitPartialScanStats init_partial_scan_stats = 184;
+
+  // Total number of scan results for hotspot 2.0 r3 networks
+  optional int32 num_hotspot2_r3_network_scan_results = 185;
+
+  // Histogram counting instances of scans with N many HotSpot 2.0 R3 APs
+  repeated NumConnectableNetworksBucket observed_hotspot_r3_aps_in_scan_histogram = 186;
+
+  // Histogram counting number of HotSpot 2.0 R3 APs per observed ESS in a scan
+  // (one value added per unique ESS - potentially multiple counts per single
+  // scan!)
+  repeated NumConnectableNetworksBucket observed_hotspot_r3_aps_per_ess_in_scan_histogram = 187;
+
+  // Histogram counting instances of scans with N many unique HotSpot 2.0 R3 ESS.
+  // Where ESS is defined as the (HESSID, ANQP Domain ID), (SSID, ANQP Domain ID) or
+  // (SSID, BSSID) tuple depending on AP configuration (in the above priority
+  // order).
+  repeated NumConnectableNetworksBucket observed_hotspot_r3_ess_in_scan_histogram = 188;
 }
 
 // Information that gets logged for every WiFi connection.
@@ -3115,4 +3141,23 @@ message ThroughputMbpsHistogram {
   repeated HistogramBucketInt32 rx_2g = 3;
   // Rx histogram above 2G
   repeated HistogramBucketInt32 rx_above_2g = 4;
+}
+
+// Initial Partial Scan stats
+message InitPartialScanStats {
+  // Total number of partial scans
+  optional int32 num_scans = 1;
+
+  // Number of instances a partial scan results in finding a network
+  optional int32 num_success_scans = 2;
+
+  // Number of instances a patial scan does not result in finding a network
+  // and a follow up full scan finds a network.
+  optional int32 num_failure_scans = 3;
+
+  // Histogram of number of channels used in a successful partial scan
+  repeated HistogramBucketInt32 successful_scan_channel_count_histogram = 4;
+
+  // Histogram of number of channels used in a failed partial scan
+  repeated HistogramBucketInt32 failed_scan_channel_count_histogram = 5;
 }
