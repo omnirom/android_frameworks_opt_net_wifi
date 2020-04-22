@@ -16,13 +16,12 @@
 
 package com.android.server.wifi;
 
-import static android.net.wifi.WifiManager.WIFI_GENERATION_DEFAULT;
-
 import android.annotation.NonNull;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.net.MacAddress;
 import android.net.util.MacAddressUtils;
+import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
 import android.os.Handler;
 import android.os.Process;
@@ -100,7 +99,7 @@ public class WifiApConfigStore {
     // Dual SAP config
     private boolean mDualSapStatus = false;
 
-    private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
+    private int mWifiStandard = ScanResult.WIFI_STANDARD_LEGACY;
 
     WifiApConfigStore(Context context,
             WifiInjector wifiInjector,
@@ -449,11 +448,11 @@ public class WifiApConfigStore {
         return sb.toString();
     }
 
-    public void setWifiGeneration(int generation) {
-        mWifiGeneration = generation;
+    public void setWifiStandard(int standard) {
+        mWifiStandard = standard;
     }
 
-    public int getWifiGeneration() {
-        return mWifiGeneration;
+    public int getWifiStandard() {
+        return mWifiStandard;
     }
 }

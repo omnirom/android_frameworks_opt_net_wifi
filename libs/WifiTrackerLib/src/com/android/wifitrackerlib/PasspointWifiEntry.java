@@ -425,15 +425,18 @@ public class PasspointWifiEntry extends WifiEntry {
             ScanResult bestScanResult = null;
             if (homeScanResults != null && !homeScanResults.isEmpty()) {
                 bestScanResult = getBestScanResultByLevel(homeScanResults);
+                updateWifiGenerationInfo(homeScanResults);
             } else if (roamingScanResults != null && !roamingScanResults.isEmpty()) {
                 mIsRoaming = true;
                 bestScanResult = getBestScanResultByLevel(roamingScanResults);
+                updateWifiGenerationInfo(roamingScanResults);
             }
             if (bestScanResult == null) {
                 mLevel = WIFI_LEVEL_UNREACHABLE;
             } else {
                 mWifiConfig.SSID = "\"" + bestScanResult.SSID + "\"";
                 mLevel = mWifiManager.calculateSignalLevel(bestScanResult.level);
+                updateTransitionModeCapa(bestScanResult);
             }
         } else {
             mLevel = WIFI_LEVEL_UNREACHABLE;

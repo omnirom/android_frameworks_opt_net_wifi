@@ -1601,4 +1601,12 @@ public class HostapdHal {
             }
         }
     }
+
+    public boolean is11acSupportEnabled() {
+        return mContext.getResources().getBoolean(R.bool.config_wifi_softap_ieee80211ac_supported);
+    }
+
+    public boolean is11axSupportEnabled() {
+        return mContext.getResources().getBoolean(R.bool.config_wifiSoftapIeee80211axSupported);
+    }
 }
