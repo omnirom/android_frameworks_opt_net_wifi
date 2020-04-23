@@ -969,6 +969,15 @@ public class WifiServiceImpl extends BaseWifiService {
             }
         }
 
+        if (ApConfigUtil.containsBand(apBand, SoftApConfiguration.BAND_DUAL)
+                && !is5GhzBandSupportedInternal()
+                && (!is6GhzBandSupportedInternal()
+                       || !mContext.getResources().getBoolean(
+                               R.bool.config_wifiSoftap6ghzSupported))) {
+            mLog.err("Can not start softAp with Dual band, not supported.").flush();
+            return false;
+        }
+
         return true;
     }
 
@@ -4188,7 +4197,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (apConfig == null)
             apConfig = mWifiApConfigStore.getApConfiguration();
 
-        if (apConfig.getBand() == SoftApConfiguration.BAND_ANY
+        if (apConfig.getBand() == SoftApConfiguration.BAND_DUAL
                 || apConfig.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_OWE) {
             mLog.trace("setDualSapMode uid=%").c(Binder.getCallingUid()).flush();
             mWifiApConfigStore.setDualSapStatus(true);
@@ -4564,16 +4573,26 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /*
-     * Gets SoftAP Wi-Fi Generation
-     * @return Wi-Fi generation if SoftAp enabled or -1.
+     * Gets SoftAP Wi-Fi Standard
+     * @return Wi-Fi standard if SoftAp enabled or -1.
      */
     @Override
-    public int getSoftApWifiGeneration() {
+    public int getSoftApWifiStandard() {
         enforceAccessPermission();
         if (getWifiApEnabledState() == WifiManager.WIFI_AP_STATE_ENABLED) {
-            return mWifiApConfigStore.getWifiGeneration();
+            return mWifiApConfigStore.getWifiStandard();
         } else {
             return -1;
         }
+    }
+
+    /*
+     * Check if the driver supports 11ax ready
+     * @return {true} if supported, {false} otherwise.
+     */
+    @Override
+    public boolean isVht8ssCapableDevice() {
+        enforceAccessPermission();
+        return mContext.getResources().getBoolean(R.bool.config_vendorWifi11axReadySupport);
     }
 }

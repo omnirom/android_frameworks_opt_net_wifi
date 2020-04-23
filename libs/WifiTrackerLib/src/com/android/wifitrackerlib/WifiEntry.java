@@ -26,6 +26,7 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkUtils;
 import android.net.RouteInfo;
+import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
@@ -201,6 +202,13 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     protected boolean mCalledConnect = false;
     protected boolean mCalledDisconnect = false;
 
+    private int mDeviceWifiStandard;
+    private int mWifiStandard = ScanResult.WIFI_STANDARD_LEGACY;
+    private boolean mHe8ssCapableAp;
+    private boolean mVhtMax8SpatialStreamsSupport;
+    private boolean mIsPskSaeTransitionMode;
+    private boolean mIsOweTransitionMode;
+
     WifiEntry(@NonNull Handler callbackHandler, @NonNull WifiManager wifiManager,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
         checkNotNull(callbackHandler, "Cannot construct with null handler!");
@@ -208,6 +216,7 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
         mCallbackHandler = callbackHandler;
         mForSavedNetworksPage = forSavedNetworksPage;
         mWifiManager = wifiManager;
+        updatetDeviceWifiGenerationInfo();
     }
 
     // Info available for all WifiEntries //
@@ -753,10 +762,96 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
                 .append(getLevel())
                 .append(",security:")
                 .append(getSecurity())
+                .append(",standard:")
+                .append(getWifiStandard())
+                .append(",he8ssAp:")
+                .append(isHe8ssCapableAp())
+                .append(",vhtMax8ssCapa:")
+                .append(isVhtMax8SpatialStreamsSupported())
                 .append(",connected:")
                 .append(getConnectedState() == CONNECTED_STATE_CONNECTED ? "true" : "false")
                 .append(",connectedInfo:")
                 .append(getConnectedInfo())
                 .toString();
+    }
+
+    protected void updateTransitionModeCapa(ScanResult scanResult) {
+        mIsPskSaeTransitionMode = scanResult.capabilities.contains("PSK")
+                                      && scanResult.capabilities.contains("SAE");
+        mIsOweTransitionMode = scanResult.capabilities.contains("OWE_TRANSITION");
+    }
+
+    public boolean isPskSaeTransitionMode() {
+        return mIsPskSaeTransitionMode;
+    }
+
+    public boolean isOweTransitionMode() {
+        return mIsOweTransitionMode;
+    }
+
+    private void updatetDeviceWifiGenerationInfo() {
+        if (mWifiManager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AX))
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_11AX;
+        else if (mWifiManager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AC))
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_11AC;
+        else if (mWifiManager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11N))
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_11N;
+        else
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_LEGACY;
+
+        mVhtMax8SpatialStreamsSupport = mWifiManager.isVht8ssCapableDevice();
+    }
+
+    /**
+     * Returns Wi-Fi standard of the connection/AP
+     */
+    public int getWifiStandard() {
+        if (getConnectedInfo() == null || mWifiInfo == null ||
+                getConnectedState() != CONNECTED_STATE_CONNECTED)
+            return mWifiStandard;
+
+        return mWifiInfo.getWifiStandard();
+    }
+
+    /**
+     * Returns true if AP is HE 8SS capable connection/AP
+     */
+    public boolean isHe8ssCapableAp() {
+        if (getConnectedInfo() == null || mWifiInfo == null ||
+                getConnectedState() != CONNECTED_STATE_CONNECTED)
+            return mHe8ssCapableAp;
+
+        return mWifiInfo.isHe8ssCapableAp();
+    }
+
+    /**
+     * Returns true if VHT 8SS capable connection/AP
+     */
+    public boolean isVhtMax8SpatialStreamsSupported() {
+        if (getConnectedInfo() == null || mWifiInfo == null ||
+                getConnectedState() != CONNECTED_STATE_CONNECTED)
+            return mVhtMax8SpatialStreamsSupport;
+
+        return mWifiInfo.isVhtMax8SpatialStreamsSupported();
+    }
+
+    protected void updateWifiGenerationInfo(@Nullable List<ScanResult> scanResults) {
+        int currResultWifiStandard;
+        int minConnectionCapability = mDeviceWifiStandard;
+
+        // Capture minimum possible connection capability of all scan results
+        mHe8ssCapableAp = true;
+        for (ScanResult result : scanResults) {
+            currResultWifiStandard = result.getWifiStandard();
+
+            // Check if atleast one bssid present without HE and 8SS support
+            if (!result.capabilities.contains("WFA-HE-READY") && mHe8ssCapableAp)
+                mHe8ssCapableAp = false;
+
+            if (currResultWifiStandard < minConnectionCapability)
+                minConnectionCapability = currResultWifiStandard;
+        }
+
+        mWifiStandard = minConnectionCapability;
     }
 }

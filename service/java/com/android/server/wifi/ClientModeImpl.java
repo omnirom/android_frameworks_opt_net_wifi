@@ -2802,6 +2802,7 @@ public class ClientModeImpl extends StateMachine {
         int maxTxLinkSpeedMbps = throughputPredictor.predictMaxTxThroughput(capabilities);
         int maxRxLinkSpeedMbps = throughputPredictor.predictMaxRxThroughput(capabilities);
         mWifiInfo.setWifiStandard(capabilities.wifiStandard);
+        updateQcWifiGenerationInfo();
         mWifiInfo.setMaxSupportedTxLinkSpeedMbps(maxTxLinkSpeedMbps);
         mWifiInfo.setMaxSupportedRxLinkSpeedMbps(maxRxLinkSpeedMbps);
         mWifiMetrics.setConnectionMaxSupportedLinkSpeedMbps(
@@ -2810,6 +2811,8 @@ public class ClientModeImpl extends StateMachine {
         if (mVerboseLoggingEnabled) {
             StringBuilder sb = new StringBuilder();
             logd(sb.append("WifiStandard: ").append(capabilities.wifiStandard)
+                    .append(" vhtMax8SS: ").append(mWifiInfo.isVhtMax8SpatialStreamsSupported())
+                    .append(" he8ssAp: ").append(mWifiInfo.isHe8ssCapableAp())
                     .append(" maxTxSpeed: ").append(maxTxLinkSpeedMbps)
                     .append(" maxRxSpeed: ").append(maxRxLinkSpeedMbps)
                     .toString());
@@ -3075,20 +3078,6 @@ public class ClientModeImpl extends StateMachine {
              return null;
 
         return mWifiNative.getWifiGenerationStatus(mInterfaceName);
-    }
-
-    private void updateWifiGenerationInfo() {
-        WifiGenerationStatus wifiGenerationStatus = getWifiGenerationStatus();
-
-        if (wifiGenerationStatus != null) {
-            mWifiInfo.setWifiGeneration(wifiGenerationStatus.generation);
-            mWifiInfo.setVhtMax8SpatialStreamsSupport(wifiGenerationStatus.vhtMax8SpatialStreamsSupport);
-            mWifiInfo.setTwtSupport(wifiGenerationStatus.twtSupport);
-        } else {
-            mWifiInfo.setWifiGeneration(0);
-            mWifiInfo.setVhtMax8SpatialStreamsSupport(false);
-            mWifiInfo.setTwtSupport(false);
-        }
     }
 
     /**
@@ -4414,7 +4403,6 @@ public class ClientModeImpl extends StateMachine {
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
                         mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
-                        updateWifiGenerationInfo();
 
                         ScanDetailCache scanDetailCache =
                                 mWifiConfigManager.getScanDetailCacheForNetwork(config.networkId);
@@ -5165,7 +5153,6 @@ public class ClientModeImpl extends StateMachine {
                     mWifiInfo.setNetworkId(mLastNetworkId);
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
                     if (!mLastBssid.equals(message.obj)) {
-                        updateWifiGenerationInfo();
                         mLastBssid = (String) message.obj;
                     }
                     mIpReachabilityMonitorActive = true;
@@ -5241,7 +5228,6 @@ public class ClientModeImpl extends StateMachine {
                     if (mLastBssid != null && (mWifiInfo.getBSSID() == null
                             || !mLastBssid.equals(mWifiInfo.getBSSID()))) {
                         mWifiInfo.setBSSID(mLastBssid);
-                        updateWifiGenerationInfo();
                         WifiConfiguration config = getCurrentWifiConfiguration();
                         if (config != null) {
                             ScanDetailCache scanDetailCache = mWifiConfigManager
@@ -5553,7 +5539,6 @@ public class ClientModeImpl extends StateMachine {
                         mLastBssid = (String) message.obj;
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
-                        updateWifiGenerationInfo();
 
                         // Successful framework roam! (probably)
                         mBssidBlocklistMonitor.handleBssidConnectionSuccess(mLastBssid,
@@ -6104,7 +6089,6 @@ public class ClientModeImpl extends StateMachine {
                     if (config != null) {
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
-                        updateWifiGenerationInfo();
                         // TODO(b/i144863648): trackBssid has been removed
                         //mWifiConnectivityManager.trackBssid(mLastBssid, true, reasonCode);
                         // We need to get the updated pseudonym from supplicant for EAP-SIM/AKA/AKA'
@@ -7124,4 +7108,29 @@ public class ClientModeImpl extends StateMachine {
         return true;
     }
 
+    private void updateQcWifiGenerationInfo() {
+        WifiGenerationStatus wifiGenerationStatus = getWifiGenerationStatus();
+
+        if (wifiGenerationStatus == null)
+            return;
+
+        mWifiInfo.setVhtMax8SpatialStreamsSupport(wifiGenerationStatus.vhtMax8SpatialStreamsSupport);
+        WifiConfiguration config = getCurrentWifiConfiguration();
+
+        if (config == null)
+            return;
+
+        ScanDetailCache scanDetailCache = mWifiConfigManager.getScanDetailCacheForNetwork(config.networkId);
+        if (scanDetailCache == null)
+            return;
+
+        ScanResult result = scanDetailCache.getScanResult(mLastBssid);
+        if (result != null) {
+            if (result.capabilities.contains("WFA-HE-READY")) {
+                mWifiInfo.setHe8ssCapableAp(true);
+            } else {
+                mWifiInfo.setHe8ssCapableAp(false);
+            }
+        }
+    }
 }

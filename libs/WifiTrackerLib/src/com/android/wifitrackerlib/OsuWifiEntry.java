@@ -279,8 +279,10 @@ class OsuWifiEntry extends WifiEntry {
             mLevel = WIFI_LEVEL_UNREACHABLE;
         } else {
             mLevel = mWifiManager.calculateSignalLevel(bestScanResult.level);
+            updateTransitionModeCapa(bestScanResult);
         }
 
+        updateWifiGenerationInfo(mCurrentScanResults);
         notifyOnUpdated();
     }
 

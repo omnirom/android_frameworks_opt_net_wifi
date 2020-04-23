@@ -748,8 +748,6 @@ public class ActiveModeWarden {
                     case CMD_WIFI_TOGGLED:
                     case CMD_STA_STOPPED:
                     case CMD_STA_START_FAILURE:
-                    case CMD_AP_STOPPED:
-                    case CMD_AP_START_FAILURE:
                     case CMD_RECOVERY_RESTART_WIFI:
                     case CMD_RECOVERY_RESTART_WIFI_CONTINUE:
                     case CMD_DEFERRED_RECOVERY_RESTART_WIFI:
@@ -778,6 +776,15 @@ public class ActiveModeWarden {
                         break;
                     case CMD_UPDATE_AP_CONFIG:
                         updateConfigurationToSoftApModeManager((SoftApConfiguration) msg.obj);
+                        break;
+                    case CMD_AP_STOPPED:
+                    case CMD_AP_START_FAILURE:
+                        // Softap Start Failure (for Dual SAP) arrives in Disabled State.
+                        log("Softap mode disabled, determine next state");
+                        if (shouldEnableSta()) {
+                            startClientModeManager();
+                            transitionTo(mEnabledState);
+                        }
                         break;
                     default:
                         throw new RuntimeException("WifiController.handleMessage " + msg.what);
@@ -883,8 +890,7 @@ public class ActiveModeWarden {
                         // note: CMD_SET_AP is handled/dropped in ECM mode - will not start here
                         // If request is to start dual sap, turn off sta.
                         if (msg.arg1 == 1 && mWifiApConfigStore.getDualSapStatus()) {
-                            shutdownWifi();
-                            transitionTo(mDisabledState);
+                            stopAllClientModeManagers();
                         }
                         if (msg.arg1 == 1) {
                             startSoftApModeManager((SoftApModeConfiguration) msg.obj);

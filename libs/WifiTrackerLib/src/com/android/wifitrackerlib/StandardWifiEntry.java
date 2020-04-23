@@ -646,6 +646,7 @@ public class StandardWifiEntry extends WifiEntry {
         if (bestScanResult != null) {
             updateEapType(bestScanResult);
             updatePskType(bestScanResult);
+            updateTransitionModeCapa(bestScanResult);
         }
 
         if (getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
@@ -653,6 +654,9 @@ public class StandardWifiEntry extends WifiEntry {
                     ? mWifiManager.calculateSignalLevel(bestScanResult.level)
                     : WIFI_LEVEL_UNREACHABLE;
         }
+
+        updateWifiGenerationInfo(mCurrentScanResults);
+
         notifyOnUpdated();
     }
 

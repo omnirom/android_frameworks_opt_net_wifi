@@ -176,6 +176,8 @@ public class ApConfigUtil {
                 return SoftApConfiguration.BAND_5GHZ;
             case WifiConfiguration.AP_BAND_ANY:
                 return SoftApConfiguration.BAND_2GHZ | SoftApConfiguration.BAND_5GHZ;
+            case WifiConfiguration.AP_BAND_DUAL:
+                return SoftApConfiguration.BAND_DUAL;
             default:
                 return SoftApConfiguration.BAND_2GHZ;
         }
@@ -185,7 +187,8 @@ public class ApConfigUtil {
      * Checks if band is a valid combination of {link  SoftApConfiguration#BandType} values
      */
     public static boolean isBandValid(@BandType int band) {
-        return ((band != 0) && ((band & ~SoftApConfiguration.BAND_ANY) == 0));
+        return ((band != 0) && (((band & ~SoftApConfiguration.BAND_ANY) == 0)
+                                || (band == SoftApConfiguration.BAND_DUAL)));
     }
 
     /**
@@ -435,6 +438,9 @@ public class ApConfigUtil {
                     break;
                 case WifiConfiguration.AP_BAND_5GHZ:
                     band = SoftApConfiguration.BAND_5GHZ;
+                    break;
+                case WifiConfiguration.AP_BAND_DUAL:
+                    band = SoftApConfiguration.BAND_DUAL;
                     break;
                 default:
                     // WifiConfiguration.AP_BAND_ANY means only 2GHz and 5GHz bands
