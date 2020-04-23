@@ -40,6 +40,7 @@ import android.util.ArrayMap;
 import android.util.Base64;
 import android.util.Log;
 import android.util.Pair;
+import android.util.SparseLongArray;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.Preconditions;
@@ -68,6 +69,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -203,7 +205,7 @@ public class WifiScoreCard {
      *
      * We want to gather statistics only on the first success.
      */
-    private boolean mValidated = false;
+    private boolean mValidatedThisConnectionAtLeastOnce = false;
 
     /**
      * A note to ourself that we are attempting a network switch
@@ -277,7 +279,7 @@ public class WifiScoreCard {
         }
         mTsRoam = TS_NONE;
         mPolled = false;
-        mValidated = false;
+        mValidatedThisConnectionAtLeastOnce = false;
         mNonlocalDisconnection = false;
     }
 
@@ -361,9 +363,9 @@ public class WifiScoreCard {
      * @param wifiInfo object holding relevant values
      */
     public void noteValidationSuccess(@NonNull ExtendedWifiInfo wifiInfo) {
-        if (mValidated) return; // Only once per connection
+        if (mValidatedThisConnectionAtLeastOnce) return; // Only once per connection
         updatePerBssid(Event.VALIDATION_SUCCESS, wifiInfo);
-        mValidated = true;
+        mValidatedThisConnectionAtLeastOnce = true;
         doWrites();
     }
 
@@ -373,7 +375,7 @@ public class WifiScoreCard {
      * @param wifiInfo object holding relevant values
      */
     public void noteValidationFailure(@NonNull ExtendedWifiInfo wifiInfo) {
-        mValidated = false;
+        // VALIDATION_FAILURE is not currently recorded.
     }
 
     /**
@@ -446,10 +448,11 @@ public class WifiScoreCard {
      * @param wifiInfo object holding relevant values
      */
     public void noteIpReachabilityLost(@NonNull ExtendedWifiInfo wifiInfo) {
-        updatePerBssid(Event.IP_REACHABILITY_LOST, wifiInfo);
         if (mTsRoam > TS_NONE) {
             mTsConnectionAttemptStart = mTsRoam; // just to update elapsed
             updatePerBssid(Event.ROAM_FAILURE, wifiInfo);
+        } else {
+            updatePerBssid(Event.IP_REACHABILITY_LOST, wifiInfo);
         }
         // No need to call resetConnectionStateInternal() because
         // resetConnectionState() will be called after WifiNative.disconnect() in ClientModeImpl
@@ -464,7 +467,7 @@ public class WifiScoreCard {
      *
      * @param wifiInfo object holding relevant values
      */
-    public void noteRoam(@NonNull ExtendedWifiInfo wifiInfo) {
+    private void noteRoam(@NonNull ExtendedWifiInfo wifiInfo) {
         updatePerBssid(Event.LAST_POLL_BEFORE_ROAM, wifiInfo);
         mTsRoam = mClock.getElapsedSinceBootMillis();
     }
@@ -477,6 +480,10 @@ public class WifiScoreCard {
      */
     public void noteSupplicantStateChanging(@NonNull ExtendedWifiInfo wifiInfo,
             SupplicantState state) {
+        if (state == SupplicantState.COMPLETED && wifiInfo.getSupplicantState() == state) {
+            // Our signal that a firmware roam has occurred
+            noteRoam(wifiInfo);
+        }
         logd("Changing state to " + state + " " + wifiInfo);
     }
 
@@ -786,6 +793,38 @@ public class WifiScoreCard {
             }
             merge(ap);
         }
+
+        /**
+         * Estimates the probability of getting internet access, based on the
+         * device experience.
+         *
+         * @return a probability, expressed as a percentage in the range 0 to 100
+         */
+        public int estimatePercentInternetAvailability() {
+            // Initialize counts accoring to Laplace's rule of succession
+            int trials = 2;
+            int successes = 1;
+            // Aggregate over all of the frequencies
+            for (PerSignal s : mSignalForEventAndFrequency.values()) {
+                switch (s.event) {
+                    case IP_CONFIGURATION_SUCCESS:
+                        if (s.elapsedMs != null) {
+                            trials += s.elapsedMs.count;
+                        }
+                        break;
+                    case VALIDATION_SUCCESS:
+                        if (s.elapsedMs != null) {
+                            successes += s.elapsedMs.count;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+            // Note that because of roaming it is possible to count successes
+            // without corresponding trials.
+            return Math.min(Math.max(Math.round(successes * 100.0f / trials), 0), 100);
+        }
     }
 
     /**
@@ -803,6 +842,8 @@ public class WifiScoreCard {
         private NetworkConnectionStats mStatsCurrBuild;
         private NetworkConnectionStats mStatsPrevBuild;
         private LruList<Integer> mFrequencyList;
+        // In memory keep frequency with timestamp last time available, the elapsed time since boot.
+        private SparseLongArray mFreqTimestamp;
 
         PerNetwork(String ssid) {
             super(computeHashLong(ssid, MacAddress.fromString(DEFAULT_MAC_ADDRESS), mL2KeySeed));
@@ -812,7 +853,8 @@ public class WifiScoreCard {
             mRecentStats = new NetworkConnectionStats();
             mStatsCurrBuild = new NetworkConnectionStats();
             mStatsPrevBuild = new NetworkConnectionStats();
-            mFrequencyList = new LruList<Integer>(MAX_FREQUENCIES_PER_SSID);
+            mFrequencyList = new LruList<>(MAX_FREQUENCIES_PER_SSID);
+            mFreqTimestamp = new SparseLongArray();
         }
 
         void updateEventStats(Event event, int rssi, int txSpeed, int failureReason) {
@@ -923,10 +965,19 @@ public class WifiScoreCard {
 
         /**
          * Retrieve the list of frequencies seen for this network, with the most recent first.
-         * @return
+         * @param ageInMills Max age to filter the channels.
+         * @return a list of frequencies
          */
-        List<Integer> getFrequencies() {
-            return mFrequencyList.getEntries();
+        List<Integer> getFrequencies(Long ageInMills) {
+            List<Integer> results = new ArrayList<>();
+            Long nowInMills = mClock.getElapsedSinceBootMillis();
+            for (Integer freq : mFrequencyList.getEntries()) {
+                if (nowInMills - mFreqTimestamp.get(freq, 0L) > ageInMills) {
+                    continue;
+                }
+                results.add(freq);
+            }
+            return results;
         }
 
         /**
@@ -935,6 +986,7 @@ public class WifiScoreCard {
          */
         void addFrequency(int frequency) {
             mFrequencyList.add(frequency);
+            mFreqTimestamp.put(frequency, mClock.getElapsedSinceBootMillis());
         }
 
         /**
@@ -1697,7 +1749,7 @@ public class WifiScoreCard {
             Preconditions.checkArgument(frequency == signal.getFrequency());
             rssi.merge(signal.getRssi());
             linkspeed.merge(signal.getLinkspeed());
-            if (signal.hasElapsedMs()) {
+            if (elapsedMs != null && signal.hasElapsedMs()) {
                 elapsedMs.merge(signal.getElapsedMs());
             }
             return this;

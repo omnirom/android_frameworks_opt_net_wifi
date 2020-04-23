@@ -153,7 +153,7 @@ import com.android.internal.util.AsyncChannel;
 import com.android.server.wifi.WifiServiceImpl.LocalOnlyRequestorCallback;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvisioningTestUtil;
-import com.android.server.wifi.proto.nano.WifiMetricsProto;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.ApConfigUtil;
 import com.android.server.wifi.util.WifiAsyncChannel;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -3542,11 +3542,13 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testConnectNetworkWithPrivilegedPermission() throws Exception {
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
             anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         mWifiServiceImpl.connect(mock(WifiConfiguration.class), TEST_NETWORK_ID,
                 mock(Binder.class),
                 mock(IActionListener.class), 0);
         verify(mClientModeImpl).connect(any(WifiConfiguration.class), anyInt(),
                 any(Binder.class), any(IActionListener.class), anyInt(), anyInt());
+        verify(mWifiMetrics).logUserActionEvent(eq(UserActionEvent.EVENT_MANUAL_CONNECT), anyInt());
     }
 
     /**
@@ -3577,7 +3579,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         InOrder inOrder = inOrder(mClientModeImpl, mWifiMetrics);
         inOrder.verify(mWifiMetrics).logUserActionEvent(
-                WifiMetricsProto.UserActionEvent.EVENT_FORGET_WIFI, TEST_NETWORK_ID);
+                UserActionEvent.EVENT_FORGET_WIFI, TEST_NETWORK_ID);
         inOrder.verify(mClientModeImpl).forget(anyInt(), any(Binder.class),
                 any(IActionListener.class), anyInt(), anyInt());
     }
@@ -4521,7 +4523,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         mWifiServiceImpl.disableEphemeralNetwork(new String(), TEST_PACKAGE_NAME);
         mLooper.dispatchAll();
-        verify(mWifiConfigManager).userTemporarilyDisabledNetwork(anyString());
+        verify(mWifiConfigManager).userTemporarilyDisabledNetwork(anyString(), anyInt());
     }
 
     /**
@@ -4534,7 +4536,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
         mWifiServiceImpl.disableEphemeralNetwork(new String(), TEST_PACKAGE_NAME);
         mLooper.dispatchAll();
-        verify(mWifiConfigManager, never()).userTemporarilyDisabledNetwork(anyString());
+        verify(mWifiConfigManager, never()).userTemporarilyDisabledNetwork(anyString(), anyInt());
     }
 
     /**
@@ -4606,7 +4608,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void setDeviceMobilityStateThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_SET_DEVICE_MOBILITY_STATE),
                         eq("WifiService"));
         try {
@@ -4634,7 +4636,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testAddStatsListenerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
@@ -4666,7 +4668,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testRemoveStatsListenerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
@@ -4707,7 +4709,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testUpdateWifiUsabilityScoreThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                 eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                 eq("WifiService"));
         try {
@@ -5051,6 +5053,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testAllowAutojoinOnSuggestionNetwork() {
         WifiConfiguration config = new WifiConfiguration();
+        config.allowAutojoin = false;
         config.fromWifiNetworkSuggestion = true;
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
         when(mWifiNetworkSuggestionsManager.allowNetworkSuggestionAutojoin(any(), anyBoolean()))
@@ -5060,11 +5063,14 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mWifiConfigManager).getConfiguredNetwork(0);
         verify(mWifiNetworkSuggestionsManager).allowNetworkSuggestionAutojoin(any(), anyBoolean());
         verify(mWifiConfigManager).allowAutojoin(anyInt(), anyBoolean());
+        verify(mWifiMetrics).logUserActionEvent(eq(UserActionEvent.EVENT_CONFIGURE_AUTO_CONNECT_ON),
+                anyInt());
     }
 
     @Test
     public void testAllowAutojoinOnSavedNetwork() {
         WifiConfiguration config = new WifiConfiguration();
+        config.allowAutojoin = false;
         config.fromWifiNetworkSuggestion = false;
         config.fromWifiNetworkSpecifier = false;
         when(mWifiConfigManager.getConfiguredNetwork(0)).thenReturn(config);
@@ -5479,7 +5485,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testSetNetworkScorerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
@@ -5509,7 +5515,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testClearNetworkScorerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                                 eq("WifiService"));
         try {
