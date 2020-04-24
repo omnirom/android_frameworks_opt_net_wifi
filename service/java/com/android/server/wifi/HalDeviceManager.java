@@ -1290,9 +1290,6 @@ public class HalDeviceManager {
                     if (status.code != WifiStatusCode.SUCCESS) {
                         Log.e(TAG, "Cannot stop IWifi: " + statusString(status));
                     }
-
-                    // even on failure since WTF??
-                    teardownInternal();
                 }
             } catch (RemoteException e) {
                 Log.e(TAG, "stopWifi exception: " + e);
@@ -1312,8 +1309,10 @@ public class HalDeviceManager {
         @Override
         public void onStop() throws RemoteException {
             mEventHandler.post(() -> {
-                if (VDBG) Log.d(TAG, "IWifiEventCallback.onStop");
-                // NOP: only happens in reaction to my calls - will handle directly
+                Log.d(TAG, "IWifiEventCallback.onStop");
+                synchronized (mLock) {
+                    teardownInternal();
+                }
             });
         }
 
