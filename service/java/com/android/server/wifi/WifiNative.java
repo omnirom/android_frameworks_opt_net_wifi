@@ -589,11 +589,7 @@ public class WifiNative {
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
-            if (mHostapdHal.isVendorHostapdHal()) {
-                if (!mHostapdHal.removeVendorAccessPoint(iface.name)) {
-                    Log.e(TAG, "Failed to remove vendor access point on " + iface);
-                }
-            } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
+            if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
             if (!mWifiCondManager.tearDownSoftApInterface(iface.name)) {
@@ -1323,6 +1319,16 @@ public class WifiNative {
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             return iface.name;
         }
+    }
+
+    /* Set interface UP. */
+    public boolean setInterfaceUp(String ifname) {
+        if (TextUtils.isEmpty(ifname))
+            return false;
+
+        mNetdWrapper.setInterfaceUp(ifname);
+
+        return isInterfaceUp(ifname);
     }
 
     /**
@@ -3207,18 +3213,6 @@ public class WifiNative {
     public boolean setCountryCodeHal(@NonNull String ifaceName, String countryCode) {
         mHostapdHal.setCountryCode(countryCode);
         return mWifiVendorHal.setCountryCodeHal(ifaceName, countryCode);
-    }
-
-    /**
-     * Set hostapd parameters via QSAP command.
-     *
-     * This would call QSAP library APIs via hostapd hidl.
-     *
-     * @param cmd QSAP command.
-     * @return true on success, false otherwise.
-     */
-    public boolean setHostapdParams(@NonNull String cmd) {
-        return mHostapdHal.setHostapdParams(cmd);
     }
 
     //---------------------------------------------------------------------------------

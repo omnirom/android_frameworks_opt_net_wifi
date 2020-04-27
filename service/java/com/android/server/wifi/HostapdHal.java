@@ -163,7 +163,6 @@ public class HostapdHal {
         synchronized (mLock) {
             mVerboseLoggingEnabled = enable;
             setLogLevel();
-            setVendorLogLevel(enable);
         }
     }
 
@@ -1244,7 +1243,6 @@ public class HostapdHal {
                         Log.e(TAG, "Failed to get V1_1.IHostapdVendor");
                         return false;
                     }
-                    setVendorLogLevel(mVerboseLoggingEnabled);
                     vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams
                          vendorIfaceParams1_1 =
                             new vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams();
@@ -1299,51 +1297,6 @@ public class HostapdHal {
                 return false;
             }
             return false;
-        }
-    }
-
-    /**
-     * Remove a previously started access point.
-     *
-     * @param ifaceName Name of the interface.
-     * @return true on success, false otherwise.
-     */
-    public boolean removeVendorAccessPoint(@NonNull String ifaceName) {
-        synchronized (mLock) {
-            final String methodStr = "removeVendorAccessPoint";
-            WifiApConfigStore apConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
-
-            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
-            try {
-                HostapdStatus status = mIHostapdVendor.removeVendorAccessPoint(ifaceName);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
-        }
-    }
-
-
-    /**
-     * Set hostapd parameters via QSAP command.
-     *
-     * This would call QSAP library APIs via hostapd hidl.
-     *
-     * @param cmd QSAP command.
-     * @return true on success, false otherwise.
-     */
-    public boolean setHostapdParams(@NonNull String cmd) {
-        synchronized (mLock) {
-            final String methodStr = "setHostapdParams";
-            if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
-            try {
-                HostapdStatus status = mIHostapdVendor.setHostapdParams(cmd);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
         }
     }
 
@@ -1570,38 +1523,6 @@ public class HostapdHal {
                 Log.d(TAG, "HIDL doesn't support setDebugParams");
             }
             return false;
-        }
-    }
-
-    /**
-     * Set the debug log level for hostapd-vendor
-     *
-     * @param turnOnVerbose Whether to turn on verbose logging or not.
-     * @return true if request is sent successfully, false otherwise.
-     */
-    public boolean setVendorLogLevel(boolean turnOnVerbose) {
-        synchronized (mLock) {
-            if (!isVendorV1_1()) return false;
-            int logLevel = turnOnVerbose
-                    ? vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.DebugLevel.DEBUG
-                    : vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.DebugLevel.INFO;
-            return setVendorDebugParams(logLevel, false, false);
-        }
-    }
-    /** See IHostapdVendor.hal for documentation */
-    private boolean setVendorDebugParams(int level, boolean showTimestamp, boolean showKeys) {
-        synchronized (mLock) {
-            final String methodStr = "setDebugParams";
-            try {
-                vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor iHostapdVendorV1_1 =
-                    getHostapdVendorMockableV1_1();
-                if (iHostapdVendorV1_1 == null) return false;
-                HostapdStatus status =  iHostapdVendorV1_1.setDebugParams(level, false, false);
-                return checkVendorStatusAndLogFailure(status, methodStr);
-            } catch (RemoteException e) {
-                handleRemoteException(e, methodStr);
-                return false;
-            }
         }
     }
 
