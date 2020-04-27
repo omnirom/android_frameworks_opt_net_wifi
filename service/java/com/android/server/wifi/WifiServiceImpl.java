@@ -781,10 +781,10 @@ public class WifiServiceImpl extends BaseWifiService {
     private boolean isTargetSdkLessThanQOrPrivileged(String packageName, int pid, int uid) {
         return mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q, uid)
                 || isPrivileged(pid, uid)
-                // DO/PO apps should be able to add/modify saved networks.
                 || isDeviceOrProfileOwner(uid, packageName)
-                // TODO: Remove this system app bypass once Q is released.
-                || isSystem(packageName, uid);
+                || isSystem(packageName, uid)
+                // TODO(b/140540984): Remove this bypass.
+                || mWifiPermissionsUtil.checkSystemAlertWindowPermission(uid, packageName);
     }
 
     /**
@@ -795,9 +795,7 @@ public class WifiServiceImpl extends BaseWifiService {
     private boolean isTargetSdkLessThanROrPrivileged(String packageName, int pid, int uid) {
         return mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.R, uid)
                 || isPrivileged(pid, uid)
-                // DO/PO apps should be able to add/modify saved networks.
                 || isDeviceOrProfileOwner(uid, packageName)
-                // TODO: Remove this system app bypass once R is released.
                 || isSystem(packageName, uid);
     }
 
@@ -843,6 +841,10 @@ public class WifiServiceImpl extends BaseWifiService {
             }
         } finally {
             Binder.restoreCallingIdentity(ident);
+        }
+        if (mWifiPermissionsUtil.checkNetworkSettingsPermission(Binder.getCallingUid())) {
+            mWifiMetrics.logUserActionEvent(enable ? UserActionEvent.EVENT_TOGGLE_WIFI_ON
+                    : UserActionEvent.EVENT_TOGGLE_WIFI_OFF);
         }
 
         if (!mIsControllerStarted) {
@@ -3273,6 +3275,20 @@ public class WifiServiceImpl extends BaseWifiService {
                 args);
     }
 
+    private void updateWifiMetrics() {
+        mWifiThreadRunner.run(() -> {
+            mWifiMetrics.updateSavedNetworks(
+                    mWifiConfigManager.getSavedNetworks(Process.WIFI_UID));
+            mPasspointManager.updateMetrics();
+        });
+        boolean isEnhancedMacRandEnabled = mFrameworkFacade.getIntegerSetting(mContext,
+                WifiConfigManager.ENHANCED_MAC_RANDOMIZATION_FEATURE_FORCE_ENABLE_FLAG, 0) == 1
+                ? true : false;
+        mWifiMetrics.setEnhancedMacRandomizationForceEnabled(isEnhancedMacRandEnabled);
+        mWifiMetrics.setIsScanningAlwaysEnabled(isScanAlwaysAvailable());
+        mWifiMetrics.setVerboseLoggingEnabled(mVerboseLoggingEnabled);
+    }
+
     @Override
     protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.DUMP)
@@ -3284,11 +3300,7 @@ public class WifiServiceImpl extends BaseWifiService {
         }
         if (args != null && args.length > 0 && WifiMetrics.PROTO_DUMP_ARG.equals(args[0])) {
             // WifiMetrics proto bytes were requested. Dump only these.
-            mWifiThreadRunner.run(() -> {
-                mWifiMetrics.updateSavedNetworks(
-                        mWifiConfigManager.getSavedNetworks(Process.WIFI_UID));
-                mPasspointManager.updateMetrics();
-            });
+            updateWifiMetrics();
             mWifiMetrics.dump(fd, pw, args);
         } else if (args != null && args.length > 0 && IpClientUtil.DUMP_ARG.equals(args[0])) {
             // IpClient dump was requested. Pass it along and take no further action.
@@ -3331,12 +3343,10 @@ public class WifiServiceImpl extends BaseWifiService {
                     wifiScoreCard.getNetworkListBase64(true), "");
             pw.println("WifiScoreCard:");
             pw.println(networkListBase64);
-            mWifiThreadRunner.run(() -> {
-                mWifiMetrics.updateSavedNetworks(
-                        mWifiConfigManager.getSavedNetworks(Process.WIFI_UID));
-                mPasspointManager.updateMetrics();
-            });
+
+            updateWifiMetrics();
             mWifiMetrics.dump(fd, pw, args);
+
             pw.println();
             mWifiThreadRunner.run(() -> mWifiNetworkSuggestionsManager.dump(fd, pw, args));
             pw.println();
