@@ -457,8 +457,15 @@ public class SoftApManager implements ActiveModeManager {
      */
     private void disconnectAllClients() {
         for (WifiClient client : mConnectedClients) {
-            mWifiNative.forceClientDisconnect(mApInterfaceName, client.getMacAddress(),
-                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+                if (! mWifiNative.forceClientDisconnect(mdualApInterfaces[0], client.getMacAddress(),
+                            SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED))
+                    mWifiNative.forceClientDisconnect(mdualApInterfaces[1], client.getMacAddress(),
+                            SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            } else {
+                mWifiNative.forceClientDisconnect(mApInterfaceName, client.getMacAddress(),
+                        SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            }
         }
     }
 
@@ -467,8 +474,6 @@ public class SoftApManager implements ActiveModeManager {
      */
     private void stopSoftAp() {
         disconnectAllClients();
-        Log.d(TAG, "Soft AP deauth_all before stop Soft AP");
-        mWifiNative.setHostapdParams("deauth_all");
         if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
             mDualSapIfacesDestroyed = true;
             mWifiNative.teardownInterface(mdualApInterfaces[0]);
