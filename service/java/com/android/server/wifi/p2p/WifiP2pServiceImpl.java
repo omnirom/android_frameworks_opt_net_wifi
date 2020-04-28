@@ -909,9 +909,6 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 mWifiNative.registerInterfaceAvailableListener((boolean isAvailable) -> {
                     mIsHalInterfaceAvailable = isAvailable;
                     if (mSetupFailureCount < P2P_SETUP_FAILURE_COUNT_THRESHOLD) {
-                        if (isAvailable) {
-                            checkAndReEnableP2p();
-                        }
                         checkAndSendP2pStateChangedBroadcast();
                     } else {
                         Log.i(TAG, "Ignore InterfaceAvailable for continuous failures. count=" +mSetupFailureCount);
