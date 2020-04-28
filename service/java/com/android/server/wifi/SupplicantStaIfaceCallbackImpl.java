@@ -258,44 +258,45 @@ abstract class SupplicantStaIfaceCallbackImpl extends ISupplicantStaIfaceCallbac
     public void onAssociationRejected(byte[/* 6 */] bssid, int statusCode, boolean timedOut) {
         synchronized (mLock) {
             mStaIfaceHal.logCallback("onAssociationRejected");
+            boolean isWrongPwd = false;
+            boolean broadcastAssociationRejectionEvent = true;
             WifiConfiguration curConfiguration =
                     mStaIfaceHal.getCurrentNetworkLocalConfig(mIfaceName);
 
-            if (curConfiguration != null && !timedOut) {
-                Log.d(TAG, "flush PMK cache due to association rejection for config id "
-                        + curConfiguration.networkId + ".");
-                mStaIfaceHal.removePmkCacheEntry(curConfiguration.networkId);
-            }
-
-            if (statusCode == StatusCode.UNSPECIFIED_FAILURE) {
-                if (curConfiguration != null
-                        && curConfiguration.allowedKeyManagement
-                                .get(WifiConfiguration.KeyMgmt.SAE)) {
-                    // Special handling for WPA3-Personal networks. If the password is
-                    // incorrect, the AP will send association rejection, with status code 1
-                    // (unspecified failure). In SAE networks, the password authentication
-                    // is not related to the 4-way handshake. In this case, we will send an
-                    // authentication failure event up.
+            if (curConfiguration != null) {
+                if (!timedOut) {
+                    Log.d(TAG, "flush PMK cache due to association rejection for config id "
+                            + curConfiguration.networkId + ".");
+                    mStaIfaceHal.removePmkCacheEntry(curConfiguration.networkId);
+                }
+                // Special handling for WPA3-Personal networks. If the password is
+                // incorrect, the AP will send association rejection, with status code 1
+                // (unspecified failure). In SAE networks, the password authentication
+                // is not related to the 4-way handshake. In this case, we will send an
+                // authentication failure event up.
+                // For WEP password error: not check status code to avoid IoT issues with AP.
+                if (statusCode == StatusCode.UNSPECIFIED_FAILURE
+                        && WifiConfigurationUtil.isConfigForSaeNetwork(curConfiguration)) {
                     mStaIfaceHal.logCallback("SAE incorrect password");
-                    mWifiMonitor.broadcastAuthenticationFailureEvent(
-                            mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
+                    isWrongPwd = true;
+                } else if (WifiConfigurationUtil.isConfigForWepNetwork(curConfiguration)) {
+                    mStaIfaceHal.logCallback("WEP incorrect password");
+                    isWrongPwd = true;
+                    // Not broadcast ASSOC REJECT to avoid bssid get blacklisted.
+                    broadcastAssociationRejectionEvent = false;
                 }
             }
 
-            // For WEP password error: not check status code to avoid IoT issues with AP.
-            WifiConfiguration wificonfig = mStaIfaceHal.getCurrentNetworkLocalConfig(mIfaceName);
-            if (wificonfig != null && WifiConfigurationUtil.isConfigForWepNetwork(wificonfig)) {
-                mStaIfaceHal.logCallback("WEP incorrect password");
+            if (isWrongPwd) {
                 mWifiMonitor.broadcastAuthenticationFailureEvent(
-                    mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
-                // Not broadcast ASSOC REJECT to avoid bssid get blacklisted.
-                return;
+                        mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
             }
-
-            mWifiMonitor
-                    .broadcastAssociationRejectionEvent(
-                            mIfaceName, statusCode, timedOut,
-                            NativeUtil.macAddressFromByteArray(bssid));
+            if (broadcastAssociationRejectionEvent) {
+                mWifiMonitor
+                        .broadcastAssociationRejectionEvent(
+                                mIfaceName, statusCode, timedOut,
+                                NativeUtil.macAddressFromByteArray(bssid));
+            }
         }
     }
 
