@@ -169,34 +169,34 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
         when(mWifiNative.getDriverVersion()).thenReturn(mDriverVersion);
         when(mWifiNative.getFirmwareVersion()).thenReturn(mFirmwareVersion);
-        when(mDeviceConfigFacade.getHealthMonitorMinRssiThrDbm()).thenReturn(
-                DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM);
         when(mDeviceConfigFacade.getConnectionFailureHighThrPercent()).thenReturn(
                 DeviceConfigFacade.DEFAULT_CONNECTION_FAILURE_HIGH_THR_PERCENT);
-        when(mDeviceConfigFacade.getConnectionFailureLowThrPercent()).thenReturn(
-                DeviceConfigFacade.DEFAULT_CONNECTION_FAILURE_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getConnectionFailureCountMin()).thenReturn(
+                DeviceConfigFacade.DEFAULT_CONNECTION_FAILURE_COUNT_MIN);
         when(mDeviceConfigFacade.getAssocRejectionHighThrPercent()).thenReturn(
                 DeviceConfigFacade.DEFAULT_ASSOC_REJECTION_HIGH_THR_PERCENT);
-        when(mDeviceConfigFacade.getAssocRejectionLowThrPercent()).thenReturn(
-                DeviceConfigFacade.DEFAULT_ASSOC_REJECTION_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getAssocRejectionCountMin()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ASSOC_REJECTION_COUNT_MIN);
         when(mDeviceConfigFacade.getAssocTimeoutHighThrPercent()).thenReturn(
                 DeviceConfigFacade.DEFAULT_ASSOC_TIMEOUT_HIGH_THR_PERCENT);
-        when(mDeviceConfigFacade.getAssocTimeoutLowThrPercent()).thenReturn(
-                DeviceConfigFacade.DEFAULT_ASSOC_TIMEOUT_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getAssocTimeoutCountMin()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ASSOC_TIMEOUT_COUNT_MIN);
         when(mDeviceConfigFacade.getAuthFailureHighThrPercent()).thenReturn(
                 DeviceConfigFacade.DEFAULT_AUTH_FAILURE_HIGH_THR_PERCENT);
-        when(mDeviceConfigFacade.getAuthFailureLowThrPercent()).thenReturn(
-                DeviceConfigFacade.DEFAULT_AUTH_FAILURE_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getAuthFailureCountMin()).thenReturn(
+                DeviceConfigFacade.DEFAULT_AUTH_FAILURE_COUNT_MIN);
         when(mDeviceConfigFacade.getShortConnectionNonlocalHighThrPercent()).thenReturn(
                 DeviceConfigFacade.DEFAULT_SHORT_CONNECTION_NONLOCAL_HIGH_THR_PERCENT);
-        when(mDeviceConfigFacade.getShortConnectionNonlocalLowThrPercent()).thenReturn(
-                DeviceConfigFacade.DEFAULT_SHORT_CONNECTION_NONLOCAL_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getShortConnectionNonlocalCountMin()).thenReturn(
+                DeviceConfigFacade.DEFAULT_SHORT_CONNECTION_NONLOCAL_COUNT_MIN);
         when(mDeviceConfigFacade.getDisconnectionNonlocalHighThrPercent()).thenReturn(
                 DeviceConfigFacade.DEFAULT_DISCONNECTION_NONLOCAL_HIGH_THR_PERCENT);
-        when(mDeviceConfigFacade.getDisconnectionNonlocalLowThrPercent()).thenReturn(
-                DeviceConfigFacade.DEFAULT_DISCONNECTION_NONLOCAL_LOW_THR_PERCENT);
+        when(mDeviceConfigFacade.getDisconnectionNonlocalCountMin()).thenReturn(
+                DeviceConfigFacade.DEFAULT_DISCONNECTION_NONLOCAL_COUNT_MIN);
         when(mDeviceConfigFacade.getHealthMonitorMinRssiThrDbm()).thenReturn(
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM);
+        when(mDeviceConfigFacade.getHealthMonitorRatioThrNumerator()).thenReturn(
+                DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_RATIO_THR_NUMERATOR);
         when(mDeviceConfigFacade.getHealthMonitorMinNumConnectionAttempt()).thenReturn(
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT);
         mWifiHealthMonitor = new WifiHealthMonitor(mContext, mWifiInjector, mClock,
@@ -557,9 +557,22 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         // Day 2
         String firmwareVersion = "HW 1.2";
         makeSwBuildChangeExample(firmwareVersion);
+        // Disable WiFi before post-boot-detection
+        mWifiHealthMonitor.setWifiEnabled(false);
         mAlarmManager.dispatch(WifiHealthMonitor.POST_BOOT_DETECTION_TIMER_TAG);
         mLooper.dispatchAll();
+        // Skip SW build change detection
         PerNetwork perNetwork = mWifiScoreCard.fetchByNetwork(mWifiInfo.getSSID());
+        assertEquals(DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT * 1,
+                perNetwork.getStatsCurrBuild().getCount(WifiScoreCard.CNT_CONNECTION_ATTEMPT));
+        assertEquals(DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT * 0,
+                perNetwork.getStatsPrevBuild().getCount(WifiScoreCard.CNT_CONNECTION_ATTEMPT));
+
+        // Day 3
+        mWifiHealthMonitor.setWifiEnabled(true);
+        mAlarmManager.dispatch(WifiHealthMonitor.POST_BOOT_DETECTION_TIMER_TAG);
+        mLooper.dispatchAll();
+        // Finally detect SW build change
         assertEquals(0,
                 perNetwork.getStatsCurrBuild().getCount(WifiScoreCard.CNT_CONNECTION_ATTEMPT));
         assertEquals(DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT * 1,

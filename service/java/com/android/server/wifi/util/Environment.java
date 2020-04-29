@@ -17,6 +17,7 @@
 package com.android.server.wifi.util;
 
 import android.content.ApexEnvironment;
+import android.content.pm.ApplicationInfo;
 import android.os.UserHandle;
 
 import java.io.File;
@@ -33,40 +34,11 @@ public class Environment {
     private static final String WIFI_APEX_NAME = "com.android.wifi";
 
     /**
-     * Directory to store the wifi config store / shared preference files under.
+     * The path where the Wifi apex is mounted.
+     * Current value = "/apex/com.android.wifi"
      */
-    private static final String LEGACY_WIFI_STORE_DIRECTORY_NAME = "wifi";
-
-    /**
-     * Get data/misc directory
-     */
-    public static File getDataMiscDirectory() {
-        return new File(android.os.Environment.getDataDirectory(), "misc");
-    }
-
-    /**
-     * Get data/misc_ce/<userId> directory
-     */
-    public static File getDataMiscCeDirectory(int userId) {
-        return buildPath(android.os.Environment.getDataDirectory(), "misc_ce",
-                String.valueOf(userId));
-    }
-
-    /**
-     * Append path segments to given base path, returning result.
-     */
-    public static File buildPath(File base, String... segments) {
-        File cur = base;
-        for (String segment : segments) {
-            if (cur == null) {
-                cur = new File(segment);
-            } else {
-                cur = new File(cur, segment);
-            }
-        }
-        return cur;
-    }
-
+    private static final String WIFI_APEX_PATH =
+            new File("/apex", WIFI_APEX_NAME).getAbsolutePath();
 
     /**
      * Wifi shared folder.
@@ -83,18 +55,11 @@ public class Environment {
                 .getCredentialProtectedDataDirForUser(UserHandle.of(userId));
     }
 
-
     /**
-     * Pre apex wifi shared folder.
+     * Returns true if the app is in the Wifi apex, false otherwise.
+     * Checks if the app's path starts with "/apex/com.android.wifi".
      */
-    public static File getLegacyWifiSharedDirectory() {
-        return new File(getDataMiscDirectory(), LEGACY_WIFI_STORE_DIRECTORY_NAME);
-    }
-
-    /**
-     * Pre apex wifi user folder.
-     */
-    public static File getLegacyWifiUserDirectory(int userId) {
-        return new File(getDataMiscCeDirectory(userId), LEGACY_WIFI_STORE_DIRECTORY_NAME);
+    public static boolean isAppInWifiApex(ApplicationInfo appInfo) {
+        return appInfo.sourceDir.startsWith(WIFI_APEX_PATH);
     }
 }

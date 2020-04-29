@@ -93,9 +93,8 @@
     <integer translatable="false" name="config_wifiFrameworkCurrentNetworkBonus">20</integer>
     <integer translatable="false" name="config_wifiFrameworkSecureNetworkBonus">10</integer>
 
-    <!-- The bonus for the last-selected network starts out very large to override the category
-         boundaries. -->
-    <integer translatable="false" name="config_wifiFrameworkLastSelectionBonus">1999</integer>
+    <!-- The duration in minutes to strongly favor the last-selected network over other options. -->
+    <integer translatable="false" name="config_wifiFrameworkLastSelectionMinutes">480</integer>
 
     <!-- Integer specifying the min packet Tx/Rx rates in packets per second to be considered
          active traffic so that network selection and scan could be skipped-->
@@ -160,7 +159,7 @@
     <!-- Boolean indicating performing a partial initial scan is enabled -->
     <bool translatable="false" name="config_wifiEnablePartialInitialScan">false</bool>
 
-    <!-- Integer for maximum number of channels to use in initial partial scan -->
+    <!-- Integer for maximum number of channels to use in initial partial scan. If equals to 0, means add all available channels for networks -->
     <integer translatable="false" name="config_wifiInitialPartialScanChannelMaxCount">10</integer>
 
     <!-- Integer for maximum age for scan results used to identify channels for partial initial
@@ -302,6 +301,10 @@
         <item>160</item>
     </integer-array>
 
+    <!-- Integer for minimum time between the last network selection and next high RSSI scan
+         in seconds when device is connected and screen is on -->
+    <integer translatable="false" name="config_wifiConnectedHighRssiScanMinimumWindowSizeSec"> 600 </integer>
+
     <!-- Array describing scanning schedule in seconds when device is connected and screen is on
          and the connected network is the only saved network.
          When this array is set to an empty array, the noraml connected scan schedule defined
@@ -369,6 +372,9 @@
     <!-- Enable the PNO frequency culling optimization. -->
     <bool translatable="false" name="config_wifiPnoRecencySortingEnabled">true</bool>
 
+    <!-- Maximum number of SSIDs that can be PNO scanned concurrently-->
+    <integer translatable="false" name="config_wifiMaxPnoSsidCount">16</integer>
+
     <!-- Suspend optimization. -->
     <bool translatable="false" name="config_wifiSuspendOptimizationsEnabled">true</bool>
 
@@ -397,6 +403,6 @@
     <!-- Enable WPA2 to WPA3 auto-upgrade offload to capable Driver/Firmware -->
     <bool translatable="false" name="config_wifiSaeUpgradeOffloadEnabled">false</bool>
 
-    <!-- Package name for the OSU Login APK -->
-    <string translatable="false" name="config_wifiOsuLoginPackage">com.android.hotspot2.osulogin</string>
+    <!-- Do not translate. Default bridge interface name for Dual SAP tethering -->
+    <string name="config_vendor_wifi_tether_bridge_interface_name" translatable="false">wifi_br0</string>
 </resources>

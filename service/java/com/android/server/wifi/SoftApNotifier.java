@@ -19,7 +19,6 @@ package com.android.server.wifi;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Icon;
 
@@ -41,11 +40,11 @@ public class SoftApNotifier {
     public static final int NOTIFICATION_ID_SOFTAP_AUTO_DISABLED =
             SystemMessage.NOTE_SOFTAP_AUTO_DISABLED;
 
-    private final Context mContext;
+    private final WifiContext mContext;
     private final FrameworkFacade mFrameworkFacade;
     private final NotificationManager mNotificationManager;
 
-    public SoftApNotifier(Context context, FrameworkFacade framework) {
+    public SoftApNotifier(WifiContext context, FrameworkFacade framework) {
         mContext = context;
         mFrameworkFacade = framework;
         mNotificationManager =
@@ -69,17 +68,14 @@ public class SoftApNotifier {
     }
 
     private Notification buildSoftApShutDownTimeoutExpiredNotification() {
-        // TODO: b/146571220 Check UI wording
         String title = mContext.getResources().getString(
                 R.string.wifi_softap_auto_shutdown_timeout_expired_title);
         String contentSummary = mContext.getResources().getString(
                 R.string.wifi_softap_auto_shutdown_timeout_expired_summary);
-        String content = mContext.getResources().getString(
-                R.string.wifi_softap_auto_shutdown_timeout_expired_detail);
 
         return mFrameworkFacade.makeNotificationBuilder(mContext,
                 WifiService.NOTIFICATION_NETWORK_STATUS)
-                .setSmallIcon(Icon.createWithResource(WifiContext.WIFI_OVERLAY_APK_PKG_NAME,
+                .setSmallIcon(Icon.createWithResource(mContext.getWifiOverlayApkPkgName(),
                         R.drawable.ic_wifi_settings))
                 .setContentTitle(title)
                 .setContentText(contentSummary)
@@ -89,10 +85,6 @@ public class SoftApNotifier {
                 .setLocalOnly(true)
                 .setColor(mContext.getResources().getColor(
                         android.R.color.system_notification_accent_color, mContext.getTheme()))
-                .setStyle(new Notification.BigTextStyle()
-                        .bigText(content)
-                        .setBigContentTitle(title)
-                        .setSummaryText(contentSummary))
                 .setAutoCancel(true)
                 .build();
     }

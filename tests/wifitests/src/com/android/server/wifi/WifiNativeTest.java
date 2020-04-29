@@ -130,8 +130,6 @@ public class WifiNativeTest extends WifiBaseTest {
     };
     private static final WifiNl80211Manager.SignalPollResult SIGNAL_POLL_RESULT =
             new WifiNl80211Manager.SignalPollResult(-60, 12, 6, 5240);
-    private static final WifiNl80211Manager.TxPacketCounters PACKET_COUNTERS_RESULT =
-            new WifiNl80211Manager.TxPacketCounters(2000, 120);
 
     private static final Set<Integer> SCAN_FREQ_SET =
             new HashSet<Integer>() {{
@@ -250,7 +248,7 @@ public class WifiNativeTest extends WifiBaseTest {
         when(mWifiVendorHal.startVendorHal()).thenReturn(true);
         when(mWifiVendorHal.startVendorHalSta()).thenReturn(true);
         when(mWifiVendorHal.startVendorHalAp()).thenReturn(true);
-        when(mWifiVendorHal.createStaIface(anyBoolean(), any())).thenReturn(WIFI_IFACE_NAME);
+        when(mWifiVendorHal.createStaIface(any())).thenReturn(WIFI_IFACE_NAME);
 
         when(mWificondControl.setupInterfaceForClientMode(any(), any(), any(), any())).thenReturn(
                 true);
@@ -719,18 +717,6 @@ public class WifiNativeTest extends WifiBaseTest {
     }
 
     /**
-     * Verifies that getTxPacketCounters() calls underlying WificondControl.
-     */
-    @Test
-    public void testGetTxPacketCounters() throws Exception {
-        when(mWificondControl.getTxPacketCounters(WIFI_IFACE_NAME))
-                .thenReturn(PACKET_COUNTERS_RESULT);
-
-        assertEquals(PACKET_COUNTERS_RESULT, mWifiNative.getTxPacketCounters(WIFI_IFACE_NAME));
-        verify(mWificondControl).getTxPacketCounters(WIFI_IFACE_NAME);
-    }
-
-    /**
      * Verifies that scan() calls underlying WificondControl.
      */
     @Test
@@ -757,6 +743,7 @@ public class WifiNativeTest extends WifiBaseTest {
         verify(mWificondControl).startPnoScan(eq(WIFI_IFACE_NAME),
                 eq(TEST_PNO_SETTINGS.toNativePnoSettings()), any(), captor.capture());
         captor.getValue().onPnoRequestSucceeded();
+        verify(mStaIfaceHal).removeAllNetworks(WIFI_IFACE_NAME);
         verify(mWifiMetrics).incrementPnoScanStartAttemptCount();
     }
 

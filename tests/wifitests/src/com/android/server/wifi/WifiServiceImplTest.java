@@ -105,7 +105,6 @@ import android.net.wifi.IScanResultsCallback;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ISuggestionConnectionStatusListener;
 import android.net.wifi.ITrafficStateCallback;
-import android.net.wifi.ITxPacketCountListener;
 import android.net.wifi.IWifiConnectedNetworkScorer;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
@@ -176,6 +175,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -227,6 +227,12 @@ public class WifiServiceImplTest extends WifiBaseTest {
     private static final int TEST_AP_FREQUENCY = 2412;
     private static final int TEST_AP_BANDWIDTH = SoftApInfo.CHANNEL_WIDTH_20MHZ;
     private static final int NETWORK_CALLBACK_ID = 1100;
+    private static final String TEST_CAP = "[RSN-PSK-CCMP]";
+    private static final String TEST_SSID = "Sid's Place";
+    private static final String TEST_SSID_WITH_QUOTES = "\"" + TEST_SSID + "\"";
+    private static final String TEST_BSSID = "01:02:03:04:05:06";
+    private static final String TEST_PACKAGE = "package";
+    private static final int TEST_NETWORK_ID = 567;
 
     private SoftApInfo mTestSoftApInfo;
     private AsyncChannel mAsyncChannel;
@@ -391,7 +397,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         // Create an OSU provider that can be provisioned via an open OSU AP
         mOsuProvider = PasspointProvisioningTestUtil.generateOsuProvider(true);
         when(mContext.getOpPackageName()).thenReturn(TEST_PACKAGE_NAME);
-        when(mContext.getFeatureId()).thenReturn(TEST_FEATURE_ID);
+        when(mContext.getAttributionTag()).thenReturn(TEST_FEATURE_ID);
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETUP_WIZARD),
@@ -1562,12 +1568,6 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mLooper.stopAutoDispatchAndIgnoreExceptions();
         verify(mScanRequestProxy).startScan(Binder.getCallingUid(), SCAN_PACKAGE_NAME);
     }
-
-    static final String TEST_SSID = "Sid's Place";
-    static final String TEST_SSID_WITH_QUOTES = "\"" + TEST_SSID + "\"";
-    static final String TEST_BSSID = "01:02:03:04:05:06";
-    static final String TEST_PACKAGE = "package";
-    static final int TEST_NETWORK_ID = 567;
 
     private void setupForGetConnectionInfo() {
         WifiInfo wifiInfo = new WifiInfo();
@@ -3143,13 +3143,41 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that the call to getAllMatchingFqdnsForScanResults is not redirected to specific API
-     * syncGetAllMatchingFqdnsForScanResults when the caller doesn't have NETWORK_SETTINGS
-     * permissions and NETWORK_SETUP_WIZARD.
+     * Verify that the call to getAllMatchingPasspointProfilesForScanResults is not redirected to
+     * specific API getAllMatchingPasspointProfilesForScanResults when the caller doesn't have
+     * NETWORK_SETTINGS permissions and NETWORK_SETUP_WIZARD.
      */
     @Test(expected = SecurityException.class)
     public void testGetAllMatchingPasspointProfilesForScanResultsWithoutPermissions() {
         mWifiServiceImpl.getAllMatchingPasspointProfilesForScanResults(new ArrayList<>());
+    }
+
+    /**
+     * Verify that the call to getAllMatchingPasspointProfilesForScanResults is redirected to
+     * specific API getAllMatchingPasspointProfilesForScanResults when the caller have
+     * NETWORK_SETTINGS permissions and NETWORK_SETUP_WIZARD.
+     */
+    @Test
+    public void testGetAllMatchingPasspointProfilesForScanResultsWithPermissions() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.getAllMatchingPasspointProfilesForScanResults(createScanResultList());
+        mLooper.dispatchAll();
+        verify(mPasspointManager).getAllMatchingPasspointProfilesForScanResults(any());
+    }
+
+    /**
+     * Verify that the call to getAllMatchingPasspointProfilesForScanResults is not redirected to
+     * specific API getAllMatchingPasspointProfilesForScanResults when the caller provider invalid
+     * ScanResult.
+     */
+    @Test
+    public void testGetAllMatchingPasspointProfilesForScanResultsWithInvalidScanResult() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.getAllMatchingPasspointProfilesForScanResults(new ArrayList<>());
+        mLooper.dispatchAll();
+        verify(mPasspointManager, never()).getAllMatchingPasspointProfilesForScanResults(any());
     }
 
     /**
@@ -3170,6 +3198,33 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test(expected = SecurityException.class)
     public void testGetMatchingOsuProvidersWithoutPermissions() {
         mWifiServiceImpl.getMatchingOsuProviders(new ArrayList<>());
+    }
+
+    /**
+     * Verify that the call to getMatchingOsuProviders is redirected to specific API
+     * syncGetMatchingOsuProviders when the caller have NETWORK_SETTINGS
+     * permissions and NETWORK_SETUP_WIZARD.
+     */
+    @Test
+    public void testGetMatchingOsuProvidersWithPermissions() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.getMatchingOsuProviders(createScanResultList());
+        mLooper.dispatchAll();
+        verify(mPasspointManager).getMatchingOsuProviders(any());
+    }
+
+    /**
+     * Verify that the call to getMatchingOsuProviders is not redirected to specific API
+     * syncGetMatchingOsuProviders when the caller provider invalid ScanResult
+     */
+    @Test
+    public void testGetMatchingOsuProvidersWithInvalidScanResult() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.getMatchingOsuProviders(new ArrayList<>());
+        mLooper.dispatchAll();
+        verify(mPasspointManager, never()).getMatchingOsuProviders(any());
     }
 
     /**
@@ -3479,24 +3534,6 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
-     * Verify that the PKT_CNT_FETCH message received from an app without
-     * CHANGE_WIFI_STATE} permission is rejected with a security exception.
-     */
-    @Test
-    public void testTxPacketCountFetchWithoutChangePermission() throws Exception {
-        doThrow(new SecurityException()).when(mContext).enforceCallingOrSelfPermission(
-                android.Manifest.permission.CHANGE_WIFI_STATE, "WifiService");
-        try {
-            mWifiServiceImpl.getTxPacketCount(TEST_PACKAGE_NAME, mock(Binder.class),
-                    mock(ITxPacketCountListener.class), 0);
-            fail();
-        } catch (SecurityException e) {
-            verify(mClientModeImpl, never()).getTxPacketCount(any(Binder.class),
-                    any(ITxPacketCountListener.class), anyInt(), anyInt());
-        }
-    }
-
-    /**
      * Verify that the CONNECT_NETWORK message received from an app with
      * one of the privileged permission is forwarded to ClientModeImpl.
      */
@@ -3538,19 +3575,6 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mClientModeImpl).forget(anyInt(), any(Binder.class),
                 any(IActionListener.class), anyInt(), anyInt());
     }
-
-    /**
-     * Verify that the RSSI_PKTCNT_FETCH message received from an app with
-     * one of the privileged permission is forwarded to ClientModeImpl.
-     */
-    @Test
-    public void testRssiPktcntFetchWithChangePermission() throws Exception {
-        mWifiServiceImpl.getTxPacketCount(TEST_PACKAGE_NAME, mock(Binder.class),
-                mock(ITxPacketCountListener.class), 0);
-        verify(mClientModeImpl).getTxPacketCount(any(Binder.class),
-                any(ITxPacketCountListener.class), anyInt(), anyInt());
-    }
-
 
     /**
      * Tests the scenario when a scan request arrives while the device is idle. In this case
@@ -5408,7 +5432,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testGetWifiConfigsForMatchedNetworkSuggestionsWithSettingPermissions() {
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
-        mWifiServiceImpl.getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(new ArrayList<>());
+        mWifiServiceImpl
+                .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(createScanResultList());
         mLooper.dispatchAll();
         verify(mWifiNetworkSuggestionsManager)
                 .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(any());
@@ -5423,9 +5448,21 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testGetWifiConfigsForMatchedNetworkSuggestionsWithSetupWizardPermissions() {
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETUP_WIZARD),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
-        mWifiServiceImpl.getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(new ArrayList<>());
+        mWifiServiceImpl
+                .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(createScanResultList());
         mLooper.dispatchAll();
         verify(mWifiNetworkSuggestionsManager)
+                .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(any());
+    }
+
+    @Test
+    public void testGetWifiConfigsForMatchedNetworkSuggestionsWithInvalidScanResults() {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl
+                .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(new ArrayList<>());
+        mLooper.dispatchAll();
+        verify(mWifiNetworkSuggestionsManager, never())
                 .getWifiConfigForMatchedNetworkSuggestionsSharedWithUser(any());
     }
 
@@ -5599,14 +5636,14 @@ public class WifiServiceImplTest extends WifiBaseTest {
         when(mClientModeImpl.syncGetSupportedFeatures(
                 any())).thenReturn(supportedFeaturesFromClientModeImpl);
 
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(false);
         mLooper.startAutoDispatch();
         assertEquals(supportedFeaturesFromClientModeImpl,
                         mWifiServiceImpl.getSupportedFeatures());
         mLooper.stopAutoDispatchAndIgnoreExceptions();
 
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(true);
         mLooper.startAutoDispatch();
         assertEquals(supportedFeaturesFromClientModeImpl | WifiManager.WIFI_FEATURE_AP_STA,
@@ -5705,5 +5742,10 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mWifiServiceImpl.setScanAlwaysAvailable(true);
         verify(mSettingsStore, never()).handleWifiScanAlwaysAvailableToggled(anyBoolean());
         verify(mActiveModeWarden, never()).scanAlwaysModeChanged();
+    }
+
+    private List<ScanResult> createScanResultList() {
+        return Collections.singletonList(new ScanResult(WifiSsid.createFromAsciiEncoded(TEST_SSID),
+                TEST_SSID, TEST_BSSID, 1245, 0, TEST_CAP, -78, 2450, 1025, 22, 33, 20, 0, 0, true));
     }
 }

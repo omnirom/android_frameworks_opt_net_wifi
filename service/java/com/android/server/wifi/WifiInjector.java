@@ -53,7 +53,9 @@ import com.android.server.wifi.p2p.WifiP2pMetrics;
 import com.android.server.wifi.p2p.WifiP2pMonitor;
 import com.android.server.wifi.p2p.WifiP2pNative;
 import com.android.server.wifi.rtt.RttMetrics;
+import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.NetdWrapper;
+import com.android.server.wifi.util.SettingsMigrationDataHolder;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -74,10 +76,14 @@ import java.util.Random;
 public class WifiInjector {
     private static final String TAG = "WifiInjector";
     private static final String BOOT_DEFAULT_WIFI_COUNTRY_CODE = "ro.boot.wificountrycode";
+    /**
+     * Maximum number in-memory store network connection order;
+     */
+    private static final int MAX_RECENTLY_CONNECTED_NETWORK = 100;
 
     static WifiInjector sWifiInjector = null;
 
-    private final Context mContext;
+    private final WifiContext mContext;
     private final BatteryStatsManager mBatteryStats;
     private final FrameworkFacade mFrameworkFacade;
     private final DeviceConfigFacade mDeviceConfigFacade;
@@ -157,12 +163,13 @@ public class WifiInjector {
     private final ThroughputPredictor mThroughputPredictor;
     private NetdWrapper mNetdWrapper;
     private final WifiHealthMonitor mWifiHealthMonitor;
-    private final WifiConfigStoreMigrationDataHolder mOemConfigStoreMigrationDataHolder;
     private final WifiSettingsConfigStore mSettingsConfigStore;
     private final WifiScanAlwaysAvailableSettingsCompatibility
             mWifiScanAlwaysAvailableSettingsCompatibility;
+    private final SettingsMigrationDataHolder mSettingsMigrationDataHolder;
+    private final LruConnectionTracker mLruConnectionTracker;
 
-    public WifiInjector(Context context) {
+    public WifiInjector(WifiContext context) {
         if (context == null) {
             throw new IllegalStateException(
                     "WifiInjector should not be initialized with a null Context.");
@@ -186,6 +193,7 @@ public class WifiInjector {
         mFrameworkFacade = new FrameworkFacade();
         mMacAddressUtil = new MacAddressUtil();
         mContext = context;
+        mSettingsMigrationDataHolder = new SettingsMigrationDataHolder(mContext);
         mConnectionFailureNotificationBuilder = new ConnectionFailureNotificationBuilder(
                 mContext, getWifiStackPackageName(), mFrameworkFacade);
         mBatteryStats = context.getSystemService(BatteryStatsManager.class);
@@ -199,7 +207,7 @@ public class WifiInjector {
         mWifiPermissionsUtil = new WifiPermissionsUtil(mWifiPermissionsWrapper, mContext,
                 mUserManager, this);
         mWifiBackupRestore = new WifiBackupRestore(mWifiPermissionsUtil);
-        mSoftApBackupRestore = new SoftApBackupRestore(mContext);
+        mSoftApBackupRestore = new SoftApBackupRestore(mContext, mSettingsMigrationDataHolder);
         mWifiStateTracker = new WifiStateTracker(mBatteryStats);
         mWifiThreadRunner = new WifiThreadRunner(wifiHandler);
         mWifiP2pServiceHandlerThread = new HandlerThread("WifiP2pService");
@@ -248,9 +256,7 @@ public class WifiInjector {
         mKeyStore = keyStore;
         mWifiKeyStore = new WifiKeyStore(mKeyStore);
         // New config store
-        mOemConfigStoreMigrationDataHolder = new WifiConfigStoreMigrationDataHolder();
         mWifiConfigStore = new WifiConfigStore(mContext, wifiHandler, mClock, mWifiMetrics,
-                mOemConfigStoreMigrationDataHolder,
                 WifiConfigStore.createSharedFiles(mFrameworkFacade.isNiapModeOn(mContext)));
         SubscriptionManager subscriptionManager =
                 mContext.getSystemService(SubscriptionManager.class);
@@ -258,6 +264,9 @@ public class WifiInjector {
                 mFrameworkFacade, mContext, wifiHandler);
         String l2KeySeed = Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID);
         mWifiScoreCard = new WifiScoreCard(mClock, l2KeySeed, mDeviceConfigFacade);
+        mWifiMetrics.setWifiScoreCard(mWifiScoreCard);
+        mLruConnectionTracker = new LruConnectionTracker(MAX_RECENTLY_CONNECTED_NETWORK,
+                mContext);
         // Config Manager
         mWifiConfigManager = new WifiConfigManager(mContext, mClock,
                 mUserManager, mTelephonyUtil,
@@ -266,9 +275,9 @@ public class WifiInjector {
                 new NetworkListSharedStoreData(mContext),
                 new NetworkListUserStoreData(mContext),
                 new RandomizedMacStoreData(), mFrameworkFacade, wifiHandler, mDeviceConfigFacade,
-                mWifiScoreCard);
-        mSettingsConfigStore = new WifiSettingsConfigStore(context, wifiHandler, mWifiConfigManager,
-                mWifiConfigStore);
+                mWifiScoreCard, mLruConnectionTracker);
+        mSettingsConfigStore = new WifiSettingsConfigStore(context, wifiHandler,
+                mSettingsMigrationDataHolder, mWifiConfigManager, mWifiConfigStore);
         mSettingsStore = new WifiSettingsStore(mContext, mSettingsConfigStore);
         mWifiMetrics.setWifiConfigManager(mWifiConfigManager);
 
@@ -292,7 +301,7 @@ public class WifiInjector {
         mWifiMetrics.setWifiNetworkSelector(mWifiNetworkSelector);
         mWifiNetworkSuggestionsManager = new WifiNetworkSuggestionsManager(mContext, wifiHandler,
                 this, mWifiPermissionsUtil, mWifiConfigManager, mWifiConfigStore, mWifiMetrics,
-                mTelephonyUtil, mWifiKeyStore);
+                mTelephonyUtil, mWifiKeyStore, mLruConnectionTracker);
         mPasspointManager = new PasspointManager(mContext, this,
                 wifiHandler, mWifiNative, mWifiKeyStore, mClock, new PasspointObjectFactory(),
                 mWifiConfigManager, mWifiConfigStore, mWifiMetrics, mTelephonyUtil);
@@ -348,7 +357,7 @@ public class WifiInjector {
                         mSettingsStore, mActiveModeWarden, mFrameworkFacade);
         mWifiApConfigStore = new WifiApConfigStore(
                 mContext, this, wifiHandler, mBackupManagerProxy,
-                mWifiConfigStore, mWifiConfigManager, mActiveModeWarden);
+                mWifiConfigStore, mWifiConfigManager, mActiveModeWarden, mWifiMetrics);
         WakeupNotificationFactory wakeupNotificationFactory =
                 new WakeupNotificationFactory(mContext, this, mFrameworkFacade);
         WakeupOnboarding wakeupOnboarding = new WakeupOnboarding(mContext, mWifiConfigManager,
@@ -562,7 +571,7 @@ public class WifiInjector {
      * @return a new instance of ClientModeManager
      */
     public ClientModeManager makeClientModeManager(ClientModeManager.Listener listener) {
-        return new ClientModeManager(mContext, mWifiHandlerThread.getLooper(),
+        return new ClientModeManager(mContext, mWifiHandlerThread.getLooper(), mClock,
                 mWifiNative, listener, mWifiMetrics, mSarManager, mWakeupController,
                 mClientModeImpl);
     }
@@ -616,7 +625,7 @@ public class WifiInjector {
                 mWifiNetworkSelector, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier,
                 mWifiMetrics, new Handler(mWifiHandlerThread.getLooper()),
-                mClock, mConnectivityLocalLog);
+                mClock, mConnectivityLocalLog, mWifiScoreCard);
     }
 
     /**
@@ -684,7 +693,7 @@ public class WifiInjector {
      */
     public SoftApStoreData makeSoftApStoreData(
             SoftApStoreData.DataSource dataSource) {
-        return new SoftApStoreData(mContext, dataSource);
+        return new SoftApStoreData(mContext, mSettingsMigrationDataHolder, dataSource);
     }
 
     public WifiPermissionsUtil getWifiPermissionsUtil() {

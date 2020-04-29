@@ -597,6 +597,58 @@ message WifiLog {
 
   // Total number of scan results for WAPI-Enterprise networks
   optional int32 num_wapi_enterprise_network_scan_results = 164;
+
+  // Is the external WiFi connected network scorer from OEM extension module turned on
+  optional bool is_external_wifi_scorer_on = 165 [default = false];
+
+  // Metrics related to Wi-Fi off
+  optional WifiOffMetrics wifi_off_metrics = 166;
+
+  // Total number of scan results for MBO supported networks
+  optional int32 num_mbo_supported_network_scan_results = 167;
+
+  // Total number of scan results for MBO cellular data aware networks
+  optional int32 num_mbo_cellular_data_aware_network_scan_results = 168;
+
+  // Total number of scan results for OCE supported networks
+  optional int32 num_oce_supported_network_scan_results = 169;
+
+  // Total number of scan results for FILS supported networks
+  optional int32 num_fils_supported_network_scan_results = 170;
+
+  // Total number of bssids filtered from network selection due to mbo association
+  // disallowed indication
+  optional int32 num_bssid_filtered_due_to_mbo_assoc_disallow_ind = 171;
+
+  // Total number of connection to network supporting MBO
+  optional int32 num_connect_to_network_supporting_mbo = 172;
+
+  // Total number of connection to network supporting OCE
+  optional int32 num_connect_to_network_supporting_oce = 173;
+
+  // Total number of scans triggered due to steering request from AP
+  optional int32 num_force_scan_due_to_steering_request = 174;
+
+  // Total number of cellular switch requests from MBO supported AP
+  optional int32 num_mbo_cellular_switch_request = 175;
+
+  // Total number of connect request to AP adding FILS AKM
+  optional int32 num_connect_request_with_fils_akm = 176;
+
+  // Total number of successful L2 connection through FILS authentication
+  optional int32 num_l2_connection_through_fils_authentication = 177;
+
+  // Metrics related to limitation in soft ap config
+  optional SoftApConfigLimitationMetrics soft_ap_config_limitation_metrics = 178;
+
+  // WiFi channel utilization histogram of various RF bands
+  optional ChannelUtilizationHistogram channel_utilization_histogram = 179;
+
+  // WiFi Tx and Rx throughput histogram at various RF bands
+  optional ThroughputMbpsHistogram throughput_mbps_histogram = 180;
+
+  // Total number of steering requests which include MBO assoc retry delay
+  optional int32 num_steering_request_including_mbo_assoc_retry_delay = 181;
 }
 
 // Information that gets logged for every WiFi connection.
@@ -769,6 +821,12 @@ message RouterFingerPrint {
 
   // PMK caching enablement
   optional bool pmk_cache_enabled = 12;
+
+  // Max Tx link speed (in Mbps) supported by current network (STA and AP)
+  optional int32 max_supported_tx_link_speed_mbps = 13;
+
+  // Max Rx link speed (in Mbps) supported by current network (STA and AP)
+  optional int32 max_supported_rx_link_speed_mbps = 14;
 }
 
 message ConnectionEvent {
@@ -958,6 +1016,15 @@ message ConnectionEvent {
 
   // UID of the app that created this network.
   optional NetworkCreator network_creator = 17;
+
+  // Whether the screen is on when the connection event starts
+  optional bool screen_on = 18;
+
+  // Number of consecutive connection failures with the same SSID at high RSSI
+  // before current connection event. Any connection failure at low RSSI in the
+  // middle won't break the streak count. The count is cleared after
+  // a network disconnection event.
+  optional int32 num_consecutive_connection_failure = 19 [default = -1];
 }
 
 // Number of occurrences of a specific RSSI poll rssi value
@@ -1045,6 +1112,9 @@ message SoftApReturnCodeCount {
 
     // SoftAp failed to start due to NO_CHANNEL error
     SOFT_AP_FAILED_NO_CHANNEL = 3;
+
+    // SoftAp failed to start due to unsupported configuration error
+    SOFT_AP_FAILED_UNSUPPORTED_CONFIGURATION = 4;
   }
 
   // Historical, no longer used for writing as of 01/2017.
@@ -1665,6 +1735,21 @@ message SoftApConnectedClientsEvent {
 
   // Channel bandwidth used for Soft AP
   optional ChannelBandwidth channel_bandwidth = 5;
+
+  // Maximum number of client setting in SoftApConfiguration
+  optional int32 max_num_clients_setting_in_softap_configuration = 6;
+
+  // Maximum number of client setting in SoftApCapability
+  optional int32 max_num_clients_setting_in_softap_capability = 7;
+
+  // Auto shutdown timeout setting in SoftApConfiguration
+  optional int64 shutdown_timeout_setting_in_softap_configuration = 8;
+
+  // Framework default auto shutdown timeout setting
+  optional int64 default_shutdown_timeout_setting = 9;
+
+  // Indicates if user enabled the client_control
+  optional bool client_control_is_enabled = 10;
 }
 
 // Wps connection metrics
@@ -2535,6 +2620,15 @@ message WifiDppLog {
   // Easy Connect (DPP) operation time bucket
   repeated HistogramBucketInt32 dpp_operation_time = 7;
 
+  // Number of Enrollee-Responder peer devices supporting DPP protocol version 1
+  optional int32 num_dpp_r1_capable_enrollee_responder_devices = 8;
+
+  // Number of Enrollee-Responder peer devices supporting DPP protocol version 2
+  optional int32 num_dpp_r2_capable_enrollee_responder_devices = 9;
+
+  // Number of Enrollee-Responder incompatible configurations found in DPP R2 compatibility check.
+  optional int32 num_dpp_r2_enrollee_responder_incompatible_configuration = 10;
+
   // Histogram bucket for Wi-Fi DPP configurator success
   message DppConfiguratorSuccessStatusHistogramBucket {
     // status type defining the bucket
@@ -2559,6 +2653,9 @@ message WifiDppLog {
 
     // Easy Connect Configurator success event: Configuration sent to enrollee
     EASY_CONNECT_EVENT_SUCCESS_CONFIGURATION_SENT = 1;
+
+    // Easy Connect Configurator success event: Configuration applied by enrollee
+    EASY_CONNECT_EVENT_SUCCESS_CONFIGURATION_APPLIED = 2;
   }
 
   enum DppFailureCode {
@@ -2594,6 +2691,15 @@ message WifiDppLog {
     // Easy Connect Failure event: Invalid network provided to Easy Connect configurator.
     // Network must either be WPA3-Personal (SAE) or WPA2-Personal (PSK).
     EASY_CONNECT_EVENT_FAILURE_INVALID_NETWORK = 9;
+
+    // Easy Connect R2 Failure event: Enrollee cannot find the network.
+    EASY_CONNECT_EVENT_FAILURE_CANNOT_FIND_NETWORK = 10;
+
+    // Easy Connect R2 Failure event: Enrollee failed to authenticate with the network.
+    EASY_CONNECT_EVENT_FAILURE_ENROLLEE_AUTHENTICATION = 11;
+
+    // Easy Connect R2 Failure event: Enrollee rejected the configuration.
+    EASY_CONNECT_EVENT_FAILURE_ENROLLEE_REJECTED_CONFIGURATION = 12;
   }
 }
 
@@ -2952,4 +3058,61 @@ message ConnectionDurationStats {
   optional int32 total_time_insufficient_throughput_ms = 2;
   // Total time with cellular data off
   optional int32 total_time_cellular_data_off_ms = 3;
+}
+
+// Wi-Fi off metrics
+// Keeps track of Wi-Fi off stats
+message WifiOffMetrics {
+  // Total number of Wi-Fi off
+  optional int32 num_wifi_off = 1;
+
+  // Total number of Wi-Fi off with deferring
+  optional int32 num_wifi_off_deferring = 2;
+
+  // Total number of Wi-Fi off deferring timeout
+  optional int32 num_wifi_off_deferring_timeout = 3;
+
+  // Histogram of wifi off deferring time
+  repeated Int32Count wifi_off_deferring_time_histogram = 4;
+}
+
+// SoftAp Config  Limitation Metrics
+message SoftApConfigLimitationMetrics {
+  // Total number of softap security configuration reset to default because
+  // hardware limitation when restore configuration from cloud
+  optional int32 num_security_type_reset_to_default = 1;
+
+  // Total number of softap max client setting reset to default because
+  // hardware limitation when restore configuration from cloud
+  optional int32 num_max_client_setting_reset_to_default = 2;
+
+  // Total number of softap client control by user reset to default because
+  // hardware limitation when restore configuration from cloud
+  optional int32 num_client_control_by_user_reset_to_default = 3;
+
+  // Histogram of max client count when client connection fail because
+  // setting limitation
+  repeated Int32Count max_client_setting_when_reach_histogram = 4;
+}
+
+// Channel utilization histogram
+// The valid utilization range is between 0 and 255 corresponding to
+// utilization ratio between 0 and 1
+message ChannelUtilizationHistogram {
+  // Histogram at 2G
+  repeated HistogramBucketInt32 utilization_2g = 1;
+  // Histogram above 2G
+  repeated HistogramBucketInt32 utilization_above_2g = 2;
+}
+
+// Throughput histogram
+message ThroughputMbpsHistogram {
+  // Tx histogram at 2G
+  repeated HistogramBucketInt32 tx_2g = 1;
+  // Tx histogram above 2G
+  repeated HistogramBucketInt32 tx_above_2g = 2;
+  // Rx histogram at 2G
+  repeated HistogramBucketInt32 rx_2g = 3;
+  // Rx histogram above 2G
+  repeated HistogramBucketInt32 rx_above_2g = 4;
 }

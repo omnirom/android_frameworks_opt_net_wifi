@@ -65,28 +65,36 @@ public class DeviceConfigFacade {
     public static final int DEFAULT_TX_PACKET_PER_SECOND_THR = 1;
     // Default threshold of Rx packet per second
     public static final int DEFAULT_RX_PACKET_PER_SECOND_THR = 1;
-    // Default high and low threshold values for various connection failure rates.
+    // Default high threshold values for various connection/disconnection cases
     // All of them are in percent with respect to connection attempts
-    static final int DEFAULT_CONNECTION_FAILURE_HIGH_THR_PERCENT = 30;
-    static final int DEFAULT_CONNECTION_FAILURE_LOW_THR_PERCENT = 5;
-    static final int DEFAULT_ASSOC_REJECTION_HIGH_THR_PERCENT = 10;
-    static final int DEFAULT_ASSOC_REJECTION_LOW_THR_PERCENT = 1;
-    static final int DEFAULT_ASSOC_TIMEOUT_HIGH_THR_PERCENT = 10;
-    static final int DEFAULT_ASSOC_TIMEOUT_LOW_THR_PERCENT = 2;
-    static final int DEFAULT_AUTH_FAILURE_HIGH_THR_PERCENT = 10;
-    static final int DEFAULT_AUTH_FAILURE_LOW_THR_PERCENT = 2;
-    // Default high and low threshold values for non-local disconnection rate
-    // with respect to disconnection count (with a recent RSSI poll)
-    static final int DEFAULT_SHORT_CONNECTION_NONLOCAL_HIGH_THR_PERCENT = 10;
-    static final int DEFAULT_SHORT_CONNECTION_NONLOCAL_LOW_THR_PERCENT = 1;
-    static final int DEFAULT_DISCONNECTION_NONLOCAL_HIGH_THR_PERCENT = 15;
-    static final int DEFAULT_DISCONNECTION_NONLOCAL_LOW_THR_PERCENT = 1;
+    static final int DEFAULT_CONNECTION_FAILURE_HIGH_THR_PERCENT = 40;
+    static final int DEFAULT_ASSOC_REJECTION_HIGH_THR_PERCENT = 30;
+    static final int DEFAULT_ASSOC_TIMEOUT_HIGH_THR_PERCENT = 30;
+    static final int DEFAULT_AUTH_FAILURE_HIGH_THR_PERCENT = 30;
+    static final int DEFAULT_SHORT_CONNECTION_NONLOCAL_HIGH_THR_PERCENT = 20;
+    static final int DEFAULT_DISCONNECTION_NONLOCAL_HIGH_THR_PERCENT = 25;
+    // Default health monitor abnormal count minimum for various cases
+    static final int DEFAULT_CONNECTION_FAILURE_COUNT_MIN = 6;
+    static final int DEFAULT_ASSOC_REJECTION_COUNT_MIN  = 3;
+    static final int DEFAULT_ASSOC_TIMEOUT_COUNT_MIN  = 3;
+    static final int DEFAULT_AUTH_FAILURE_COUNT_MIN  = 3;
+    static final int DEFAULT_SHORT_CONNECTION_NONLOCAL_COUNT_MIN  = 3;
+    static final int DEFAULT_DISCONNECTION_NONLOCAL_COUNT_MIN  = 3;
+    // Numerator part of default ratio threshold values for all cases
+    static final int DEFAULT_HEALTH_MONITOR_RATIO_THR_NUMERATOR = 4;
+    // Denominator part of ratio threshold for all cases
+    static final int HEALTH_MONITOR_RATIO_THR_DENOMINATOR = 2;
     // Minimum RSSI in dBm for connection stats collection
     // Connection or disconnection events with RSSI below this threshold are not
     // included in connection stats collection.
     static final int DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM = -68;
     // Default minimum number of connection attempts to qualify daily detection
     static final int DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT = 10;
+    // Default minimum wait time between two bug report captures
+    static final int DEFAULT_BUG_REPORT_MIN_WINDOW_MS = 3_600_000;
+    // Default report-high threshold to take-bug-report threshold ratio.
+    // It should be larger than 1 since the bar to take bugreport should be higher.
+    static final int DEFAULT_BUG_REPORT_THRESHOLD_EXTRA_RATIO = 2;
 
     // Cached values of fields updated via updateDeviceConfigFlags()
     private boolean mIsAbnormalConnectionBugreportEnabled;
@@ -103,23 +111,27 @@ public class DeviceConfigFacade {
     private int mTxPktPerSecondThr;
     private int mRxPktPerSecondThr;
     private int mConnectionFailureHighThrPercent;
-    private int mConnectionFailureLowThrPercent;
+    private int mConnectionFailureCountMin;
     private int mAssocRejectionHighThrPercent;
-    private int mAssocRejectionLowThrPercent;
+    private int mAssocRejectionCountMin;
     private int mAssocTimeoutHighThrPercent;
-    private int mAssocTimeoutLowThrPercent;
+    private int mAssocTimeoutCountMin;
     private int mAuthFailureHighThrPercent;
-    private int mAuthFailureLowThrPercent;
+    private int mAuthFailureCountMin;
     private int mShortConnectionNonlocalHighThrPercent;
-    private int mShortConnectionNonlocalLowThrPercent;
+    private int mShortConnectionNonlocalCountMin;
     private int mDisconnectionNonlocalHighThrPercent;
-    private int mDisconnectionNonlocalLowThrPercent;
+    private int mDisconnectionNonlocalCountMin;
+    private int mHealthMonitorRatioThrNumerator;
     private int mHealthMonitorMinRssiThrDbm;
     private Set<String> mRandomizationFlakySsidHotlist;
     private Set<String> mAggressiveMacRandomizationSsidAllowlist;
     private Set<String> mAggressiveMacRandomizationSsidBlocklist;
-    private boolean mIsAbnormalEapAuthFailureBugreportEnabled;
+    private boolean mIsAbnormalConnectionFailureBugreportEnabled;
+    private boolean mIsAbnormalDisconnectionBugreportEnabled;
     private int mHealthMonitorMinNumConnectionAttempt;
+    private int mBugReportMinWindowMs;
+    private int mBugReportThresholdExtraRatio;
 
     public DeviceConfigFacade(Context context, Handler handler, WifiMetrics wifiMetrics) {
         mContext = context;
@@ -173,40 +185,42 @@ public class DeviceConfigFacade {
         mConnectionFailureHighThrPercent = DeviceConfig.getInt(NAMESPACE,
                 "connection_failure_high_thr_percent",
                 DEFAULT_CONNECTION_FAILURE_HIGH_THR_PERCENT);
-        mConnectionFailureLowThrPercent = DeviceConfig.getInt(NAMESPACE,
-                "connection_failure_low_thr_percent",
-                DEFAULT_CONNECTION_FAILURE_LOW_THR_PERCENT);
+        mConnectionFailureCountMin = DeviceConfig.getInt(NAMESPACE,
+                "connection_failure_count_min",
+                DEFAULT_CONNECTION_FAILURE_COUNT_MIN);
         mAssocRejectionHighThrPercent = DeviceConfig.getInt(NAMESPACE,
                 "assoc_rejection_high_thr_percent",
                 DEFAULT_ASSOC_REJECTION_HIGH_THR_PERCENT);
-        mAssocRejectionLowThrPercent = DeviceConfig.getInt(NAMESPACE,
-                "assoc_rejection_low_thr_percent",
-                DEFAULT_ASSOC_REJECTION_LOW_THR_PERCENT);
+        mAssocRejectionCountMin = DeviceConfig.getInt(NAMESPACE,
+                "assoc_rejection_count_min",
+                DEFAULT_ASSOC_REJECTION_COUNT_MIN);
         mAssocTimeoutHighThrPercent = DeviceConfig.getInt(NAMESPACE,
                 "assoc_timeout_high_thr_percent",
                 DEFAULT_ASSOC_TIMEOUT_HIGH_THR_PERCENT);
-        mAssocTimeoutLowThrPercent = DeviceConfig.getInt(NAMESPACE,
-                "assoc_timeout_low_thr_percent",
-                DEFAULT_ASSOC_TIMEOUT_LOW_THR_PERCENT);
+        mAssocTimeoutCountMin = DeviceConfig.getInt(NAMESPACE,
+                "assoc_timeout_count_min",
+                DEFAULT_ASSOC_TIMEOUT_COUNT_MIN);
         mAuthFailureHighThrPercent = DeviceConfig.getInt(NAMESPACE,
                 "auth_failure_high_thr_percent",
                 DEFAULT_AUTH_FAILURE_HIGH_THR_PERCENT);
-        mAuthFailureLowThrPercent = DeviceConfig.getInt(NAMESPACE,
-                "auth_failure_low_thr_percent",
-                DEFAULT_AUTH_FAILURE_LOW_THR_PERCENT);
+        mAuthFailureCountMin = DeviceConfig.getInt(NAMESPACE,
+                "auth_failure_count_min",
+                DEFAULT_AUTH_FAILURE_COUNT_MIN);
         mShortConnectionNonlocalHighThrPercent = DeviceConfig.getInt(NAMESPACE,
                 "short_connection_nonlocal_high_thr_percent",
                 DEFAULT_SHORT_CONNECTION_NONLOCAL_HIGH_THR_PERCENT);
-        mShortConnectionNonlocalLowThrPercent = DeviceConfig.getInt(NAMESPACE,
-                "short_connection_nonlocal_low_thr_percent",
-                DEFAULT_SHORT_CONNECTION_NONLOCAL_LOW_THR_PERCENT);
+        mShortConnectionNonlocalCountMin = DeviceConfig.getInt(NAMESPACE,
+                "short_connection_nonlocal_count_min",
+                DEFAULT_SHORT_CONNECTION_NONLOCAL_COUNT_MIN);
         mDisconnectionNonlocalHighThrPercent = DeviceConfig.getInt(NAMESPACE,
                 "disconnection_nonlocal_high_thr_percent",
                 DEFAULT_DISCONNECTION_NONLOCAL_HIGH_THR_PERCENT);
-        mDisconnectionNonlocalLowThrPercent = DeviceConfig.getInt(NAMESPACE,
-                "disconnection_nonlocal_low_thr_percent",
-                DEFAULT_DISCONNECTION_NONLOCAL_LOW_THR_PERCENT);
-
+        mDisconnectionNonlocalCountMin = DeviceConfig.getInt(NAMESPACE,
+                "disconnection_nonlocal_count_min",
+                DEFAULT_DISCONNECTION_NONLOCAL_COUNT_MIN);
+        mHealthMonitorRatioThrNumerator = DeviceConfig.getInt(NAMESPACE,
+                "health_monitor_ratio_thr_numerator",
+                DEFAULT_HEALTH_MONITOR_RATIO_THR_NUMERATOR);
         mHealthMonitorMinRssiThrDbm = DeviceConfig.getInt(NAMESPACE,
                 "health_monitor_min_rssi_thr_dbm",
                 DEFAULT_HEALTH_MONITOR_MIN_RSSI_THR_DBM);
@@ -218,11 +232,19 @@ public class DeviceConfigFacade {
         mAggressiveMacRandomizationSsidBlocklist =
                 getUnmodifiableSetQuoted("aggressive_randomization_ssid_blocklist");
 
-        mIsAbnormalEapAuthFailureBugreportEnabled = DeviceConfig.getBoolean(NAMESPACE,
-                "abnormal_eap_auth_failure_bugreport_enabled", false);
+        mIsAbnormalConnectionFailureBugreportEnabled = DeviceConfig.getBoolean(NAMESPACE,
+                "abnormal_connection_failure_bugreport_enabled", false);
+        mIsAbnormalDisconnectionBugreportEnabled = DeviceConfig.getBoolean(NAMESPACE,
+                "abnormal_disconnection_bugreport_enabled", false);
         mHealthMonitorMinNumConnectionAttempt = DeviceConfig.getInt(NAMESPACE,
                 "health_monitor_min_num_connection_attempt",
                 DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT);
+        mBugReportMinWindowMs = DeviceConfig.getInt(NAMESPACE,
+                "bug_report_min_window_ms",
+                DEFAULT_BUG_REPORT_MIN_WINDOW_MS);
+        mBugReportThresholdExtraRatio = DeviceConfig.getInt(NAMESPACE,
+                "report_bug_report_threshold_extra_ratio",
+                DEFAULT_BUG_REPORT_THRESHOLD_EXTRA_RATIO);
     }
 
     private Set<String> getUnmodifiableSetQuoted(String key) {
@@ -341,10 +363,10 @@ public class DeviceConfigFacade {
     }
 
     /**
-     * Gets the low threshold of connection failure rate in percent
+     * Gets connection failure min count
      */
-    public int getConnectionFailureLowThrPercent() {
-        return mConnectionFailureLowThrPercent;
+    public int getConnectionFailureCountMin() {
+        return mConnectionFailureCountMin;
     }
 
     /**
@@ -355,10 +377,10 @@ public class DeviceConfigFacade {
     }
 
     /**
-     * Gets the low threshold of association rejection rate in percent
+     * Gets association rejection min count
      */
-    public int getAssocRejectionLowThrPercent() {
-        return mAssocRejectionLowThrPercent;
+    public int getAssocRejectionCountMin() {
+        return mAssocRejectionCountMin;
     }
 
     /**
@@ -369,11 +391,12 @@ public class DeviceConfigFacade {
     }
 
     /**
-     * Gets the low threshold of association timeout rate in percent
+     * Gets association timeout min count
      */
-    public int getAssocTimeoutLowThrPercent() {
-        return mAssocTimeoutLowThrPercent;
+    public int getAssocTimeoutCountMin() {
+        return mAssocTimeoutCountMin;
     }
+
 
     /**
      * Gets the high threshold of authentication failure rate in percent
@@ -383,10 +406,10 @@ public class DeviceConfigFacade {
     }
 
     /**
-     * Gets the low threshold of authentication failure rate in percent
+     * Gets authentication failure min count
      */
-    public int getAuthFailureLowThrPercent() {
-        return mAuthFailureLowThrPercent;
+    public int getAuthFailureCountMin() {
+        return mAuthFailureCountMin;
     }
 
     /**
@@ -397,10 +420,10 @@ public class DeviceConfigFacade {
     }
 
     /**
-     * Gets the low threshold of nonlocal short connection rate in percent
+     * Gets nonlocal short connection min count
      */
-    public int getShortConnectionNonlocalLowThrPercent() {
-        return mShortConnectionNonlocalLowThrPercent;
+    public int getShortConnectionNonlocalCountMin() {
+        return mShortConnectionNonlocalCountMin;
     }
 
     /**
@@ -411,10 +434,17 @@ public class DeviceConfigFacade {
     }
 
     /**
-     * Gets the low threshold of nonlocal disconnection rate in percent
+     * Gets nonlocal disconnection min count
      */
-    public int getDisconnectionNonlocalLowThrPercent() {
-        return mDisconnectionNonlocalLowThrPercent;
+    public int getDisconnectionNonlocalCountMin() {
+        return mDisconnectionNonlocalCountMin;
+    }
+
+    /**
+     * Gets health monitor ratio threshold, numerator part
+     */
+    public int getHealthMonitorRatioThrNumerator() {
+        return mHealthMonitorRatioThrNumerator;
     }
 
     /**
@@ -444,12 +474,18 @@ public class DeviceConfigFacade {
     public Set<String> getAggressiveMacRandomizationSsidBlocklist() {
         return mAggressiveMacRandomizationSsidBlocklist;
     }
+    /**
+     * Gets the feature flag for reporting abnormal connection failure.
+     */
+    public boolean isAbnormalConnectionFailureBugreportEnabled() {
+        return mIsAbnormalConnectionFailureBugreportEnabled;
+    }
 
     /**
-     * Gets the feature flag for reporting abnormal EAP authentication failure.
+     * Gets the feature flag for reporting abnormal disconnection.
      */
-    public boolean isAbnormalEapAuthFailureBugreportEnabled() {
-        return mIsAbnormalEapAuthFailureBugreportEnabled;
+    public boolean isAbnormalDisconnectionBugreportEnabled() {
+        return mIsAbnormalDisconnectionBugreportEnabled;
     }
 
     /**
@@ -457,5 +493,19 @@ public class DeviceConfigFacade {
      */
     public int getHealthMonitorMinNumConnectionAttempt() {
         return mHealthMonitorMinNumConnectionAttempt;
+    }
+
+    /**
+     * Gets minimum wait time between two bug report captures
+     */
+    public int getBugReportMinWindowMs() {
+        return mBugReportMinWindowMs;
+    }
+
+    /**
+     * Gets the extra ratio of threshold to trigger bug report.
+     */
+    public int getBugReportThresholdExtraRatio() {
+        return mBugReportThresholdExtraRatio;
     }
 }

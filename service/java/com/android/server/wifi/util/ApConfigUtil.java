@@ -20,7 +20,6 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.Context;
 import android.content.res.Resources;
-import android.net.MacAddress;
 import android.net.wifi.SoftApCapability;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApConfiguration.BandType;
@@ -178,7 +177,7 @@ public class ApConfigUtil {
             case WifiConfiguration.AP_BAND_ANY:
                 return SoftApConfiguration.BAND_2GHZ | SoftApConfiguration.BAND_5GHZ;
             default:
-                return -1;
+                return SoftApConfiguration.BAND_2GHZ;
         }
     }
 
@@ -423,9 +422,6 @@ public class ApConfigUtil {
         SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
         try {
             configBuilder.setSsid(wifiConfig.SSID);
-            if (wifiConfig.BSSID != null) {
-                configBuilder.setBssid(MacAddress.fromString(wifiConfig.BSSID));
-            }
             if (wifiConfig.getAuthType() == WifiConfiguration.KeyMgmt.WPA2_PSK) {
                 configBuilder.setPassphrase(wifiConfig.preSharedKey,
                         SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);

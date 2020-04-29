@@ -24,7 +24,6 @@ import android.content.IntentFilter;
 import android.net.MacAddress;
 import android.net.util.MacAddressUtils;
 import android.net.wifi.SoftApConfiguration;
-import android.net.wifi.WifiConfiguration;
 import android.os.Handler;
 import android.os.Process;
 import android.os.SystemProperties;
@@ -33,21 +32,13 @@ import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.util.ApConfigUtil;
-import com.android.server.wifi.util.Environment;
 import com.android.wifi.resources.R;
 
-import java.io.BufferedInputStream;
-import java.io.DataInputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Random;
 
 import javax.annotation.Nullable;
-import javax.crypto.Mac;
 
 /**
  * Provides API for reading/writing soft access point configuration.
@@ -59,13 +50,6 @@ public class WifiApConfigStore {
             "com.android.server.wifi.WifiApConfigStoreUtil.HOTSPOT_CONFIG_USER_TAPPED_CONTENT";
 
     private static final String TAG = "WifiApConfigStore";
-
-    // Note: This is the legacy Softap config file. This is only used for migrating data out
-    // of this file on first reboot.
-    private static final String LEGACY_AP_CONFIG_FILE = "softap.conf";
-
-    @VisibleForTesting
-    public static final int AP_CONFIG_FILE_VERSION = 3;
 
     private static final int RAND_SSID_INT_MIN = 1000;
     private static final int RAND_SSID_INT_MAX = 9999;
@@ -83,9 +67,9 @@ public class WifiApConfigStore {
 
     private final Context mContext;
     private final Handler mHandler;
+    private final WifiMetrics mWifiMetrics;
     private final BackupManagerProxy mBackupManagerProxy;
     private final MacAddressUtil mMacAddressUtil;
-    private final Mac mMac;
     private final WifiConfigManager mWifiConfigManager;
     private final ActiveModeWarden mActiveModeWarden;
     private boolean mHasNewDataToSerialize = false;
@@ -105,14 +89,7 @@ public class WifiApConfigStore {
         }
 
         public void reset() {
-            if (mPersistentWifiApConfig != null) {
-                // Note: Reset is invoked when WifiConfigStore.read() is invoked on boot completed.
-                // If we had migrated data from the legacy store before that (which is most likely
-                // true because we read the legacy file in the constructor here, whereas
-                // WifiConfigStore.read() is only triggered on boot completed), trigger a write to
-                // persist the migrated data.
-                mHandler.post(() -> mWifiConfigManager.saveToStore(true));
-            }
+            mPersistentWifiApConfig = null;
         }
 
         public boolean hasNewDataToSerialize() {
@@ -121,18 +98,9 @@ public class WifiApConfigStore {
     }
 
     // Dual SAP config
-    private String mBridgeInterfaceName = null;
     private boolean mDualSapStatus = false;
 
     private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
-
-    WifiApConfigStore(Context context, WifiInjector wifiInjector, Handler handler,
-            BackupManagerProxy backupManagerProxy, WifiConfigStore wifiConfigStore,
-            WifiConfigManager wifiConfigManager, ActiveModeWarden activeModeWarden) {
-        this(context, wifiInjector, handler, backupManagerProxy, wifiConfigStore,
-                wifiConfigManager, activeModeWarden,
-                new File(Environment.getLegacyWifiSharedDirectory(), LEGACY_AP_CONFIG_FILE));
-    }
 
     WifiApConfigStore(Context context,
             WifiInjector wifiInjector,
@@ -141,29 +109,13 @@ public class WifiApConfigStore {
             WifiConfigStore wifiConfigStore,
             WifiConfigManager wifiConfigManager,
             ActiveModeWarden activeModeWarden,
-            File apConfigFile) {
+            WifiMetrics wifiMetrics) {
         mContext = context;
         mHandler = handler;
         mBackupManagerProxy = backupManagerProxy;
         mWifiConfigManager = wifiConfigManager;
         mActiveModeWarden = activeModeWarden;
-
-        // One time migration from legacy config store.
-        try {
-            File file = apConfigFile;
-            FileInputStream fis = new FileInputStream(apConfigFile);
-            /* Load AP configuration from persistent storage. */
-            SoftApConfiguration config = loadApConfigurationFromLegacyFile(fis);
-            if (config != null) {
-                // Persist in the new store.
-                persistConfigAndTriggerBackupManagerProxy(config);
-                Log.i(TAG, "Migrated data out of legacy store file " + apConfigFile);
-                // delete the legacy file.
-                file.delete();
-            }
-        } catch (FileNotFoundException e) {
-            // Expected on further reboots after the first reboot.
-        }
+        mWifiMetrics = wifiMetrics;
 
         // Register store data listener
         wifiConfigStore.registerStoreData(
@@ -172,20 +124,16 @@ public class WifiApConfigStore {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_HOTSPOT_CONFIG_USER_TAPPED_CONTENT);
         mMacAddressUtil = wifiInjector.getMacAddressUtil();
-        mMac = mMacAddressUtil.obtainMacRandHashFunctionForSap(Process.WIFI_UID);
-        if (mMac == null) {
-            Log.wtf(TAG, "Failed to obtain secret for SAP MAC randomization."
-                    + " All randomized MAC addresses are lost!");
-        }
-
-        mBridgeInterfaceName = SystemProperties
-                .get("persist.vendor.wifi.softap.bridge.interface", "wifi_br0");
     }
 
    /* Additional APIs(get/set) to support SAP + SAP Feature */
 
     public synchronized String getBridgeInterface() {
-        return mBridgeInterfaceName;
+        String bridgeInterfaceName = mContext.getResources()
+                   .getString(R.string.config_vendor_wifi_tether_bridge_interface_name);
+        if (bridgeInterfaceName == null || TextUtils.isEmpty(bridgeInterfaceName))
+            return "wifi_br0"; // Return default value
+        return bridgeInterfaceName;
     }
 
     public synchronized boolean getDualSapStatus() {
@@ -261,18 +209,12 @@ public class WifiApConfigStore {
                     SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
             Log.e(TAG, "Device doesn't support WPA3-SAE, reset config to WPA2");
         }
-
+        mWifiMetrics.noteSoftApConfigReset(config, configBuilder.build());
         return configBuilder.build();
     }
 
     private SoftApConfiguration sanitizePersistentApConfig(SoftApConfiguration config) {
         SoftApConfiguration.Builder convertedConfigBuilder = null;
-
-        // Persistent config may not set BSSID.
-        if (config.getBssid() != null) {
-            convertedConfigBuilder = new SoftApConfiguration.Builder(config);
-            convertedConfigBuilder.setBssid(null);
-        }
 
         // some countries are unable to support 5GHz only operation, always allow for 2GHz when
         // config doesn't force channel
@@ -291,65 +233,6 @@ public class WifiApConfigStore {
         mHasNewDataToSerialize = true;
         mWifiConfigManager.saveToStore(true);
         mBackupManagerProxy.notifyDataChanged();
-    }
-
-    /**
-     * Load AP configuration from legacy persistent storage.
-     * Note: This is deprecated and only used for migrating data once on reboot.
-     */
-    private static SoftApConfiguration loadApConfigurationFromLegacyFile(FileInputStream fis) {
-        SoftApConfiguration config = null;
-        DataInputStream in = null;
-        try {
-            SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
-            in = new DataInputStream(new BufferedInputStream(fis));
-
-            int version = in.readInt();
-            if (version < 1 || version > AP_CONFIG_FILE_VERSION) {
-                Log.e(TAG, "Bad version on hotspot configuration file");
-                return null;
-            }
-            configBuilder.setSsid(in.readUTF());
-
-            if (version >= 2) {
-                int band = in.readInt();
-                int channel = in.readInt();
-
-                if (channel == 0) {
-                    configBuilder.setBand(
-                            ApConfigUtil.convertWifiConfigBandToSoftApConfigBand(band));
-                } else {
-                    configBuilder.setChannel(channel,
-                            ApConfigUtil.convertWifiConfigBandToSoftApConfigBand(band));
-                }
-            }
-
-            if (version >= 3) {
-                configBuilder.setHiddenSsid(in.readBoolean());
-            }
-
-            int authType = in.readInt();
-            if (authType == WifiConfiguration.KeyMgmt.WPA2_PSK) {
-                configBuilder.setPassphrase(in.readUTF(),
-                        SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
-            }
-            config = configBuilder.build();
-        } catch (IOException e) {
-            Log.e(TAG, "Error reading hotspot configuration " + e);
-            config = null;
-        } catch (IllegalArgumentException ie) {
-            Log.e(TAG, "Invalid hotspot configuration " + ie);
-            config = null;
-        } finally {
-            if (in != null) {
-                try {
-                    in.close();
-                } catch (IOException e) {
-                    Log.e(TAG, "Error closing hotspot configuration during read" + e);
-                }
-            }
-        }
-        return config;
     }
 
     /**
@@ -396,6 +279,8 @@ public class WifiApConfigStore {
             configBuilder = new SoftApConfiguration.Builder(customConfig);
         } else {
             configBuilder = new SoftApConfiguration.Builder();
+            // Default to disable the auto shutdown
+            configBuilder.setAutoShutdownEnabled(false);
         }
 
         configBuilder.setBand(apBand);
@@ -424,7 +309,8 @@ public class WifiApConfigStore {
         SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder(config);
         if (config.getBssid() == null && context.getResources().getBoolean(
                 R.bool.config_wifi_ap_mac_randomization_supported)) {
-            MacAddress macAddress = mMacAddressUtil.calculatePersistentMac(config.getSsid(), mMac);
+            MacAddress macAddress = mMacAddressUtil.calculatePersistentMac(config.getSsid(),
+                    mMacAddressUtil.obtainMacRandHashFunctionForSap(Process.WIFI_UID));
             if (macAddress == null) {
                 Log.e(TAG, "Failed to calculate MAC from SSID. "
                         + "Generating new random MAC instead.");
@@ -488,13 +374,21 @@ public class WifiApConfigStore {
      * requires a password, was one provided?).
      *
      * @param apConfig {@link SoftApConfiguration} to use for softap mode
+     * @param isPrivileged indicate the caller can pass some fields check or not
      * @return boolean true if the provided config meets the minimum set of details, false
      * otherwise.
      */
-    static boolean validateApWifiConfiguration(@NonNull SoftApConfiguration apConfig) {
+    static boolean validateApWifiConfiguration(@NonNull SoftApConfiguration apConfig,
+            boolean isPrivileged) {
         // first check the SSID
         if (!validateApConfigSsid(apConfig.getSsid())) {
             // failed SSID verificiation checks
+            return false;
+        }
+
+        // BSSID can be set if caller own permission:android.Manifest.permission.NETWORK_SETTINGS.
+        if (apConfig.getBssid() != null && !isPrivileged) {
+            Log.e(TAG, "Config BSSID needs NETWORK_SETTINGS permission");
             return false;
         }
 

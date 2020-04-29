@@ -40,6 +40,7 @@ import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.os.Handler;
 import android.text.TextUtils;
 
+import androidx.annotation.GuardedBy;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
@@ -57,7 +58,11 @@ import java.util.StringJoiner;
 public class PasspointWifiEntry extends WifiEntry {
     static final String KEY_PREFIX = "PasspointWifiEntry:";
 
+    private final Object mLock = new Object();
+    // Scan result list must be thread safe for generating the verbose scan summary
+    @GuardedBy("mLock")
     private final List<ScanResult> mCurrentHomeScanResults = new ArrayList<>();
+    @GuardedBy("mLock")
     private final List<ScanResult> mCurrentRoamingScanResults = new ArrayList<>();
 
     @NonNull private final String mKey;
@@ -340,20 +345,21 @@ public class PasspointWifiEntry extends WifiEntry {
 
     @Override
     public boolean canSetPrivacy() {
-        // TODO(b/70983952): Fill this method in
-        return false;
+        return true;
     }
 
     @Override
     @Privacy
     public int getPrivacy() {
-        // TODO(b/70983952): Fill this method in
-        return PRIVACY_UNKNOWN;
+        return mPasspointConfig.isMacRandomizationEnabled()
+                ? PRIVACY_RANDOMIZED_MAC : PRIVACY_DEVICE_MAC;
     }
 
     @Override
     public void setPrivacy(int privacy) {
-        // TODO(b/70983952): Fill this method in
+        mWifiManager.setMacRandomizationSettingPasspointEnabled(
+                mPasspointConfig.getHomeSp().getFqdn(),
+                privacy == PRIVACY_DEVICE_MAC ? false : true);
     }
 
     @Override
@@ -404,13 +410,15 @@ public class PasspointWifiEntry extends WifiEntry {
             throws IllegalArgumentException {
         mIsRoaming = false;
         mWifiConfig = wifiConfig;
-        mCurrentHomeScanResults.clear();
-        mCurrentRoamingScanResults.clear();
-        if (homeScanResults != null) {
-            mCurrentHomeScanResults.addAll(homeScanResults);
-        }
-        if (roamingScanResults != null) {
-            mCurrentRoamingScanResults.addAll(roamingScanResults);
+        synchronized (mLock) {
+            mCurrentHomeScanResults.clear();
+            mCurrentRoamingScanResults.clear();
+            if (homeScanResults != null) {
+                mCurrentHomeScanResults.addAll(homeScanResults);
+            }
+            if (roamingScanResults != null) {
+                mCurrentRoamingScanResults.addAll(roamingScanResults);
+            }
         }
         if (mWifiConfig != null) {
             mSecurity = getSecurityTypeFromWifiConfiguration(wifiConfig);

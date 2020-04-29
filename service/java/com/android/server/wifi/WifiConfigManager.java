@@ -52,6 +52,7 @@ import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.MissingCounterTimerLockList;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -70,7 +71,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -106,6 +106,8 @@ public class WifiConfigManager {
     /**
      * Interface for other modules to listen to the network updated
      * events.
+     * Note: Credentials are masked to avoid accidentally sending credentials outside the stack.
+     * Use WifiConfigManager#getConfiguredNetworkWithPassword() to retrieve credentials.
      */
     public interface OnNetworkUpdateListener {
         /**
@@ -130,8 +132,12 @@ public class WifiConfigManager {
         void onNetworkTemporarilyDisabled(@NonNull WifiConfiguration config, int disableReason);
         /**
          * Invoked on network being updated.
+         *
+         * @param newConfig Updated WifiConfiguration object.
+         * @param oldConfig Prev WifiConfiguration object.
          */
-        void onNetworkUpdated(@NonNull WifiConfiguration config);
+        void onNetworkUpdated(
+                @NonNull WifiConfiguration newConfig, @NonNull WifiConfiguration oldConfig);
     }
     /**
      * Max size of scan details to cache in {@link #mScanDetailCaches}.
@@ -197,16 +203,19 @@ public class WifiConfigManager {
 
     /**
      * General sorting algorithm of all networks for scanning purposes:
-     * Place the configurations in descending order of their |numAssociation| values. If networks
-     * have the same |numAssociation|, place the configurations with
+     * Place the configurations in ascending order of their AgeIndex. AgeIndex is based on most
+     * recently connected order. The lower the more recently connected.
+     * If networks have the same AgeIndex, place the configurations with
      * |lastSeenInQualifiedNetworkSelection| set first.
      */
-    public static final WifiConfigurationUtil.WifiConfigurationComparator sScanListComparator =
+    private final WifiConfigurationUtil.WifiConfigurationComparator mScanListComparator =
             new WifiConfigurationUtil.WifiConfigurationComparator() {
                 @Override
                 public int compareNetworksWithSameStatus(WifiConfiguration a, WifiConfiguration b) {
-                    if (a.numAssociation != b.numAssociation) {
-                        return Long.compare(b.numAssociation, a.numAssociation);
+                    int indexA = mLruConnectionTracker.getAgeIndexOfNetwork(a);
+                    int indexB = mLruConnectionTracker.getAgeIndexOfNetwork(b);
+                    if (indexA != indexB) {
+                        return Integer.compare(indexA, indexB);
                     } else {
                         boolean isConfigALastSeen =
                                 a.getNetworkSelectionStatus()
@@ -234,6 +243,8 @@ public class WifiConfigManager {
     private final MacAddressUtil mMacAddressUtil;
     private final TelephonyUtil mTelephonyUtil;
     private final WifiScoreCard mWifiScoreCard;
+    // Keep order of network connection.
+    private final LruConnectionTracker mLruConnectionTracker;
 
     /**
      * Local log used for debugging any WifiConfigManager issues.
@@ -255,7 +266,6 @@ public class WifiConfigManager {
      * Also when user manfully select to connect network will unblock that network.
      */
     private final MissingCounterTimerLockList<String> mUserTemporarilyDisabledList;
-
 
     /**
      * Framework keeps a mapping from configKey to the randomized MAC address so that
@@ -331,7 +341,8 @@ public class WifiConfigManager {
             NetworkListUserStoreData networkListUserStoreData,
             RandomizedMacStoreData randomizedMacStoreData,
             FrameworkFacade frameworkFacade, Handler handler,
-            DeviceConfigFacade deviceConfigFacade, WifiScoreCard wifiScoreCard) {
+            DeviceConfigFacade deviceConfigFacade, WifiScoreCard wifiScoreCard,
+            LruConnectionTracker lruConnectionTracker) {
         mContext = context;
         mClock = clock;
         mUserManager = userManager;
@@ -365,6 +376,7 @@ public class WifiConfigManager {
         mLocalLog = new LocalLog(
                 context.getSystemService(ActivityManager.class).isLowRamDevice() ? 128 : 256);
         mMacAddressUtil = mWifiInjector.getMacAddressUtil();
+        mLruConnectionTracker = lruConnectionTracker;
     }
 
     /**
@@ -404,7 +416,7 @@ public class WifiConfigManager {
 
     /**
      * Determine if the framework should perform "aggressive" MAC randomization when connecting
-     * to the SSID in the input WifiConfiguration.
+     * to the SSID or FQDN in the input WifiConfiguration.
      * @param config
      * @return
      */
@@ -416,20 +428,24 @@ public class WifiConfigManager {
         if (config.getIpConfiguration().getIpAssignment() == IpConfiguration.IpAssignment.STATIC) {
             return false;
         }
-        return isSsidOptInForAggressiveRandomization(config.SSID);
+        if (config.isPasspoint()) {
+            return isNetworkOptInForAggressiveRandomization(config.FQDN);
+        } else {
+            return isNetworkOptInForAggressiveRandomization(config.SSID);
+        }
     }
 
-    private boolean isSsidOptInForAggressiveRandomization(String ssid) {
+    private boolean isNetworkOptInForAggressiveRandomization(String ssidOrFqdn) {
         Set<String> perDeviceSsidBlocklist = new ArraySet<>(mContext.getResources().getStringArray(
                 R.array.config_wifi_aggressive_randomization_ssid_blocklist));
-        if (mDeviceConfigFacade.getAggressiveMacRandomizationSsidBlocklist().contains(ssid)
-                || perDeviceSsidBlocklist.contains(ssid)) {
+        if (mDeviceConfigFacade.getAggressiveMacRandomizationSsidBlocklist().contains(ssidOrFqdn)
+                || perDeviceSsidBlocklist.contains(ssidOrFqdn)) {
             return false;
         }
         Set<String> perDeviceSsidAllowlist = new ArraySet<>(mContext.getResources().getStringArray(
                 R.array.config_wifi_aggressive_randomization_ssid_allowlist));
-        return mDeviceConfigFacade.getAggressiveMacRandomizationSsidAllowlist().contains(ssid)
-                || perDeviceSsidAllowlist.contains(ssid);
+        return mDeviceConfigFacade.getAggressiveMacRandomizationSsidAllowlist().contains(ssidOrFqdn)
+                || perDeviceSsidAllowlist.contains(ssidOrFqdn);
     }
 
     @VisibleForTesting
@@ -1286,8 +1302,10 @@ public class WifiConfigManager {
             Log.e(TAG, "Failed to add network to config map", e);
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
-        // Add or update user saved network or saved passpoint network will re-enable network.
-        if (!newInternalConfig.fromWifiNetworkSuggestion) {
+        // Only re-enable network: 1. add or update user saved network; 2. add or update a user
+        // saved passpoint network framework consider it is a new network.
+        if (!newInternalConfig.fromWifiNetworkSuggestion
+                && (!newInternalConfig.isPasspoint() || newNetwork)) {
             userEnabledNetwork(newInternalConfig.networkId);
         }
 
@@ -1331,9 +1349,9 @@ public class WifiConfigManager {
             Log.e(TAG, "Cannot add/update network before store is read!");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
+        WifiConfiguration existingConfig = getInternalConfiguredNetwork(config);
         if (!config.isEphemeral()) {
             // Removes the existing ephemeral network if it exists to add this configuration.
-            WifiConfiguration existingConfig = getConfiguredNetwork(config.getKey());
             if (existingConfig != null && existingConfig.isEphemeral()) {
                 // In this case, new connection for this config won't happen because same
                 // network is already registered as an ephemeral network.
@@ -1360,11 +1378,13 @@ public class WifiConfigManager {
         }
 
         for (OnNetworkUpdateListener listener : mListeners) {
-            WifiConfiguration configForListener = new WifiConfiguration(newConfig);
             if (result.isNewNetwork()) {
-                listener.onNetworkAdded(configForListener);
+                listener.onNetworkAdded(
+                        createExternalWifiConfiguration(newConfig, true, Process.WIFI_UID));
             } else {
-                listener.onNetworkUpdated(configForListener);
+                listener.onNetworkUpdated(
+                        createExternalWifiConfiguration(newConfig, true, Process.WIFI_UID),
+                        createExternalWifiConfiguration(existingConfig, true, Process.WIFI_UID));
             }
         }
         return result;
@@ -1444,14 +1464,17 @@ public class WifiConfigManager {
         if (networkId == mLastSelectedNetworkId) {
             clearLastSelectedNetwork();
         }
+        if (!config.ephemeral && !config.isPasspoint()) {
+            mLruConnectionTracker.removeNetwork(config);
+        }
         sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_REMOVED);
         // Unless the removed network is ephemeral or Passpoint, persist the network removal.
         if (!config.ephemeral && !config.isPasspoint()) {
             saveToStore(true);
         }
         for (OnNetworkUpdateListener listener : mListeners) {
-            WifiConfiguration configForListener = new WifiConfiguration(config);
-            listener.onNetworkRemoved(configForListener);
+            listener.onNetworkRemoved(
+                    createExternalWifiConfiguration(config, true, Process.WIFI_UID));
         }
         return true;
     }
@@ -1611,8 +1634,8 @@ public class WifiConfigManager {
         // Clear out all the disable reason counters.
         status.clearDisableReasonCounter();
         for (OnNetworkUpdateListener listener : mListeners) {
-            WifiConfiguration configForListener = new WifiConfiguration(config);
-            listener.onNetworkEnabled(configForListener);
+            listener.onNetworkEnabled(
+                    createExternalWifiConfiguration(config, true, Process.WIFI_UID));
         }
     }
 
@@ -1628,8 +1651,8 @@ public class WifiConfigManager {
         status.setDisableTime(mClock.getElapsedSinceBootMillis());
         status.setNetworkSelectionDisableReason(disableReason);
         for (OnNetworkUpdateListener listener : mListeners) {
-            WifiConfiguration configForListener = new WifiConfiguration(config);
-            listener.onNetworkTemporarilyDisabled(configForListener, disableReason);
+            listener.onNetworkTemporarilyDisabled(
+                    createExternalWifiConfiguration(config, true, Process.WIFI_UID), disableReason);
         }
     }
 
@@ -1646,7 +1669,8 @@ public class WifiConfigManager {
         status.setNetworkSelectionDisableReason(disableReason);
         for (OnNetworkUpdateListener listener : mListeners) {
             WifiConfiguration configForListener = new WifiConfiguration(config);
-            listener.onNetworkPermanentlyDisabled(configForListener, disableReason);
+            listener.onNetworkPermanentlyDisabled(
+                    createExternalWifiConfiguration(config, true, Process.WIFI_UID), disableReason);
         }
     }
 
@@ -1913,6 +1937,10 @@ public class WifiConfigManager {
         }
 
         config.allowAutojoin = choice;
+        if (!choice) {
+            removeConnectChoiceFromAllNetworks(config.getKey());
+            clearNetworkConnectChoice(config.networkId);
+        }
         sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_CONFIG_CHANGE);
         if (!config.ephemeral) {
             saveToStore(true);
@@ -1963,6 +1991,11 @@ public class WifiConfigManager {
         WifiConfiguration config = getInternalConfiguredNetwork(networkId);
         if (config == null) {
             return false;
+        }
+
+        // Only record connection order for non-passpoint from user saved or suggestion.
+        if (!config.isPasspoint() && (config.fromWifiNetworkSuggestion || !config.ephemeral)) {
+            mLruConnectionTracker.addNetwork(config);
         }
         config.lastConnected = mClock.getWallClockMillis();
         config.numAssociation++;
@@ -2607,186 +2640,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Helper method to fetch list of channels for a network from the associated ScanResult's cache
-     * and add it to the provided channel as long as the size of the set is less than
-     * |maxChannelSetSize|.
-     *
-     * @param channelSet        Channel set holding all the channels for the network.
-     * @param scanDetailCache   ScanDetailCache entry associated with the network.
-     * @param nowInMillis       current timestamp to be used for age comparison.
-     * @param ageInMillis       only consider scan details whose timestamps are earlier than this
-     *                          value.
-     * @param maxChannelSetSize Maximum number of channels to be added to the set.
-     * @return false if the list is full, true otherwise.
-     */
-    private boolean addToChannelSetForNetworkFromScanDetailCache(
-            Set<Integer> channelSet, ScanDetailCache scanDetailCache,
-            long nowInMillis, long ageInMillis, int maxChannelSetSize) {
-        if (scanDetailCache != null && scanDetailCache.size() > 0) {
-            for (ScanDetail scanDetail : scanDetailCache.values()) {
-                ScanResult result = scanDetail.getScanResult();
-                boolean valid = (nowInMillis - result.seen) < ageInMillis;
-                if (mVerboseLoggingEnabled) {
-                    Log.v(TAG, "fetchChannelSetForNetwork has " + result.BSSID + " freq "
-                            + result.frequency + " age " + (nowInMillis - result.seen)
-                            + " ?=" + valid);
-                }
-                if (valid) {
-                    channelSet.add(result.frequency);
-                }
-                if (channelSet.size() >= maxChannelSetSize) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Find the most recently connected network from a list of networks, and place it at top
-     */
-    private void putMostRecentlyConnectedNetworkAtTop(List<WifiConfiguration> networks) {
-        WifiConfiguration lastConnectedNetwork =
-                networks.stream()
-                        .max(Comparator.comparing(
-                                (WifiConfiguration config) -> config.lastConnected))
-                        .get();
-        if (lastConnectedNetwork.lastConnected != 0) {
-            int lastConnectedNetworkIdx = networks.indexOf(lastConnectedNetwork);
-            networks.remove(lastConnectedNetworkIdx);
-            networks.add(0, lastConnectedNetwork);
-        }
-    }
-
-    /**
-     * Retrieves a list of channels for partial single scans
-     *
-     * @param ageInMillis only consider scan details whose timestamps are more recent than this.
-     * @param maxCount maximum number of channels in the set
-     * @return Set containing the frequeincies which were used for connection recently.
-     */
-    public Set<Integer> fetchChannelSetForPartialScan(long ageInMillis, int maxCount) {
-        List<WifiConfiguration> networks = getConfiguredNetworks();
-
-        // Remove any permanently or temporarily disabled networks.
-        Iterator<WifiConfiguration> iter = networks.iterator();
-        while (iter.hasNext()) {
-            WifiConfiguration config = iter.next();
-            if (config.ephemeral || config.isPasspoint()
-                    || config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()
-                    || config.getNetworkSelectionStatus().isNetworkTemporaryDisabled()) {
-                iter.remove();
-            }
-        }
-
-        if (networks.isEmpty()) {
-            return null;
-        }
-
-        // Sort the networks with the most frequent ones at the front of the network list.
-        Collections.sort(networks, sScanListComparator);
-
-        // Find the most recently connected network and move it to the front of the network list.
-        putMostRecentlyConnectedNetworkAtTop(networks);
-
-        Set<Integer> channelSet = new HashSet<>();
-        long nowInMillis = mClock.getWallClockMillis();
-
-        for (WifiConfiguration config : networks) {
-            ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(config.networkId);
-            if (scanDetailCache == null) {
-                continue;
-            }
-
-            // Add channels for the network to the output, and exit when it reaches max size
-            if (!addToChannelSetForNetworkFromScanDetailCache(channelSet, scanDetailCache,
-                    nowInMillis, ageInMillis, maxCount)) {
-                break;
-            }
-        }
-
-        return channelSet;
-    }
-
-    /**
-     * Retrieve a set of channels on which AP's for the provided network was seen using the
-     * internal ScanResult's cache {@link #mScanDetailCaches}. This is used for initiating partial
-     * scans for the currently connected network.
-     *
-     * @param networkId       network ID corresponding to the network.
-     * @param ageInMillis     only consider scan details whose timestamps are earlier than this value.
-     * @param homeChannelFreq frequency of the currently connected network.
-     * @return Set containing the frequencies on which this network was found, null if the network
-     * was not found or there are no associated scan details in the cache.
-     */
-    public Set<Integer> fetchChannelSetForNetworkForPartialScan(int networkId, long ageInMillis,
-                                                                int homeChannelFreq) {
-        WifiConfiguration config = getInternalConfiguredNetwork(networkId);
-        if (config == null) {
-            return null;
-        }
-        ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(networkId);
-        if (scanDetailCache == null && config.linkedConfigurations == null) {
-            Log.i(TAG, "No scan detail and linked configs associated with networkId " + networkId);
-            return null;
-        }
-        final int maxNumActiveChannelsForPartialScans = mContext.getResources().getInteger(
-                R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels);
-        if (mVerboseLoggingEnabled) {
-            StringBuilder dbg = new StringBuilder();
-            dbg.append("fetchChannelSetForNetworkForPartialScan ageInMillis ")
-                    .append(ageInMillis)
-                    .append(" for ")
-                    .append(config.getKey())
-                    .append(" max ")
-                    .append(maxNumActiveChannelsForPartialScans);
-            if (scanDetailCache != null) {
-                dbg.append(" bssids " + scanDetailCache.size());
-            }
-            if (config.linkedConfigurations != null) {
-                dbg.append(" linked " + config.linkedConfigurations.size());
-            }
-            Log.v(TAG, dbg.toString());
-        }
-        Set<Integer> channelSet = new HashSet<>();
-
-        // First add the currently connected network channel.
-        if (homeChannelFreq > 0) {
-            channelSet.add(homeChannelFreq);
-            if (channelSet.size() >= maxNumActiveChannelsForPartialScans) {
-                return channelSet;
-            }
-        }
-
-        long nowInMillis = mClock.getWallClockMillis();
-
-        // Then get channels for the network.
-        if (!addToChannelSetForNetworkFromScanDetailCache(
-                channelSet, scanDetailCache, nowInMillis, ageInMillis,
-                maxNumActiveChannelsForPartialScans)) {
-            return channelSet;
-        }
-
-        // Lastly get channels for linked networks.
-        if (config.linkedConfigurations != null) {
-            for (String configKey : config.linkedConfigurations.keySet()) {
-                WifiConfiguration linkedConfig = getInternalConfiguredNetwork(configKey);
-                if (linkedConfig == null) {
-                    continue;
-                }
-                ScanDetailCache linkedScanDetailCache =
-                        getScanDetailCacheForNetwork(linkedConfig.networkId);
-                if (!addToChannelSetForNetworkFromScanDetailCache(
-                        channelSet, linkedScanDetailCache, nowInMillis, ageInMillis,
-                        maxNumActiveChannelsForPartialScans)) {
-                    break;
-                }
-            }
-        }
-        return channelSet;
-    }
-
-    /**
      * Retrieves a list of all the saved hidden networks for scans
      *
      * Hidden network list sent to the firmware has limited size. If there are a lot of saved
@@ -2802,7 +2655,7 @@ public class WifiConfigManager {
         List<WifiConfiguration> networks = getConfiguredNetworks();
         // Remove any non hidden networks.
         networks.removeIf(config -> !config.hiddenSSID);
-        networks.sort(sScanListComparator);
+        networks.sort(mScanListComparator);
         // The most frequently connected network has the highest priority now.
         for (WifiConfiguration config : networks) {
             hiddenList.add(new WifiScanner.ScanSettings.HiddenNetwork(config.SSID));
@@ -2886,9 +2739,8 @@ public class WifiConfigManager {
     }
 
     /**
-     * Clear all deleted ephemeral networks.
+     * Clear all user temporarily disabled networks.
      */
-    @VisibleForTesting
     public void clearUserTemporarilyDisabledList() {
         mUserTemporarilyDisabledList.clear();
     }
@@ -3130,6 +2982,10 @@ public class WifiConfigManager {
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Failed to add network to config map", e);
             }
+
+            if (configuration.isMostRecentlyConnected) {
+                mLruConnectionTracker.addNetwork(configuration);
+            }
         }
     }
 
@@ -3301,6 +3157,9 @@ public class WifiConfigManager {
                 continue;
             }
 
+            config.isMostRecentlyConnected =
+                    mLruConnectionTracker.isMostRecentlyConnected(config);
+
             // We push all shared networks & private networks not belonging to the current
             // user to the shared store. Ideally, private networks for other users should
             // not even be in memory,
@@ -3450,4 +3309,7 @@ public class WifiConfigManager {
         return scanMaxRssi;
     }
 
+    public Comparator<WifiConfiguration> getScanListComparator() {
+        return mScanListComparator;
+    }
 }

@@ -1178,6 +1178,7 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
 
         mSelectedNetwork = WifiConfigurationTestUtil.createPskNetwork();
         mSelectedNetwork.SSID = "\"" + mTestScanDatas[0].getResults()[0].SSID + "\"";
+        mSelectedNetwork.shared = false;
 
         // Have a saved network with the same configuration.
         WifiConfiguration matchingSavedNetwork = new WifiConfiguration(mSelectedNetwork);
@@ -2509,6 +2510,54 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
 
     /**
      * Verify the user approval bypass for a specific request for an access point that was already
+     * approved previously via shell command and the scan result is present in the cached scan
+     * results.
+     */
+    @Test
+    public void
+            testNetworkSpecifierMatchSuccessUsingLiteralSsidAndBssidMatchApprovedViaShellWithCache()
+            throws Exception {
+        // Setup scan data for WPA-PSK networks.
+        setupScanData(SCAN_RESULT_TYPE_WPA_PSK,
+                TEST_SSID_1, TEST_SSID_2, TEST_SSID_3, TEST_SSID_4);
+
+        // Choose the matching scan result.
+        ScanResult matchingScanResult = mTestScanDatas[0].getResults()[0];
+
+        // Setup shell approval for the scan result.
+        mWifiNetworkFactory.setUserApprovedApp(TEST_PACKAGE_NAME_1, true);
+
+        // simulate no cache expiry
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(0L);
+        // Simulate the cached results matching.
+        when(mWifiScanner.getSingleScanResults())
+                .thenReturn(Arrays.asList(mTestScanDatas[0].getResults()));
+
+        PatternMatcher ssidPatternMatch =
+                new PatternMatcher(TEST_SSID_1, PatternMatcher.PATTERN_LITERAL);
+        Pair<MacAddress, MacAddress> bssidPatternMatch =
+                Pair.create(MacAddress.fromString(matchingScanResult.BSSID),
+                        MacAddress.BROADCAST_ADDRESS);
+        attachWifiNetworkSpecifierAndAppInfo(
+                ssidPatternMatch, bssidPatternMatch,
+                WifiConfigurationTestUtil.createPskNetwork(), TEST_UID_1, TEST_PACKAGE_NAME_1);
+        mWifiNetworkFactory.needNetworkFor(mNetworkRequest, 0);
+
+        // Verify we did not trigger the UI for the second request.
+        verify(mContext, never()).startActivityAsUser(any(), any());
+        // Verify we did not trigger a scan.
+        verify(mWifiScanner, never()).startScan(any(), any(), any(), any());
+        // Verify we did not trigger the match callback.
+        verify(mNetworkRequestMatchCallback, never()).onMatch(anyList());
+        // Verify that we sent a connection attempt to ClientModeImpl
+        verify(mClientModeImpl).connect(eq(null), anyInt(),
+                any(Binder.class), mConnectListenerArgumentCaptor.capture(), anyInt(), anyInt());
+
+        verify(mWifiMetrics).incrementNetworkRequestApiNumUserApprovalBypass();
+    }
+
+    /**
+     * Verify the user approval bypass for a specific request for an access point that was already
      * approved previously and the scan result is present in the cached scan results, but the
      * results are stale.
      */
@@ -2874,6 +2923,7 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
         WifiConfigMatcher(WifiConfiguration config) {
             assertNotNull(config);
             mConfig = config;
+            mConfig.shared = false;
         }
 
         @Override
@@ -2913,6 +2963,7 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
         expectedWifiConfiguration.preSharedKey = TEST_WPA_PRESHARED_KEY;
         expectedWifiConfiguration.BSSID = bssid;
         expectedWifiConfiguration.ephemeral = true;
+        expectedWifiConfiguration.shared = false;
         expectedWifiConfiguration.fromWifiNetworkSpecifier = true;
         WifiConfigurationTestUtil.assertConfigurationEqual(expectedWifiConfiguration, network);
     }
@@ -2971,7 +3022,6 @@ public class WifiNetworkFactoryTest extends WifiBaseTest {
         in.setInput(inputStream, StandardCharsets.UTF_8.name());
         mNetworkRequestStoreData.deserializeData(in, in.getDepth(),
                 WifiConfigStore.ENCRYPT_CREDENTIALS_CONFIG_STORE_DATA_VERSION,
-                mock(WifiConfigStoreEncryptionUtil.class),
-                mock(WifiConfigStoreMigrationDataHolder.class));
+                mock(WifiConfigStoreEncryptionUtil.class));
     }
 }

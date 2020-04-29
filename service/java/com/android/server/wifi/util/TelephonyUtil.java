@@ -1143,6 +1143,7 @@ public class TelephonyUtil {
     public int getCarrierIdForPackageWithCarrierPrivileges(String packageName) {
         List<SubscriptionInfo> subInfoList = mSubscriptionManager.getActiveSubscriptionInfoList();
         if (subInfoList == null || subInfoList.isEmpty()) {
+            if (mVerboseLogEnabled) Log.v(TAG, "No subs for carrier privilege check");
             return TelephonyManager.UNKNOWN_CARRIER_ID;
         }
         for (SubscriptionInfo info : subInfoList) {
@@ -1170,5 +1171,17 @@ public class TelephonyUtil {
             return null;
         }
         return name.toString();
+    }
+
+    /**
+     * Check if a config is carrier network and from the non default data SIM.
+     * @return True if it is carrier network and from non default data SIM,otherwise return false.
+     */
+    public boolean isCarrierNetworkFromNonDefaultDataSim(WifiConfiguration config) {
+        if (config.carrierId == TelephonyManager.UNKNOWN_CARRIER_ID) {
+            return false;
+        }
+        int subId = getMatchingSubId(config.carrierId);
+        return subId != SubscriptionManager.getDefaultDataSubscriptionId();
     }
 }

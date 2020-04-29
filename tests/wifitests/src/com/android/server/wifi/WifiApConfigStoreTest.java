@@ -23,8 +23,9 @@ import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -36,15 +37,13 @@ import android.content.pm.ApplicationInfo;
 import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApConfiguration.Builder;
-import android.net.wifi.WifiConfiguration;
-import android.net.wifi.WifiConfiguration.KeyMgmt;
+import android.net.wifi.WifiInfo;
 import android.os.Build;
 import android.os.Handler;
 import android.os.test.TestLooper;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.server.wifi.util.ApConfigUtil;
 import com.android.wifi.resources.R;
 
 import org.junit.Before;
@@ -53,11 +52,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
-import java.io.BufferedOutputStream;
-import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
@@ -70,11 +64,9 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
 
     private static final String TAG = "WifiApConfigStoreTest";
 
-    private static final String TEST_AP_CONFIG_FILE_PREFIX = "APConfig_";
     private static final String TEST_DEFAULT_2G_CHANNEL_LIST = "1,2,3,4,5,6";
     private static final String TEST_DEFAULT_AP_SSID = "TestAP";
     private static final String TEST_DEFAULT_HOTSPOT_SSID = "TestShare";
-    private static final String TEST_DEFAULT_HOTSPOT_PSK = "TestPassword";
     private static final int RAND_SSID_INT_MIN = 1000;
     private static final int RAND_SSID_INT_MAX = 9999;
     private static final String TEST_CHAR_SET_AS_STRING = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -89,13 +81,13 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
 
     @Mock private Context mContext;
     @Mock private WifiInjector mWifiInjector;
+    @Mock private WifiMetrics mWifiMetrics;
     private TestLooper mLooper;
     private Handler mHandler;
     @Mock private BackupManagerProxy mBackupManagerProxy;
     @Mock private WifiConfigStore mWifiConfigStore;
     @Mock private WifiConfigManager mWifiConfigManager;
     @Mock private ActiveModeWarden mActiveModeWarden;
-    private File mLegacyApConfigFile;
     private Random mRandom;
     private MockResources mResources;
     @Mock private ApplicationInfo mMockApplInfo;
@@ -120,7 +112,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         mResources.setString(R.string.wifi_localhotspot_configure_ssid_default,
                              TEST_DEFAULT_HOTSPOT_SSID);
         /* Default to device that does not require ap band conversion */
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(false);
         when(mContext.getResources()).thenReturn(mResources);
 
@@ -135,18 +127,10 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
     /**
      * Helper method to create and verify actions for the ApConfigStore used in the following tests.
      */
-    private WifiApConfigStore createWifiApConfigStore(File legacyFile) {
-        WifiApConfigStore store;
-        if (legacyFile == null) {
-            store = new WifiApConfigStore(
-                    mContext, mWifiInjector, mHandler, mBackupManagerProxy,
-                    mWifiConfigStore, mWifiConfigManager, mActiveModeWarden);
-        } else {
-            store = new WifiApConfigStore(
-                    mContext, mWifiInjector, mHandler, mBackupManagerProxy,
-                    mWifiConfigStore, mWifiConfigManager, mActiveModeWarden, legacyFile);
-        }
-
+    private WifiApConfigStore createWifiApConfigStore() throws Exception {
+        WifiApConfigStore store = new WifiApConfigStore(
+                mContext, mWifiInjector, mHandler, mBackupManagerProxy,
+                mWifiConfigStore, mWifiConfigManager, mActiveModeWarden, mWifiMetrics);
         verify(mWifiConfigStore).registerStoreData(any());
         ArgumentCaptor<SoftApStoreData.DataSource> dataStoreSourceArgumentCaptor =
                 ArgumentCaptor.forClass(SoftApStoreData.DataSource.class);
@@ -154,10 +138,6 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         mDataStoreSource = dataStoreSourceArgumentCaptor.getValue();
 
         return store;
-    }
-
-    private WifiApConfigStore createWifiApConfigStore() {
-        return createWifiApConfigStore(null);
     }
 
     /**
@@ -176,62 +156,6 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         }
         configBuilder.setHiddenSsid(hiddenSSID);
         return configBuilder.build();
-    }
-
-    /**
-     * Generate a WifiConfiguration based on the specified parameters.
-     */
-    private WifiConfiguration setupWifiConfigurationApConfig(
-            String ssid, String preSharedKey, int keyManagement, int band, int channel,
-            boolean hiddenSSID) {
-        WifiConfiguration config = new WifiConfiguration();
-        config.SSID = ssid;
-        config.preSharedKey = preSharedKey;
-        config.allowedKeyManagement.set(keyManagement);
-        config.apBand = band;
-        config.apChannel = channel;
-        config.hiddenSSID = hiddenSSID;
-        return config;
-    }
-
-    private void writeLegacyApConfigFile(WifiConfiguration config) throws Exception {
-        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(
-                new FileOutputStream(mLegacyApConfigFile)))) {
-            out.writeInt(WifiApConfigStore.AP_CONFIG_FILE_VERSION);
-            out.writeUTF(config.SSID);
-            out.writeInt(config.apBand);
-            out.writeInt(config.apChannel);
-            out.writeBoolean(config.hiddenSSID);
-            int authType = config.getAuthType();
-            out.writeInt(authType);
-            if (authType != KeyMgmt.NONE) {
-                out.writeUTF(config.preSharedKey);
-            }
-        } catch (IOException e) {
-            fail("Error writing hotspot configuration" + e);
-        }
-    }
-
-    /**
-     * Asserts that the WifiConfigurations equal to SoftApConfiguration.
-     * This only compares the elements saved
-     * for softAp used.
-     */
-    public static void assertWifiConfigurationEqualSoftApConfiguration(
-            WifiConfiguration backup, SoftApConfiguration restore) {
-        assertEquals(backup.SSID, restore.getSsid());
-        assertEquals(backup.BSSID, restore.getBssid());
-        assertEquals(ApConfigUtil.convertWifiConfigBandToSoftApConfigBand(backup.apBand),
-                restore.getBand());
-        assertEquals(backup.apChannel, restore.getChannel());
-        assertEquals(backup.preSharedKey, restore.getPassphrase());
-        int authType = backup.getAuthType();
-        if (backup.getAuthType() == WifiConfiguration.KeyMgmt.WPA2_PSK) {
-            assertEquals(SoftApConfiguration.SECURITY_TYPE_WPA2_PSK, restore.getSecurityType());
-        } else {
-            assertEquals(SoftApConfiguration.SECURITY_TYPE_OPEN, restore.getSecurityType());
-        }
-        assertEquals(backup.hiddenSSID, restore.isHiddenSsid());
     }
 
     private void verifyApConfig(SoftApConfiguration config1, SoftApConfiguration config2) {
@@ -279,6 +203,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
             assertEquals(SECURITY_TYPE_WPA2_PSK, config.getSecurityType());
         }
         assertEquals(15, config.getPassphrase().length());
+        assertFalse(config.isAutoShutdownEnabled());
     }
 
     private void verifyDefaultLocalOnlyApConfig(SoftApConfiguration config, String expectedSsid,
@@ -297,50 +222,6 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         verify(mWifiConfigManager).saveToStore(true);
     }
 
-    /**
-     * Verify WifiApConfigStore can correctly load the existing configuration
-     * from the legacy config file and migrate it to the new config store.
-     */
-    @Test
-    public void initWithExistingConfigurationInLegacyFile() throws Exception {
-        WifiConfiguration backupConfig = setupWifiConfigurationApConfig(
-                "ConfiguredAP",    /* SSID */
-                "randomKey",       /* preshared key */
-                KeyMgmt.WPA2_PSK,   /* key management */
-                1,                 /* AP band (5GHz) */
-                40,                /* AP channel */
-                true               /* Hidden SSID */);
-
-        /* Create a temporary file for AP config file storage. */
-        mLegacyApConfigFile = File.createTempFile(TEST_AP_CONFIG_FILE_PREFIX, "");
-
-        SoftApConfiguration expectedConfig = setupApConfig(
-                "ConfiguredAP",           /* SSID */
-                "randomKey",              /* preshared key */
-                SECURITY_TYPE_WPA2_PSK,   /* security type */
-                SoftApConfiguration.BAND_5GHZ, /* AP band (5GHz) */
-                40,                       /* AP channel */
-                true                      /* Hidden SSID */);
-
-        assertWifiConfigurationEqualSoftApConfiguration(backupConfig, expectedConfig);
-
-        writeLegacyApConfigFile(backupConfig);
-        WifiApConfigStore store = createWifiApConfigStore(mLegacyApConfigFile);
-        verify(mWifiConfigManager).saveToStore(true);
-        verify(mBackupManagerProxy).notifyDataChanged();
-        verifyApConfig(expectedConfig, store.getApConfiguration());
-        verifyApConfig(expectedConfig, mDataStoreSource.toSerialize());
-        // Simulate the config store read to trigger the write to new config store.
-        mDataStoreSource.reset();
-        mLooper.dispatchAll();
-        // Triggers write twice:
-        // a) On reading the legacy file (new config store not ready yet)
-        // b) When the new config store is ready.
-        verify(mWifiConfigManager, times(2)).saveToStore(true);
-
-        // The temporary legacy AP config file should be removed after migration.
-        assertFalse(mLegacyApConfigFile.exists());
-    }
 
     /**
      * Verify the handling of setting a null ap configuration.
@@ -401,7 +282,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
      */
     @Test
     public void convertDevice5GhzToAny() throws Exception {
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(true);
 
         /* Initialize WifiApConfigStore with default configuration. */
@@ -440,7 +321,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
      */
     @Test
     public void deviceAnyNotConverted() throws Exception {
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(true);
 
         /* Initialize WifiApConfigStore with default configuration. */
@@ -469,7 +350,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
      */
     @Test
     public void deviceWithChannelNotConverted() throws Exception {
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(true);
 
         /* Initialize WifiApConfigStore with default configuration. */
@@ -499,7 +380,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
      */
     @Test
     public void device5GhzConvertedToAnyAtRetrieval() throws Exception {
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(true);
 
         SoftApConfiguration persistedConfig = setupApConfig(
@@ -533,7 +414,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
      */
     @Test
     public void deviceNotConvertedAtRetrieval() throws Exception {
-        when(mActiveModeWarden.canSupportAtleastOneConcurrentClientAndSoftApManager())
+        when(mActiveModeWarden.isStaApConcurrencySupported())
                 .thenReturn(true);
 
         SoftApConfiguration persistedConfig = setupApConfig(
@@ -555,10 +436,10 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
      * Verify a proper SoftApConfiguration is generate by getDefaultApConfiguration().
      */
     @Test
-    public void getDefaultApConfigurationIsValid() {
+    public void getDefaultApConfigurationIsValid() throws Exception {
         WifiApConfigStore store = createWifiApConfigStore();
         SoftApConfiguration config = store.getApConfiguration();
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config, true));
     }
 
     /**
@@ -573,7 +454,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
                 SoftApConfiguration.BAND_2GHZ);
 
         // verify that the config passes the validateApWifiConfiguration check
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config, true));
     }
 
     /**
@@ -587,7 +468,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
                 SoftApConfiguration.BAND_5GHZ);
 
         // verify that the config passes the validateApWifiConfiguration check
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config, true));
     }
 
     @Test
@@ -603,7 +484,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
     }
 
     @Test
-    public void randomizeBssid_randomizesWhenEnabled() {
+    public void randomizeBssid_randomizesWhenEnabled() throws Exception {
         mResources.setBoolean(R.bool.config_wifi_ap_mac_randomization_supported, true);
         SoftApConfiguration baseConfig = new SoftApConfiguration.Builder().build();
 
@@ -614,7 +495,22 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
     }
 
     @Test
-    public void randomizeBssid_usesFactoryMacWhenRandomizationOff() {
+    public void randomizeBssid_fallbackPathWhenMacCalculationFails() throws Exception {
+        mResources.setBoolean(R.bool.config_wifi_ap_mac_randomization_supported, true);
+        // Setup the MAC calculation to fail.
+        when(mMacAddressUtil.calculatePersistentMac(any(), any())).thenReturn(null);
+        SoftApConfiguration baseConfig = new SoftApConfiguration.Builder().build();
+
+        WifiApConfigStore store = createWifiApConfigStore();
+        SoftApConfiguration config = store.randomizeBssidIfUnset(mContext, baseConfig);
+
+        // Verify that some randomized MAC address is still generated
+        assertNotNull(config.getBssid());
+        assertNotEquals(WifiInfo.DEFAULT_MAC_ADDRESS, config.getBssid().toString());
+    }
+
+    @Test
+    public void randomizeBssid_usesFactoryMacWhenRandomizationOff() throws Exception {
         mResources.setBoolean(R.bool.config_wifi_ap_mac_randomization_supported, false);
         SoftApConfiguration baseConfig = new SoftApConfiguration.Builder().build();
 
@@ -625,7 +521,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
     }
 
     @Test
-    public void randomizeBssid_forwardsCustomMac() {
+    public void randomizeBssid_forwardsCustomMac() throws Exception {
         mResources.setBoolean(R.bool.config_wifi_ap_mac_randomization_supported, true);
         Builder baseConfigBuilder = new SoftApConfiguration.Builder();
         baseConfigBuilder.setBssid(MacAddress.fromString("11:22:33:44:55:66"));
@@ -672,30 +568,30 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
     public void testSsidVerificationInValidateApWifiConfigurationCheck() {
         Builder configBuilder = new SoftApConfiguration.Builder();
         configBuilder.setSsid(null);
-        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
         // check a string if it's larger than 32 bytes with UTF-8 encode
         // Case 1 : one byte per character (use english words and Arabic numerals)
         configBuilder.setSsid(generateRandomString(WifiApConfigStore.SSID_MAX_LEN + 1));
-        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
         // Case 2 : two bytes per character
         configBuilder.setSsid(TEST_STRING_UTF8_WITH_34_BYTES);
-        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
         // Case 3 : three bytes per character
         configBuilder.setSsid(TEST_STRING_UTF8_WITH_33_BYTES);
-        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertFalse(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
 
         // now check a valid SSID within 32 bytes
         // Case 1 :  one byte per character with random length
         int validLength = WifiApConfigStore.SSID_MAX_LEN - WifiApConfigStore.SSID_MIN_LEN;
         configBuilder.setSsid(generateRandomString(
                 mRandom.nextInt(validLength) + WifiApConfigStore.SSID_MIN_LEN));
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
         // Case 2 : two bytes per character
         configBuilder.setSsid(TEST_STRING_UTF8_WITH_32_BYTES);
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
         // Case 3 : three bytes per character
         configBuilder.setSsid(TEST_STRING_UTF8_WITH_30_BYTES);
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
     }
 
     /**
@@ -710,7 +606,7 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         assertTrue(WifiApConfigStore.validateApWifiConfiguration(
                 new SoftApConfiguration.Builder()
                 .setSsid(TEST_DEFAULT_HOTSPOT_SSID)
-                .build()));
+                .build(), true));
     }
 
     /**
@@ -731,14 +627,15 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         configBuilder.setPassphrase(
                 generateRandomString(mRandom.nextInt(maxLen - minLen) + minLen),
                 SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build()));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(configBuilder.build(), true));
     }
 
     /**
      * Verify the default configuration security when SAE support.
      */
     @Test
-    public void testDefaultConfigurationSecurityTypeIsWpa3SaeTransitionWhenSupport() {
+    public void testDefaultConfigurationSecurityTypeIsWpa3SaeTransitionWhenSupport()
+            throws Exception {
         mResources.setBoolean(R.bool.config_wifi_softap_sae_supported, true);
         WifiApConfigStore store = createWifiApConfigStore();
         verifyDefaultApConfig(store.getApConfiguration(), TEST_DEFAULT_AP_SSID, true);
@@ -756,12 +653,12 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
                 SoftApConfiguration.BAND_5GHZ, true);
 
         // verify that the config passes the validateApWifiConfiguration check
-        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config));
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config, true));
 
     }
 
     @Test
-    public void testResetToDefaultForUnsupportedConfig() {
+    public void testResetToDefaultForUnsupportedConfig() throws Exception {
         mResources.setBoolean(R.bool.config_wifiSofapClientForceDisconnectSupported, false);
         mResources.setBoolean(R.bool.config_wifi_softap_sae_supported, false);
         SoftApConfiguration sae_config = new SoftApConfiguration.Builder()
@@ -774,5 +671,28 @@ public class WifiApConfigStoreTest extends WifiBaseTest {
         SoftApConfiguration resetedConfig = store.resetToDefaultForUnsupportedConfig(sae_config);
         assertEquals(resetedConfig.getMaxNumberOfClients(), 0);
         assertFalse(resetedConfig.isClientControlByUserEnabled());
+        verify(mWifiMetrics).noteSoftApConfigReset(sae_config, resetedConfig);
+    }
+
+    /**
+     * Verify Bssid field deny to set if caller without setting permission.
+     */
+    @Test
+    public void testBssidDenyIfCallerWithoutPrivileged() throws Exception {
+        WifiApConfigStore store = createWifiApConfigStore();
+        SoftApConfiguration config = new SoftApConfiguration.Builder(store.getApConfiguration())
+                .setBssid(MacAddress.fromString("aa:bb:cc:dd:ee:ff")).build();
+        assertFalse(WifiApConfigStore.validateApWifiConfiguration(config, false));
+    }
+
+    /**
+     * Verify Bssid field only allow to set if caller own setting permission.
+     */
+    @Test
+    public void testBssidAllowIfCallerOwnPrivileged() throws Exception {
+        WifiApConfigStore store = createWifiApConfigStore();
+        SoftApConfiguration config = new SoftApConfiguration.Builder(store.getApConfiguration())
+                .setBssid(MacAddress.fromString("aa:bb:cc:dd:ee:ff")).build();
+        assertTrue(WifiApConfigStore.validateApWifiConfiguration(config, true));
     }
 }

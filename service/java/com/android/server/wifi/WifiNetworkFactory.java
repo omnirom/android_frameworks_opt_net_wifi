@@ -128,6 +128,8 @@ public class WifiNetworkFactory extends NetworkFactory {
     public final Map<String, LinkedHashSet<AccessPoint>> mUserApprovedAccessPointMap;
     private WifiScanner mWifiScanner;
     private CompanionDeviceManager mCompanionDeviceManager;
+    // Temporary approval set by shell commands.
+    private String mApprovedApp = null;
 
     private int mGenericConnectionReqCount = 0;
     // Request that is being actively processed. All new requests start out as an "active" request
@@ -790,6 +792,9 @@ public class WifiNetworkFactory extends NetworkFactory {
         // Set the WifiConfiguration.BSSID field to prevent roaming.
         networkToConnect.BSSID = findBestBssidFromActiveMatchedScanResultsForNetwork(network);
         networkToConnect.ephemeral = true;
+        // Mark it user private to avoid conflicting with any saved networks the user might have.
+        // TODO (b/142035508): Use a more generic mechanism to fix this.
+        networkToConnect.shared = false;
         networkToConnect.fromWifiNetworkSpecifier = true;
 
         // Store the user selected network.
@@ -1314,6 +1319,10 @@ public class WifiNetworkFactory extends NetworkFactory {
         if (isAccessPointApprovedInInternalApprovalList(scanResult, requestorPackageName)) {
             return scanResult;
         }
+        // Shell approved app
+        if (TextUtils.equals(mApprovedApp, requestorPackageName)) {
+            return scanResult;
+        }
         // no bypass approvals, show UI.
         return null;
     }
@@ -1436,6 +1445,26 @@ public class WifiNetworkFactory extends NetworkFactory {
     }
 
     /**
+     * Sets all access points approved for the specified app.
+     * Used by shell commands.
+     */
+    public void setUserApprovedApp(@NonNull String packageName, boolean approved) {
+        if (approved) {
+            mApprovedApp = packageName;
+        } else if (TextUtils.equals(packageName, mApprovedApp)) {
+            mApprovedApp = null;
+        }
+    }
+
+    /**
+     * Whether all access points are approved for the specified app.
+     * Used by shell commands.
+     */
+    public boolean hasUserApprovedApp(@NonNull String packageName) {
+        return TextUtils.equals(packageName, mApprovedApp);
+    }
+
+    /**
      * Remove all user approved access points for the specified app.
      */
     public void removeUserApprovedAccessPointsForApp(@NonNull String packageName) {
@@ -1450,6 +1479,7 @@ public class WifiNetworkFactory extends NetworkFactory {
      */
     public void clear() {
         mUserApprovedAccessPointMap.clear();
+        mApprovedApp = null;
         Log.i(TAG, "Cleared all internal state");
         saveToStore();
     }
