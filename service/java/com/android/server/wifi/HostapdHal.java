@@ -890,7 +890,8 @@ public class HostapdHal {
             case SoftApConfiguration.SECURITY_TYPE_WPA2_PSK:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.WPA2;
                 break;
-            case SoftApConfiguration.SECURITY_TYPE_SAE:
+            case SoftApConfiguration.SECURITY_TYPE_WPA3_SAE:
+            case SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION:
                 encryptionType = vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorEncryptionType.SAE;
                 break;
             case SoftApConfiguration.SECURITY_TYPE_OWE:

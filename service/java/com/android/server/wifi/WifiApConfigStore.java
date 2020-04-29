@@ -412,7 +412,6 @@ public class WifiApConfigStore {
                 return false;
             }
         } else if (authType == SoftApConfiguration.SECURITY_TYPE_WPA2_PSK
-                || authType == SoftApConfiguration.SECURITY_TYPE_SAE
                 || authType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION
                 || authType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE) {
             // this is a config that should have a password - check that first
