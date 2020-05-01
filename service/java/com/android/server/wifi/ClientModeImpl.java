@@ -3463,10 +3463,18 @@ public class ClientModeImpl extends StateMachine {
         mWifiScoreCard.noteIpConfiguration(mWifiInfo);
     }
 
+    /* Do Broadcast DHCP FAILURE Intent with reason code i.e. REPORT_REASON_DHCP_FAILURE */
+    private void NotifyBroadcastDhcpFailure() {
+        Intent intent = new Intent(WifiManager.WIFI_DHCP_FAILURE);
+        intent.putExtra(WifiManager.EXTRA_WIFI_DHCP_FAILURE_REASON, WifiDiagnostics.REPORT_REASON_DHCP_FAILURE);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
     private void handleIPv4Failure() {
         // TODO: Move this to provisioning failure, not DHCP failure.
         // DHCPv4 failure is expected on an IPv6-only network.
         mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_DHCP_FAILURE);
+        NotifyBroadcastDhcpFailure();
         if (mVerboseLoggingEnabled) {
             int count = -1;
             WifiConfiguration config = getCurrentWifiConfiguration();
@@ -3493,6 +3501,7 @@ public class ClientModeImpl extends StateMachine {
     private void handleIpConfigurationLost() {
         mWifiInfo.setInetAddress(null);
         mWifiInfo.setMeteredHint(false);
+        NotifyBroadcastDhcpFailure();
 
         mWifiConfigManager.updateNetworkSelectionStatus(mLastNetworkId,
                 WifiConfiguration.NetworkSelectionStatus.DISABLED_DHCP_FAILURE);
