@@ -134,15 +134,9 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         // Last user selection award.
         int lastUserSelectedNetworkId;
         long timeDifference;
-        if (mStaId == WifiManager.STA_PRIMARY) {
-            lastUserSelectedNetworkId = mWifiConfigManager.getLastSelectedNetwork();
-            timeDifference = mClock.getElapsedSinceBootMillis()
-                             - mWifiConfigManager.getLastSelectedTimeStamp();
-        } else {
-            lastUserSelectedNetworkId = mWifiConfigManager.qtiGetLastSelectedNetwork(mStaId);
-            timeDifference = mClock.getElapsedSinceBootMillis()
-                             - mWifiConfigManager.qtiGetLastSelectedTimeStamp(mStaId);
-        }
+        lastUserSelectedNetworkId = mWifiConfigManager.getLastSelectedNetwork();
+        timeDifference = mClock.getElapsedSinceBootMillis()
+                         - mWifiConfigManager.getLastSelectedTimeStamp();
 
         if (lastUserSelectedNetworkId != WifiConfiguration.INVALID_NETWORK_ID
                 && ((lastUserSelectedNetworkId == network.networkId)
@@ -217,7 +211,7 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
             // the scores and use the highest one as the ScanResult's score.
             // TODO(b/112196799): this has side effects, rather not do that in an evaluator
             WifiConfiguration network =
-                    mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail, mStaId);
+                    mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail);
 
             if (network == null) {
                 continue;

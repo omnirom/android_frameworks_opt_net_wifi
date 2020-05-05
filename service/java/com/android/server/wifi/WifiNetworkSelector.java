@@ -248,20 +248,12 @@ public class WifiNetworkSelector {
             return false;
         }
 
-        if (mStaId == WifiManager.STA_PRIMARY) {
-            if (mWifiConfigManager.getLastSelectedNetwork() == network.networkId
-                    && (mClock.getElapsedSinceBootMillis()
-                        - mWifiConfigManager.getLastSelectedTimeStamp())
-                    <= LAST_USER_SELECTION_SUFFICIENT_MS) {
-                localLog("Current network is recently user-selected.");
-                return true;
-            }
-        } else if (mWifiConfigManager.qtiGetLastSelectedNetwork(mStaId) == network.networkId
-                       && (mClock.getElapsedSinceBootMillis()
-                           - mWifiConfigManager.qtiGetLastSelectedTimeStamp(mStaId))
-                        <= LAST_USER_SELECTION_SUFFICIENT_MS) {
-                localLog("Current network is recently user-selected. StaId " + mStaId);
-                return true;
+        if (mWifiConfigManager.getLastSelectedNetwork() == network.networkId
+                && (mClock.getElapsedSinceBootMillis()
+                    - mWifiConfigManager.getLastSelectedTimeStamp())
+                <= LAST_USER_SELECTION_SUFFICIENT_MS) {
+            localLog("Current network is recently user-selected.");
+            return true;
         }
 
         // OSU (Online Sign Up) network for Passpoint Release 2 is sufficient network.
@@ -483,7 +475,7 @@ public class WifiNetworkSelector {
             }
 
             // Skip saved networks
-            if (mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail, mStaId) != null) {
+            if (mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail) != null) {
                 continue;
             }
 
@@ -513,7 +505,7 @@ public class WifiNetworkSelector {
             }
 
             // Skip saved networks
-            if (mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail, mStaId) != null) {
+            if (mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail) != null) {
                 continue;
             }
 
@@ -572,7 +564,7 @@ public class WifiNetworkSelector {
         String key = selected.configKey();
         // This is only used for setting the connect choice timestamp for debugging purposes.
         long currentTime = mClock.getWallClockMillis();
-        List<WifiConfiguration> configuredNetworks = mWifiConfigManager.qtiGetConfiguredNetworks(mStaId);
+        List<WifiConfiguration> configuredNetworks = mWifiConfigManager.getConfiguredNetworks();
 
         for (WifiConfiguration network : configuredNetworks) {
             WifiConfiguration.NetworkSelectionStatus status = network.getNetworkSelectionStatus();
@@ -610,7 +602,7 @@ public class WifiNetworkSelector {
      * c) Log any disabled networks.
      */
     private void updateConfiguredNetworks() {
-        List<WifiConfiguration> configuredNetworks = mWifiConfigManager.qtiGetConfiguredNetworks(mStaId);
+        List<WifiConfiguration> configuredNetworks = mWifiConfigManager.getConfiguredNetworks();
         if (configuredNetworks.size() == 0) {
             localLog("No configured networks.");
             return;
@@ -743,12 +735,8 @@ public class WifiNetworkSelector {
         }
 
         // Determine the weight for the last user selection
-        final int lastUserSelectedNetworkId = (mStaId == WifiManager.STA_PRIMARY)
-                          ? mWifiConfigManager.getLastSelectedNetwork()
-                          : mWifiConfigManager.qtiGetLastSelectedNetwork(mStaId);
-        final double lastSelectionWeight = (mStaId == WifiManager.STA_PRIMARY)
-                             ? calculateLastSelectionWeight()
-                             : qtiCalculateLastSelectionWeight();
+        final int lastUserSelectedNetworkId = mWifiConfigManager.getLastSelectedNetwork();
+        final double lastSelectionWeight = calculateLastSelectionWeight();
         final ArraySet<Integer> mNetworkIds = new ArraySet<>();
 
         // Go through the registered network evaluators in order
@@ -995,21 +983,5 @@ public class WifiNetworkSelector {
                 R.integer.config_wifi_framework_min_rx_rate_for_staying_on_network);
     }
 
-    private int mStaId = WifiManager.STA_PRIMARY;
-    public void setStaId(int id) {
-        mStaId = id;
-    }
-
-    private double qtiCalculateLastSelectionWeight() {
-        final int lastUserSelectedNetworkId = mWifiConfigManager.qtiGetLastSelectedNetwork(mStaId);
-        double lastSelectionWeight = 0.0;
-        if (lastUserSelectedNetworkId != WifiConfiguration.INVALID_NETWORK_ID) {
-            double timeDifference = mClock.getElapsedSinceBootMillis()
-                    - mWifiConfigManager.qtiGetLastSelectedTimeStamp(mStaId);
-            double unclipped = 1.0 - (timeDifference / LAST_USER_SELECTION_DECAY_TO_ZERO_MS);
-            lastSelectionWeight = Math.min(Math.max(unclipped, 0.0), 1.0);
-        }
-        return lastSelectionWeight;
-    }
 
 }

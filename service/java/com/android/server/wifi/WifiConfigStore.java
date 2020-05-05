@@ -17,7 +17,8 @@
 package com.android.server.wifi;
 
 import static java.lang.Math.toIntExact;
-
+import static android.net.wifi.WifiManager.STA_PRIMARY;
+import static android.net.wifi.WifiManager.STA_SECONDARY;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -89,11 +90,26 @@ public class WifiConfigStore {
      * Config store file for network suggestions user store file.
      */
     public static final int STORE_FILE_USER_NETWORK_SUGGESTIONS = 2;
+    /**
+     * Config store file for Secondary shared store file.
+     */
+    public static final int QTI_STORE_FILE_SHARED_SECONDARY = 3;
+    /**
+     * Config store file for secondary user store file.
+     */
+    public static final int QTI_STORE_FILE_USER_SECONDARY = 4;
+    /**
+     * mStaId: Identity of station. 
+     * Can be WifiManafer.STA_PRIMARY or WifiManafer.STA_SECONDARY
+     */
+    private int mStaId = STA_PRIMARY;
 
     @IntDef(prefix = { "STORE_FILE_" }, value = {
             STORE_FILE_SHARED_GENERAL,
             STORE_FILE_USER_GENERAL,
-            STORE_FILE_USER_NETWORK_SUGGESTIONS
+            STORE_FILE_USER_NETWORK_SUGGESTIONS,
+            QTI_STORE_FILE_SHARED_SECONDARY,
+            QTI_STORE_FILE_USER_SECONDARY
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface StoreFileId { }
@@ -150,26 +166,37 @@ public class WifiConfigStore {
      */
     private static final int BUFFERED_WRITE_ALARM_INTERVAL_MS = 10 * 1000;
     /**
-     * Config store file name for general shared store file.
+     * Config store file name string for general shared store file.
      */
-    private static final String STORE_FILE_NAME_SHARED_GENERAL = "WifiConfigStore.xml";
+    private static String STORE_FILE_NAME_SHARED_GENERAL = "WifiConfigStore.xml";
     /**
-     * Config store file name for general user store file.
+     * Config store file name string for general user store file.
      */
-    private static final String STORE_FILE_NAME_USER_GENERAL = "WifiConfigStore.xml";
+    private static String STORE_FILE_NAME_USER_GENERAL= "WifiConfigStore.xml";
     /**
      * Config store file name for network suggestions user store file.
      */
     private static final String STORE_FILE_NAME_USER_NETWORK_SUGGESTIONS =
             "WifiConfigStoreNetworkSuggestions.xml";
     /**
+     * Config store file name string for Secondary shared store file.
+     */
+    private static String QTI_STORE_FILE_NAME_SHARED_SECONDARY = "QtiWifiConfigStore_2.xml";
+    /**
+     * Config store file name string for general user store file.
+     */
+    private static String QTI_STORE_FILE_NAME_USER_SECONDARY= "QtiWifiConfigStore_2.xml";
+    /**
      * Mapping of Store file Id to Store file names.
      */
-    private static final SparseArray<String> STORE_ID_TO_FILE_NAME =
+    private static SparseArray<String> STORE_ID_TO_FILE_NAME =
             new SparseArray<String>() {{
                 put(STORE_FILE_SHARED_GENERAL, STORE_FILE_NAME_SHARED_GENERAL);
                 put(STORE_FILE_USER_GENERAL, STORE_FILE_NAME_USER_GENERAL);
                 put(STORE_FILE_USER_NETWORK_SUGGESTIONS, STORE_FILE_NAME_USER_NETWORK_SUGGESTIONS);
+                put(QTI_STORE_FILE_SHARED_SECONDARY,QTI_STORE_FILE_NAME_SHARED_SECONDARY);
+                put(QTI_STORE_FILE_USER_SECONDARY,QTI_STORE_FILE_NAME_USER_SECONDARY);
+
             }};
     /**
      * Handler instance to post alarm timeouts to
@@ -248,6 +275,38 @@ public class WifiConfigStore {
         mUserStores = null;
     }
 
+
+    /**
+     * Create a new instance of WifiConfigStore.
+     *
+     * @param context     context to use for retrieving the alarm manager.
+     * @param looper      looper instance to post alarm timeouts to.
+     * @param clock       clock instance to retrieve timestamps for alarms.
+     * @param wifiMetrics Metrics instance.
+     * @param staId: Station Identity.
+     */
+    public WifiConfigStore(Context context, Looper looper, Clock clock, WifiMetrics wifiMetrics,
+            boolean shouldEncryptCredentials, int staId) {
+        Log.e(TAG,":Enter staId = "+ staId);
+        mStaId = staId;
+        mAlarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        mEventHandler = new Handler(looper);
+        mClock = clock;
+        mWifiMetrics = wifiMetrics;
+        mStoreDataList = new ArrayList<>();
+
+        // Initialize the store files.
+        mSharedStore = createSharedFile(shouldEncryptCredentials, staId);
+        // The user store is initialized to null, this will be set when the user unlocks and
+        // CE storage is accessible via |switchUserStoresAndRead|.
+        mUserStores = null;
+    }
+
+    public int getStaId()
+    {
+        return mStaId;
+    }
+ 
     /**
      * Set the user store files.
      * (Useful for mocking in unit tests).
@@ -271,7 +330,7 @@ public class WifiConfigStore {
             Log.e(TAG, "Unable to register null store data");
             return false;
         }
-        int storeFileId = storeData.getStoreFileId();
+        int storeFileId = storeData.getStoreFileId(mStaId);
         if (STORE_ID_TO_FILE_NAME.get(storeFileId) == null) {
             Log.e(TAG, "Invalid shared store file specified" + storeFileId);
             return false;
@@ -314,9 +373,15 @@ public class WifiConfigStore {
      * @param shouldEncryptCredentials Whether to encrypt credentials or not.
      * @return new instance of the store file or null if the directory cannot be created.
      */
+    public static @Nullable StoreFile createSharedFile(boolean shouldEncryptCredentials,int staId) {
+        if(staId == STA_SECONDARY) {
+            return createFile(Environment.getDataMiscDirectory(), QTI_STORE_FILE_SHARED_SECONDARY,
+                   shouldEncryptCredentials);
+        }
+        return createFile(Environment.getDataMiscDirectory(), STORE_FILE_SHARED_GENERAL,shouldEncryptCredentials);
+    }
     public static @Nullable StoreFile createSharedFile(boolean shouldEncryptCredentials) {
-        return createFile(Environment.getDataMiscDirectory(), STORE_FILE_SHARED_GENERAL,
-                shouldEncryptCredentials);
+        return createSharedFile(shouldEncryptCredentials, STA_PRIMARY);
     }
 
     /**
@@ -328,22 +393,27 @@ public class WifiConfigStore {
      * @return List of new instances of the store files created or null if the directory cannot be
      * created.
      */
-    public static @Nullable List<StoreFile> createUserFiles(int userId,
-            boolean shouldEncryptCredentials) {
+    public static @Nullable List<StoreFile> createUserFiles(int userId,boolean shouldEncryptCredentials,int staId) {
         List<StoreFile> storeFiles = new ArrayList<>();
-        for (int fileId : Arrays.asList(
-                STORE_FILE_USER_GENERAL, STORE_FILE_USER_NETWORK_SUGGESTIONS)) {
+        List<Integer> fileIds = new ArrayList<>();
+        if(staId == STA_PRIMARY)
+            fileIds = Arrays.asList(STORE_FILE_USER_GENERAL, STORE_FILE_USER_NETWORK_SUGGESTIONS);
+        else if(staId == STA_SECONDARY)
+            fileIds = Arrays.asList(QTI_STORE_FILE_USER_SECONDARY);
+	for (int fileId : fileIds) {
             StoreFile storeFile =
-                    createFile(Environment.getDataMiscCeDirectory(userId), fileId,
-                            shouldEncryptCredentials);
+               createFile(Environment.getDataMiscCeDirectory(userId), fileId,shouldEncryptCredentials);
             if (storeFile == null) {
-                return null;
+               return null;
             }
             storeFiles.add(storeFile);
         }
         return storeFiles;
     }
 
+    public static @Nullable List<StoreFile> createUserFiles(int userId, boolean shouldEncryptCredentials) {
+        return createUserFiles(userId, shouldEncryptCredentials, STA_PRIMARY);
+    }
     /**
      * Enable verbose logging.
      */
@@ -370,7 +440,7 @@ public class WifiConfigStore {
     private List<StoreData> retrieveStoreDataListForStoreFile(@NonNull StoreFile storeFile) {
         return mStoreDataList
                 .stream()
-                .filter(s -> s.getStoreFileId() == storeFile.mFileId)
+                .filter(s -> s.getStoreFileId(mStaId) == storeFile.mFileId)
                 .collect(Collectors.toList());
     }
 
@@ -693,9 +763,9 @@ public class WifiConfigStore {
             pw.print(" ");
             pw.print("Name: " + storeData.getName());
             pw.print(", ");
-            pw.print("File Id: " + storeData.getStoreFileId());
+            pw.print("File Id: " + storeData.getStoreFileId(mStaId));
             pw.print(", ");
-            pw.println("File Name: " + STORE_ID_TO_FILE_NAME.get(storeData.getStoreFileId()));
+            pw.println("File Name: " + STORE_ID_TO_FILE_NAME.get(storeData.getStoreFileId(mStaId)));
         }
         pw.println("WifiConfigStore - Store Data End ----");
     }
@@ -876,6 +946,9 @@ public class WifiConfigStore {
          * This should be one of {@link #STORE_FILE_SHARED_GENERAL},
          * {@link #STORE_FILE_USER_GENERAL} or
          * {@link #STORE_FILE_USER_NETWORK_SUGGESTIONS}.
+         * {@link #QTI_STORE_FILE_SHARED_SECONDARY}
+         * {@link #QTI_STORE_FILE_USER_SECONDARY}
+         *
          *
          * Note: For most uses, the shared or user general store is sufficient. Creating and
          * managing store files are expensive. Only use specific store files if you have a large
@@ -884,5 +957,11 @@ public class WifiConfigStore {
          * @return Id of the file where this data needs to be persisted.
          */
         @StoreFileId int getStoreFileId();
+        default @StoreFileId int getStoreFileId(int staId)
+        {
+            if (staId == STA_SECONDARY)
+                return QTI_STORE_FILE_USER_SECONDARY;
+            return STORE_FILE_USER_GENERAL;
+        }
     }
 }

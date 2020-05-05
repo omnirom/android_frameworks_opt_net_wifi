@@ -351,7 +351,6 @@ public class XmlUtil {
         public static final String XML_TAG_RANDOMIZED_MAC_ADDRESS = "RandomizedMacAddress";
         public static final String XML_TAG_MAC_RANDOMIZATION_SETTING = "MacRandomizationSetting";
         public static final String XML_TAG_SHARE_THIS_AP = "ShareThisAp";
-        public static final String XML_TAG_STA_ID = "staId";
 
         public static final String XML_TAG_DPP_CONNECTOR = "DppConnector";
         public static final String XML_TAG_DPP_NETACCESSKEY = "DppNetAccessKey";
@@ -431,7 +430,6 @@ public class XmlUtil {
             XmlUtil.writeNextValue(out, XML_TAG_SSID, configuration.SSID);
             XmlUtil.writeNextValue(out, XML_TAG_BSSID, configuration.BSSID);
             XmlUtil.writeNextValue(out, XML_TAG_SHARE_THIS_AP, configuration.shareThisAp);
-            XmlUtil.writeNextValue(out, XML_TAG_STA_ID, configuration.staId);
             writePreSharedKeyToXml(out, configuration.preSharedKey, encryptionUtil);
             writeWepKeysToXml(out, configuration.wepKeys);
             XmlUtil.writeNextValue(out, XML_TAG_WEP_TX_KEY_INDEX, configuration.wepTxKeyIndex);
@@ -595,9 +593,6 @@ public class XmlUtil {
                             break;
                         case XML_TAG_SHARE_THIS_AP:
                             configuration.shareThisAp = (boolean) value;
-                            break;
-                        case XML_TAG_STA_ID:
-                            configuration.staId = (int) value;
                             break;
                         case XML_TAG_PRE_SHARED_KEY:
                             configuration.preSharedKey = (String) value;
