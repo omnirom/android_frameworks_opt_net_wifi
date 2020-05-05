@@ -20,6 +20,8 @@ import static android.net.wifi.WifiInfo.INVALID_RSSI;
 
 import static androidx.core.util.Preconditions.checkNotNull;
 
+import static com.android.wifitrackerlib.Utils.getSpeedFromWifiInfo;
+
 import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
@@ -30,6 +32,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 
 import androidx.annotation.AnyThread;
@@ -102,6 +105,23 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public static final int WIFI_LEVEL_MIN = 0;
     public static final int WIFI_LEVEL_MAX = 4;
     public static final int WIFI_LEVEL_UNREACHABLE = -1;
+
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(value = {
+            SPEED_NONE,
+            SPEED_SLOW,
+            SPEED_MODERATE,
+            SPEED_FAST,
+            SPEED_VERY_FAST
+    })
+
+    public @interface Speed {}
+
+    public static final int SPEED_NONE = 0;
+    public static final int SPEED_SLOW = 5;
+    public static final int SPEED_MODERATE = 10;
+    public static final int SPEED_FAST = 20;
+    public static final int SPEED_VERY_FAST = 30;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(value = {
@@ -190,10 +210,12 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     protected Handler mCallbackHandler;
 
     protected int mLevel = WIFI_LEVEL_UNREACHABLE;
+    protected int mSpeed = SPEED_NONE;
     protected WifiInfo mWifiInfo;
     protected NetworkInfo mNetworkInfo;
     protected NetworkCapabilities mNetworkCapabilities;
     protected ConnectedInfo mConnectedInfo;
+    protected WifiNetworkScoreCache mScoreCache;
 
     protected ConnectCallback mConnectCallback;
     protected DisconnectCallback mDisconnectCallback;
@@ -210,12 +232,14 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     private boolean mIsOweTransitionMode;
 
     WifiEntry(@NonNull Handler callbackHandler, @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
         checkNotNull(callbackHandler, "Cannot construct with null handler!");
         checkNotNull(wifiManager, "Cannot construct with null WifiManager!");
         mCallbackHandler = callbackHandler;
         mForSavedNetworksPage = forSavedNetworksPage;
         mWifiManager = wifiManager;
+        mScoreCache = scoreCache;
         updatetDeviceWifiGenerationInfo();
     }
 
@@ -270,7 +294,15 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
      * Returns the signal strength level within [WIFI_LEVEL_MIN, WIFI_LEVEL_MAX].
      * A value of WIFI_LEVEL_UNREACHABLE indicates an out of range network.
      */
-    public abstract int getLevel();
+    public int getLevel() {
+        return mLevel;
+    };
+
+    /** Returns the speed value of the network defined by the SPEED constants */
+    @Speed
+    public int getSpeed() {
+        return mSpeed;
+    };
 
     /**
      * Returns the SSID of the entry, if applicable. Null otherwise.
@@ -594,6 +626,7 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
             final int wifiInfoRssi = wifiInfo.getRssi();
             if (wifiInfoRssi != INVALID_RSSI) {
                 mLevel = mWifiManager.calculateSignalLevel(wifiInfoRssi);
+                mSpeed = getSpeedFromWifiInfo(mScoreCache, wifiInfo);
             }
             if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
                 if (mCalledConnect) {
