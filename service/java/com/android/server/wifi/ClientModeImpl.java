@@ -27,7 +27,6 @@ import static android.net.wifi.WifiManager.WIFI_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_STATE_UNKNOWN;
 
 import static com.android.server.wifi.WifiDataStall.INVALID_THROUGHPUT;
-import static com.android.server.wifi.WifiHealthMonitor.SCAN_RSSI_VALID_TIME_MS;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
@@ -1970,6 +1969,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiDiagnostics.dump(fd, pw, args);
         dumpIpClient(fd, pw, args);
         mWifiConnectivityManager.dump(fd, pw, args);
+        mWifiHealthMonitor.dump(fd, pw, args);
         mWifiInjector.getWakeupController().dump(fd, pw, args);
         mLinkProbeManager.dump(fd, pw, args);
         mWifiInjector.getWifiLastResortWatchdog().dump(fd, pw, args);
@@ -3129,7 +3129,8 @@ public class ClientModeImpl extends StateMachine {
             if (blocklistReason != -1) {
                 int networkId = (configuration == null) ? WifiConfiguration.INVALID_NETWORK_ID
                         : configuration.networkId;
-                int scanRssi = mWifiConfigManager.findScanRssi(networkId, SCAN_RSSI_VALID_TIME_MS);
+                int scanRssi = mWifiConfigManager.findScanRssi(networkId,
+                        mWifiHealthMonitor.getScanRssiValidTimeMs());
                 mWifiScoreCard.noteConnectionFailure(mWifiInfo, scanRssi, ssid, blocklistReason);
                 checkAbnormalConnectionFailureAndTakeBugReport(ssid);
                 boolean isLowRssi = false;
@@ -3265,6 +3266,9 @@ public class ClientModeImpl extends StateMachine {
         // Set meteredHint if DHCP result says network is metered
         if (dhcpResults.vendorInfo != null && dhcpResults.vendorInfo.contains("ANDROID_METERED")) {
             mWifiInfo.setMeteredHint(true);
+            mWifiMetrics.addMeteredStat(config, true);
+        } else {
+            mWifiMetrics.addMeteredStat(config, false);
         }
 
         updateCapabilities(config);
@@ -4269,7 +4273,8 @@ public class ClientModeImpl extends StateMachine {
                     }
                     mTargetNetworkId = netId;
                     // Update scorecard while there is still state from existing connection
-                    int scanRssi = mWifiConfigManager.findScanRssi(netId, SCAN_RSSI_VALID_TIME_MS);
+                    int scanRssi = mWifiConfigManager.findScanRssi(netId,
+                            mWifiHealthMonitor.getScanRssiValidTimeMs());
                     mWifiScoreCard.noteConnectionAttempt(mWifiInfo, scanRssi, config.SSID);
                     mBssidBlocklistMonitor.updateFirmwareRoamingConfiguration(config.SSID);
 
@@ -5806,7 +5811,8 @@ public class ClientModeImpl extends StateMachine {
                         loge("CMD_START_ROAM and no config, bail out...");
                         break;
                     }
-                    int scanRssi = mWifiConfigManager.findScanRssi(netId, SCAN_RSSI_VALID_TIME_MS);
+                    int scanRssi = mWifiConfigManager.findScanRssi(netId,
+                            mWifiHealthMonitor.getScanRssiValidTimeMs());
                     mWifiScoreCard.noteConnectionAttempt(mWifiInfo, scanRssi, config.SSID);
                     setTargetBssid(config, bssid);
                     mTargetNetworkId = netId;
