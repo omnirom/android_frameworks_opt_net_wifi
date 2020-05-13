@@ -98,6 +98,18 @@ public class WifiCandidates {
          * Returns true for a metered network.
          */
         boolean isMetered();
+
+        /**
+         * Returns true if network doesn't have internet access during last connection
+         */
+        boolean hasNoInternetAccess();
+
+        /**
+         * Returns true if network is expected not to have Internet access
+         * (e.g., a wireless printer, a Chromecast hotspot, etc.).
+         */
+        boolean isNoInternetAccessExpected();
+
         /**
          * Returns the ID of the nominator that provided the candidate.
          */
@@ -129,9 +141,13 @@ public class WifiCandidates {
          */
         int getFrequency();
         /**
-         * Gets the predicted throughput in Mbps
+         * Gets the predicted throughput in Mbps.
          */
         int getPredictedThroughputMbps();
+        /**
+         * Estimated probability of getting internet access (percent 0-100).
+         */
+        int getEstimatedPercentInternetAvailability();
         /**
          * Gets statistics from the scorecard.
          */
@@ -151,12 +167,15 @@ public class WifiCandidates {
         private final boolean mIsCurrentNetwork;
         private final boolean mIsCurrentBssid;
         private final boolean mIsMetered;
+        private final boolean mHasNoInternetAccess;
+        private final boolean mIsNoInternetAccessExpected;
         private final boolean mIsOpenNetwork;
         private final boolean mPasspoint;
         private final boolean mEphemeral;
         private final boolean mTrusted;
         private final boolean mCarrierOrPrivileged;
         private final int mPredictedThroughputMbps;
+        private final int mEstimatedPercentInternetAvailability;
 
         CandidateImpl(Key key, WifiConfiguration config,
                 WifiScoreCard.PerBssid perBssid,
@@ -178,12 +197,16 @@ public class WifiCandidates {
             this.mIsCurrentNetwork = isCurrentNetwork;
             this.mIsCurrentBssid = isCurrentBssid;
             this.mIsMetered = isMetered;
+            this.mHasNoInternetAccess = config.hasNoInternetAccess();
+            this.mIsNoInternetAccessExpected = config.isNoInternetAccessExpected();
             this.mIsOpenNetwork = WifiConfigurationUtil.isConfigForOpenNetwork(config);
             this.mPasspoint = config.isPasspoint();
             this.mEphemeral = config.isEphemeral();
             this.mTrusted = config.trusted;
             this.mCarrierOrPrivileged = isCarrierOrPrivileged;
             this.mPredictedThroughputMbps = predictedThroughputMbps;
+            this.mEstimatedPercentInternetAvailability = perBssid == null ? 50 :
+                    perBssid.estimatePercentInternetAvailability();
         }
 
         @Override
@@ -223,7 +246,17 @@ public class WifiCandidates {
 
         @Override
         public boolean isMetered() {
-            return (mIsMetered);
+            return mIsMetered;
+        }
+
+        @Override
+        public boolean hasNoInternetAccess() {
+            return mHasNoInternetAccess;
+        }
+
+        @Override
+        public boolean isNoInternetAccessExpected() {
+            return mIsNoInternetAccessExpected;
         }
 
         @Override
@@ -261,6 +294,11 @@ public class WifiCandidates {
             return mPredictedThroughputMbps;
         }
 
+        @Override
+        public int getEstimatedPercentInternetAvailability() {
+            return mEstimatedPercentInternetAvailability;
+        }
+
         /**
          * Accesses statistical information from the score card
          */
@@ -283,12 +321,13 @@ public class WifiCandidates {
                         + ", ";
             }
             return "Candidate { "
-                    + "networkId = " + getNetworkConfigId() + ", "
+                    + "config = " + getNetworkConfigId() + ", "
                     + "bssid = " + key.bssid + ", "
-                    + "frequency = " + getFrequency() + ", "
+                    + "freq = " + getFrequency() + ", "
                     + "rssi = " + getScanRssi() + ", "
                     + "Mbps = " + getPredictedThroughputMbps() + ", "
                     + "nominator = " + getNominatorId() + ", "
+                    + "pInternet = " + getEstimatedPercentInternetAvailability() + ", "
                     + lastSelectionWeightString
                     + (isCurrentBssid() ? "connected, " : "")
                     + (isCurrentNetwork() ? "current, " : "")
@@ -296,6 +335,8 @@ public class WifiCandidates {
                     + (isTrusted() ? "trusted, " : "")
                     + (isCarrierOrPrivileged() ? "priv, " : "")
                     + (isMetered() ? "metered, " : "")
+                    + (hasNoInternetAccess() ? "noInternet, " : "")
+                    + (isNoInternetAccessExpected() ? "noInternetExpected, " : "")
                     + (isPasspoint() ? "passpoint, " : "")
                     + (isOpenNetwork() ? "open" : "secure") + " }";
         }

@@ -372,8 +372,9 @@ message WifiLog {
   // SoftAP event list tracking sessions and client counts in local only mode
   repeated SoftApConnectedClientsEvent soft_ap_connected_clients_events_local_only = 90;
 
-  // Wps connection metrics
-  optional WpsMetrics wps_metrics = 91;
+  // WPS connection metrics - removed
+  reserved 91;
+  reserved "wps_metrics";
 
   // Wifi power statistics
   optional WifiPowerStats wifi_power_stats = 92;
@@ -649,6 +650,56 @@ message WifiLog {
 
   // Total number of steering requests which include MBO assoc retry delay
   optional int32 num_steering_request_including_mbo_assoc_retry_delay = 181;
+
+  // Total number of scan results from 11ax network
+  optional int32 num_11ax_network_scan_results = 182;
+
+  // Total number of scan results from 6GHz band
+  optional int32 num_6g_network_scan_results = 183;
+
+  // Initial partial scan stats
+  optional InitPartialScanStats init_partial_scan_stats = 184;
+
+  // Total number of scan results for hotspot 2.0 r3 networks
+  optional int32 num_hotspot2_r3_network_scan_results = 185;
+
+  // Histogram counting instances of scans with N many HotSpot 2.0 R3 APs
+  repeated NumConnectableNetworksBucket observed_hotspot_r3_aps_in_scan_histogram = 186;
+
+  // Histogram counting number of HotSpot 2.0 R3 APs per observed ESS in a scan
+  // (one value added per unique ESS - potentially multiple counts per single
+  // scan!)
+  repeated NumConnectableNetworksBucket observed_hotspot_r3_aps_per_ess_in_scan_histogram = 187;
+
+  // Histogram counting instances of scans with N many unique HotSpot 2.0 R3 ESS.
+  // Where ESS is defined as the (HESSID, ANQP Domain ID), (SSID, ANQP Domain ID) or
+  // (SSID, BSSID) tuple depending on AP configuration (in the above priority
+  // order).
+  repeated NumConnectableNetworksBucket observed_hotspot_r3_ess_in_scan_histogram = 188;
+
+  // Total number of Passpoint providers with no Root CA in their profile.
+  optional int32 num_passpoint_provider_with_no_root_ca = 189;
+
+  // Total number of Passpoint providers with self-signed root CA in their profile.
+  optional int32 num_passpoint_provider_with_self_signed_root_ca = 190;
+
+  // Total number of Passpoint providers with subscription expiration date in their profile.
+  optional int32 num_passpoint_provider_with_subscription_expiration = 191;
+
+  // List of user initiated actions
+  repeated UserActionEvent user_action_events = 192;
+
+  // Does the user have wifi verbose logging enabled.
+  optional bool is_verbose_logging_enabled = 193;
+
+  // Does the user have enhanced MAC randomization forced to on.
+  optional bool is_enhanced_mac_randomization_force_enabled = 194;
+
+  // Metered stats for saved networks.
+  optional MeteredNetworkStats metered_network_stats_saved = 195;
+
+  // Metered stats for suggestion networks.
+  optional MeteredNetworkStats metered_network_stats_suggestion = 196;
 }
 
 // Information that gets logged for every WiFi connection.
@@ -1378,6 +1429,9 @@ message StaEvent {
 
   // Number of bytes received since device boot.
   optional int64 total_rx_bytes = 23 [default = -1];
+
+  // Whether screen is on when the event happens
+  optional bool screen_on = 24;
 }
 
 // Wi-Fi Aware metrics
@@ -1750,34 +1804,6 @@ message SoftApConnectedClientsEvent {
 
   // Indicates if user enabled the client_control
   optional bool client_control_is_enabled = 10;
-}
-
-// Wps connection metrics
-// Keeps track of Wi-Fi Protected Setup usage
-message WpsMetrics {
-  // Total number of wps connection attempts
-  optional int32 num_wps_attempts = 1;
-
-  // Total number of wps connection successes
-  optional int32 num_wps_success = 2;
-
-  // Total number of wps failures on start
-  optional int32 num_wps_start_failure = 3;
-
-  // Total number of wps overlap failure
-  optional int32 num_wps_overlap_failure = 4;
-
-  // Total number of wps timeout failure
-  optional int32 num_wps_timeout_failure = 5;
-
-  // Total number of other wps failure during connection
-  optional int32 num_wps_other_connection_failure = 6;
-
-  // Total number of supplicant failure after wps
-  optional int32 num_wps_supplicant_failure = 7;
-
-  // Total number of wps cancellation
-  optional int32 num_wps_cancellation = 8;
 }
 
 // Power stats for Wifi
@@ -2856,6 +2882,24 @@ message WifiNetworkRequestApiLog {
 
 // NetworkSuggestion API metrics.
 message WifiNetworkSuggestionApiLog {
+  enum SuggestionAppTypeCode {
+    // UNKNOWN type suggestion app.
+    TYPE_UNKNOWN = 0;
+    // Suggestion app with carrier privilege.
+    TYPE_CARRIER_PRIVILEGED = 1;
+    // Suggestion app with network provisioning permission(NETWORK_CARRIER_PROVISIONING).
+    TYPE_NETWORK_PROVISIONING = 2;
+    // Suggestion app without special privilege.
+    TYPE_NON_PRIVILEGED = 3;
+  }
+
+  message SuggestionAppCount {
+    // Suggestion app type.
+    optional SuggestionAppTypeCode app_type = 1;
+    // Num of app in this type.
+    optional int32 count = 2;
+  }
+
   // Number of modifications to their suggestions by apps.
   optional int32 num_modification = 1;
 
@@ -2867,6 +2911,9 @@ message WifiNetworkSuggestionApiLog {
 
   // Histogram for size of the network lists provided by various apps on the device.
   repeated HistogramBucketInt32 network_list_size_histogram = 4;
+
+  // Count of app using suggestion API with different privilege.
+  repeated SuggestionAppCount app_count_per_type = 5;
 }
 
 // WifiLock metrics
@@ -3014,6 +3061,72 @@ message PasspointProvisionStats {
   }
 }
 
+// Counts number of networks on the device that are metered.
+message MeteredNetworkStats {
+  // Number of networks that are set or detected as metered.
+  optional int32 num_metered = 1 [default = 0];
+
+  // Number of networks that are set or detected as unmetered.
+  optional int32 num_unmetered = 2;
+
+  // Number of networks that have meteredOverride set to metered.
+  optional int32 num_override_metered = 3;
+
+  // Number of networks that have meteredOverride set to unmetered.
+  optional int32 num_override_unmetered = 4;
+}
+
+// An event capturing user action on wifi
+message UserActionEvent {
+  enum EventType {
+    // The default and unused event
+    EVENT_UNKNOWN = 0;
+    // User forgets the network
+    EVENT_FORGET_WIFI = 1;
+    // User manually triggers disconnect
+    EVENT_DISCONNECT_WIFI = 2;
+    // User changes the metered setting to "metered"
+    EVENT_CONFIGURE_METERED_STATUS_METERED = 3;
+    // User changes the metered setting to "unmetered"
+    EVENT_CONFIGURE_METERED_STATUS_UNMETERED = 4;
+    // User changes the mac randomization setting to use random MAC
+    EVENT_CONFIGURE_MAC_RANDOMIZATION_ON = 5;
+    // User changes the mac randomization setting to use factory MAC
+    EVENT_CONFIGURE_MAC_RANDOMIZATION_OFF = 6;
+    // User sets auto-connect to on
+    EVENT_CONFIGURE_AUTO_CONNECT_ON = 7;
+    // User sets auto-connect to off
+    EVENT_CONFIGURE_AUTO_CONNECT_OFF = 8;
+    // User toggles wifi on
+    EVENT_TOGGLE_WIFI_ON = 9;
+    // User toggles wifi off
+    EVENT_TOGGLE_WIFI_OFF = 10;
+    // User manually connects to a network
+    EVENT_MANUAL_CONNECT = 11;
+    // User changes the metered setting to "detect automatically"
+    EVENT_CONFIGURE_METERED_STATUS_AUTO = 12;
+  }
+
+  // The type of user action
+  optional EventType event_type = 1;
+
+  // The start time of the event in milliseconds since boot.
+  optional int64 start_time_millis = 2;
+
+  // Additional information on the target network for the action. This is not applicable and will
+  // be null for some actions such as EVENT_TOGGLE_WIFI_ON.
+  optional TargetNetworkInfo target_network_info = 3;
+}
+
+// Additional information on a network
+message TargetNetworkInfo {
+  // Whether the network is an ephemeral network.
+  optional bool is_ephemeral = 1;
+
+  // Whether the target is a passpoint network.
+  optional bool is_passpoint = 2;
+}
+
 // Number of networks with a large change of connection/disconnection
 // failure rate or high failure rate at high RSSI
 message HealthMonitorFailureStats {
@@ -3115,4 +3228,23 @@ message ThroughputMbpsHistogram {
   repeated HistogramBucketInt32 rx_2g = 3;
   // Rx histogram above 2G
   repeated HistogramBucketInt32 rx_above_2g = 4;
+}
+
+// Initial Partial Scan stats
+message InitPartialScanStats {
+  // Total number of partial scans
+  optional int32 num_scans = 1;
+
+  // Number of instances a partial scan results in finding a network
+  optional int32 num_success_scans = 2;
+
+  // Number of instances a patial scan does not result in finding a network
+  // and a follow up full scan finds a network.
+  optional int32 num_failure_scans = 3;
+
+  // Histogram of number of channels used in a successful partial scan
+  repeated HistogramBucketInt32 successful_scan_channel_count_histogram = 4;
+
+  // Histogram of number of channels used in a failed partial scan
+  repeated HistogramBucketInt32 failed_scan_channel_count_histogram = 5;
 }

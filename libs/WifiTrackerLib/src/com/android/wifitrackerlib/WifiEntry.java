@@ -20,15 +20,19 @@ import static android.net.wifi.WifiInfo.INVALID_RSSI;
 
 import static androidx.core.util.Preconditions.checkNotNull;
 
+import static com.android.wifitrackerlib.Utils.getSpeedFromWifiInfo;
+
 import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkUtils;
 import android.net.RouteInfo;
+import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 
 import androidx.annotation.AnyThread;
@@ -104,6 +108,23 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(value = {
+            SPEED_NONE,
+            SPEED_SLOW,
+            SPEED_MODERATE,
+            SPEED_FAST,
+            SPEED_VERY_FAST
+    })
+
+    public @interface Speed {}
+
+    public static final int SPEED_NONE = 0;
+    public static final int SPEED_SLOW = 5;
+    public static final int SPEED_MODERATE = 10;
+    public static final int SPEED_FAST = 20;
+    public static final int SPEED_VERY_FAST = 30;
+
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef(value = {
             METERED_CHOICE_AUTO,
             METERED_CHOICE_METERED,
             METERED_CHOICE_UNMETERED,
@@ -165,14 +186,14 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public static final int MAX_FREQ_5GHZ = 5900;
 
     /**
-     * Min bound on the 6.0 GHz (802.11ad/ay) WLAN channels.
+     * Min bound on the 6.0 GHz (802.11ax) WLAN channels.
      */
-    public static final int MIN_FREQ_6GHZ = 5700;
+    public static final int MIN_FREQ_6GHZ = 5925;
 
     /**
-     * Max bound on the 6.0 GHz (802.11ad/ay) WLAN channels.
+     * Max bound on the 6.0 GHz (802.11ax) WLAN channels.
      */
-    public static final int MAX_FREQ_6GHZ = 7100;
+    public static final int MAX_FREQ_6GHZ = 7125;
 
     /**
      * Max ScanResult information displayed of Wi-Fi Verbose Logging.
@@ -189,10 +210,12 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     protected Handler mCallbackHandler;
 
     protected int mLevel = WIFI_LEVEL_UNREACHABLE;
+    protected int mSpeed = SPEED_NONE;
     protected WifiInfo mWifiInfo;
     protected NetworkInfo mNetworkInfo;
     protected NetworkCapabilities mNetworkCapabilities;
     protected ConnectedInfo mConnectedInfo;
+    protected WifiNetworkScoreCache mScoreCache;
 
     protected ConnectCallback mConnectCallback;
     protected DisconnectCallback mDisconnectCallback;
@@ -201,13 +224,23 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     protected boolean mCalledConnect = false;
     protected boolean mCalledDisconnect = false;
 
+    private int mDeviceWifiStandard;
+    private int mWifiStandard = ScanResult.WIFI_STANDARD_LEGACY;
+    private boolean mHe8ssCapableAp;
+    private boolean mVhtMax8SpatialStreamsSupport;
+    private boolean mIsPskSaeTransitionMode;
+    private boolean mIsOweTransitionMode;
+
     WifiEntry(@NonNull Handler callbackHandler, @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
         checkNotNull(callbackHandler, "Cannot construct with null handler!");
         checkNotNull(wifiManager, "Cannot construct with null WifiManager!");
         mCallbackHandler = callbackHandler;
         mForSavedNetworksPage = forSavedNetworksPage;
         mWifiManager = wifiManager;
+        mScoreCache = scoreCache;
+        updatetDeviceWifiGenerationInfo();
     }
 
     // Info available for all WifiEntries //
@@ -246,6 +279,11 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
         return getSummary(true /* concise */);
     }
 
+    /** Returns the second summary, it's for additional information of the WifiEntry */
+    public CharSequence getSecondSummary() {
+        return "";
+    }
+
     /**
      * Returns the display summary.
      * @param concise Whether to show more information. e.g., verbose logging.
@@ -256,7 +294,15 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
      * Returns the signal strength level within [WIFI_LEVEL_MIN, WIFI_LEVEL_MAX].
      * A value of WIFI_LEVEL_UNREACHABLE indicates an out of range network.
      */
-    public abstract int getLevel();
+    public int getLevel() {
+        return mLevel;
+    };
+
+    /** Returns the speed value of the network defined by the SPEED constants */
+    @Speed
+    public int getSpeed() {
+        return mSpeed;
+    };
 
     /**
      * Returns the SSID of the entry, if applicable. Null otherwise.
@@ -285,6 +331,11 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
      * Indicates whether or not an entry is for a saved configuration.
      */
     public abstract boolean isSaved();
+
+    /**
+     * Indicates whether or not an entry is for a saved configuration.
+     */
+    public abstract boolean isSuggestion();
 
     /**
      * Indicates whether or not an entry is for a subscription.
@@ -417,6 +468,20 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
 
     /** Returns the ScanResult information of a WifiEntry */
     abstract String getScanResultDescription();
+
+    /** Returns the network selection information of a WifiEntry */
+    String getNetworkSelectionDescription() {
+        return "";
+    }
+
+    /**
+     * In Wi-Fi picker, when users click a saved network, it will connect to the Wi-Fi network.
+     * However, for some special cases, Wi-Fi picker should show Wi-Fi editor UI for users to edit
+     * security or password before connecting. Or users will always get connection fail results.
+     */
+    public boolean shouldEditBeforeConnect() {
+        return false;
+    }
 
     /**
      * Sets the callback listener for WifiEntryCallback methods.
@@ -561,6 +626,7 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
             final int wifiInfoRssi = wifiInfo.getRssi();
             if (wifiInfoRssi != INVALID_RSSI) {
                 mLevel = mWifiManager.calculateSignalLevel(wifiInfoRssi);
+                mSpeed = getSpeedFromWifiInfo(mScoreCache, wifiInfo);
             }
             if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
                 if (mCalledConnect) {
@@ -729,6 +795,9 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
         if (isSaved() && !other.isSaved()) return -1;
         if (!isSaved() && other.isSaved()) return 1;
 
+        if (isSuggestion() && !other.isSuggestion()) return -1;
+        if (!isSuggestion() && other.isSuggestion()) return 1;
+
         if (getLevel() > other.getLevel()) return -1;
         if (getLevel() < other.getLevel()) return 1;
 
@@ -749,14 +818,106 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
                 .append(getTitle())
                 .append(",summary:")
                 .append(getSummary())
+                .append(",isSaved:")
+                .append(isSaved())
+                .append(",isSubscription:")
+                .append(isSubscription())
+                .append(",isSuggestion:")
+                .append(isSuggestion())
                 .append(",level:")
                 .append(getLevel())
                 .append(",security:")
                 .append(getSecurity())
+                .append(",standard:")
+                .append(getWifiStandard())
+                .append(",he8ssAp:")
+                .append(isHe8ssCapableAp())
+                .append(",vhtMax8ssCapa:")
+                .append(isVhtMax8SpatialStreamsSupported())
                 .append(",connected:")
                 .append(getConnectedState() == CONNECTED_STATE_CONNECTED ? "true" : "false")
                 .append(",connectedInfo:")
                 .append(getConnectedInfo())
                 .toString();
+    }
+
+    protected void updateTransitionModeCapa(ScanResult scanResult) {
+        mIsPskSaeTransitionMode = scanResult.capabilities.contains("PSK")
+                                      && scanResult.capabilities.contains("SAE");
+        mIsOweTransitionMode = scanResult.capabilities.contains("OWE_TRANSITION");
+    }
+
+    public boolean isPskSaeTransitionMode() {
+        return mIsPskSaeTransitionMode;
+    }
+
+    public boolean isOweTransitionMode() {
+        return mIsOweTransitionMode;
+    }
+
+    private void updatetDeviceWifiGenerationInfo() {
+        if (mWifiManager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AX))
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_11AX;
+        else if (mWifiManager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AC))
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_11AC;
+        else if (mWifiManager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11N))
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_11N;
+        else
+            mDeviceWifiStandard = ScanResult.WIFI_STANDARD_LEGACY;
+
+        mVhtMax8SpatialStreamsSupport = mWifiManager.isVht8ssCapableDevice();
+    }
+
+    /**
+     * Returns Wi-Fi standard of the connection/AP
+     */
+    public int getWifiStandard() {
+        if (getConnectedInfo() == null || mWifiInfo == null ||
+                getConnectedState() != CONNECTED_STATE_CONNECTED)
+            return mWifiStandard;
+
+        return mWifiInfo.getWifiStandard();
+    }
+
+    /**
+     * Returns true if AP is HE 8SS capable connection/AP
+     */
+    public boolean isHe8ssCapableAp() {
+        if (getConnectedInfo() == null || mWifiInfo == null ||
+                getConnectedState() != CONNECTED_STATE_CONNECTED)
+            return mHe8ssCapableAp;
+
+        return mWifiInfo.isHe8ssCapableAp();
+    }
+
+    /**
+     * Returns true if VHT 8SS capable connection/AP
+     */
+    public boolean isVhtMax8SpatialStreamsSupported() {
+        if (getConnectedInfo() == null || mWifiInfo == null ||
+                getConnectedState() != CONNECTED_STATE_CONNECTED)
+            return mVhtMax8SpatialStreamsSupport;
+
+        return mWifiInfo.isVhtMax8SpatialStreamsSupported();
+    }
+
+    protected void updateWifiGenerationInfo(@Nullable List<ScanResult> scanResults) {
+        int currResultWifiStandard;
+        int minConnectionCapability = mDeviceWifiStandard;
+
+        // Capture minimum possible connection capability of all scan results
+        mHe8ssCapableAp = true;
+        for (ScanResult result : scanResults) {
+            currResultWifiStandard = result.getWifiStandard();
+
+            // Check if atleast one bssid present without HE and 8SS support
+            if (!result.capabilities.contains("WFA-HE-READY") && mHe8ssCapableAp)
+                mHe8ssCapableAp = false;
+
+            if (currResultWifiStandard < minConnectionCapability)
+                minConnectionCapability = currResultWifiStandard;
+        }
+
+        mWifiStandard = minConnectionCapability;
     }
 }

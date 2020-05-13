@@ -107,8 +107,6 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         mWifiConnectivityHelper = mockWifiConnectivityHelper();
         mWifiNS = mockWifiNetworkSelector();
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
-        when(mWifiInjector.getWifiNetworkSuggestionsManager())
-                .thenReturn(mWifiNetworkSuggestionsManager);
         when(mWifiNetworkSuggestionsManager.retrieveHiddenNetworkList())
                 .thenReturn(new ArrayList<>());
         when(mWifiNetworkSuggestionsManager.getAllNetworkSuggestions())
@@ -122,7 +120,10 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mPasspointManager.getProviderConfigs(anyInt(), anyBoolean()))
                 .thenReturn(new ArrayList<>());
         mWifiConnectivityManager = createConnectivityManager();
-        verify(mWifiConfigManager).addOnNetworkUpdateListener(anyObject());
+        verify(mWifiConfigManager).addOnNetworkUpdateListener(
+                mNetworkUpdateListenerCaptor.capture());
+        verify(mWifiNetworkSuggestionsManager).addOnSuggestionUpdateListener(
+                mSuggestionUpdateListenerCaptor.capture());
         mWifiConnectivityManager.setTrustedConnectionAllowed(true);
         mWifiConnectivityManager.setWifiEnabled(true);
         when(mClock.getElapsedSinceBootMillis()).thenReturn(SystemClock.elapsedRealtime());
@@ -157,6 +158,8 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         resources.setInteger(
                 R.integer.config_wifiHighMovementNetworkSelectionOptimizationRssiDelta,
                 HIGH_MVMT_RSSI_DELTA);
+        resources.setInteger(R.integer.config_wifiInitialPartialScanChannelCacheAgeMins,
+                CHANNEL_CACHE_AGE_MINS);
     }
 
     /**
@@ -208,6 +211,8 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     @Captor ArgumentCaptor<ArrayList<String>> mSsidWhitelistCaptor;
     @Captor ArgumentCaptor<WifiConfigManager.OnNetworkUpdateListener>
             mNetworkUpdateListenerCaptor;
+    @Captor ArgumentCaptor<WifiNetworkSuggestionsManager.OnSuggestionUpdateListener>
+            mSuggestionUpdateListenerCaptor;
     private MockResources mResources;
     private int mMinPacketRateActiveTraffic;
 
@@ -238,6 +243,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     private static final String TEST_SSID = "SSID";
     private static final int TEMP_BSSID_BLOCK_DURATION_MS = 10 * 1000; // 10 seconds
     private static final int TEST_CONNECTED_NETWORK_ID = 55;
+    private static final int CHANNEL_CACHE_AGE_MINS = 14400;
 
     Context mockContext() {
         Context context = mock(Context.class);
@@ -385,8 +391,6 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         networkList.add(config);
         when(wifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(null);
         when(wifiConfigManager.getSavedNetworks(anyInt())).thenReturn(networkList);
-        doNothing().when(wifiConfigManager).addOnNetworkUpdateListener(
-                mNetworkUpdateListenerCaptor.capture());
 
         return wifiConfigManager;
     }
@@ -394,8 +398,8 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     WifiConnectivityManager createConnectivityManager() {
         return new WifiConnectivityManager(mContext,
                 mScoringParams,
-                mClientModeImpl, mWifiInjector,
-                mWifiConfigManager, mWifiInfo, mWifiNS, mWifiConnectivityHelper,
+                mClientModeImpl, mWifiInjector, mWifiConfigManager, mWifiNetworkSuggestionsManager,
+                mWifiInfo, mWifiNS, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier,
                 mWifiMetrics, new Handler(mLooper.getLooper()), mClock,
                 mLocalLog, mWifiScoreCard);
@@ -1755,6 +1759,8 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
      * Verify that we perform full band scan in the following two cases
      * 1) Current RSSI is low, no active stream, network is insufficient
      * 2) Current RSSI is high, no active stream, and a long time since last network selection
+     * 3) Current RSSI is high, no active stream, and a short time since last network selection,
+     *  internet status is not acceptable
      *
      * Expected behavior: WifiConnectivityManager does full band scan in both cases
      */
@@ -1767,6 +1773,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(false);
+        when(mWifiNS.hasInternetOrExpectNoInternet(eq(mWifiInfo))).thenReturn(true);
 
         final List<Integer> channelList = new ArrayList<>();
         channelList.add(TEST_FREQUENCY_1);
@@ -1779,7 +1786,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mClientModeImpl.getCurrentWifiConfiguration())
                 .thenReturn(configuration);
         when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
-        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
+        when(mPerNetwork.getFrequencies(anyLong())).thenReturn(new ArrayList<>());
 
         doAnswer(new AnswerWithArguments() {
             public void answer(ScanSettings settings, ScanListener listener,
@@ -1802,7 +1809,21 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(true);
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(true);
+        when(mWifiNS.hasInternetOrExpectNoInternet(eq(mWifiInfo))).thenReturn(true);
         when(mClock.getElapsedSinceBootMillis()).thenReturn(600_000L + 1L);
+        mWifiConnectivityManager.handleScreenStateChanged(true);
+        // Set WiFi to connected state to trigger periodic scan
+        mWifiConnectivityManager.handleConnectionStateChanged(
+                WifiConnectivityManager.WIFI_STATE_CONNECTED);
+        verify(mWifiScanner, times(2)).startScan(anyObject(), anyObject(), anyObject(),
+                anyObject());
+
+        // Verify case 3
+        when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(false);
+        when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(false);
+        when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(true);
+        when(mWifiNS.hasInternetOrExpectNoInternet(eq(mWifiInfo))).thenReturn(false);
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(0L);
         mWifiConnectivityManager.handleScreenStateChanged(true);
         // Set WiFi to connected state to trigger periodic scan
         mWifiConnectivityManager.handleConnectionStateChanged(
@@ -1824,22 +1845,17 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(true);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(false);
+        when(mWifiNS.hasInternetOrExpectNoInternet(eq(mWifiInfo))).thenReturn(true);
 
         mResources.setInteger(
                 R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels,
                 10);
 
-        final List<Integer> channelList = new ArrayList<>();
-        channelList.add(TEST_FREQUENCY_1);
-        channelList.add(TEST_FREQUENCY_2);
-        channelList.add(TEST_FREQUENCY_3);
         WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
         configuration.networkId = TEST_CONNECTED_NETWORK_ID;
         when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
                 .thenReturn(configuration);
-        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
-        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
-
+        List<Integer> channelList = linkScoreCardFreqsToNetwork(configuration).get(0);
         when(mClientModeImpl.getCurrentWifiConfiguration())
                 .thenReturn(configuration);
 
@@ -1878,21 +1894,17 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(true);
+        when(mWifiNS.hasInternetOrExpectNoInternet(eq(mWifiInfo))).thenReturn(true);
 
         mResources.setInteger(
                 R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels,
                 10);
 
-        final List<Integer> channelList = new ArrayList<>();
-        channelList.add(TEST_FREQUENCY_1);
-        channelList.add(TEST_FREQUENCY_2);
-        channelList.add(TEST_FREQUENCY_3);
         WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
         configuration.networkId = TEST_CONNECTED_NETWORK_ID;
         when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
                 .thenReturn(configuration);
-        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
-        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
+        List<Integer> channelList = linkScoreCardFreqsToNetwork(configuration).get(0);
 
         when(mClientModeImpl.getCurrentWifiConfiguration())
                 .thenReturn(configuration);
@@ -1931,17 +1943,14 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     public void checkSingleScanSettingsWhenConnectedWithHighDataRateNotInCache() {
         when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(true);
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(true);
+        when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(true);
+        when(mWifiNS.hasInternetOrExpectNoInternet(eq(mWifiInfo))).thenReturn(true);
 
-        final List<Integer> channelList = new ArrayList<>();
-        channelList.add(TEST_FREQUENCY_1);
-        channelList.add(TEST_FREQUENCY_2);
-        channelList.add(TEST_FREQUENCY_3);
         WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
         configuration.networkId = TEST_CONNECTED_NETWORK_ID;
         when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
                 .thenReturn(configuration);
-        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
-        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
+        List<Integer> channelList = linkScoreCardFreqsToNetwork(configuration).get(0);
 
         when(mClientModeImpl.getCurrentWifiConfiguration())
                 .thenReturn(new WifiConfiguration());
@@ -3002,14 +3011,12 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         assertEquals("frequencies should be empty", 0, pnoNetworks.get(1).frequencies.length);
 
         //Set up wifiScoreCard to get frequency.
-        List<Integer> channelList = new ArrayList<>();
-        channelList.add(TEST_FREQUENCY_1);
-        channelList.add(TEST_FREQUENCY_2);
-        channelList.add(TEST_FREQUENCY_3);
+        List<Integer> channelList = Arrays
+                .asList(TEST_FREQUENCY_1, TEST_FREQUENCY_2, TEST_FREQUENCY_3);
         when(mWifiScoreCard.lookupNetwork(network1.SSID)).thenReturn(mPerNetwork);
         when(mWifiScoreCard.lookupNetwork(network2.SSID)).thenReturn(mPerNetwork1);
-        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
-        when(mPerNetwork1.getFrequencies()).thenReturn(new ArrayList<>());
+        when(mPerNetwork.getFrequencies(anyLong())).thenReturn(channelList);
+        when(mPerNetwork1.getFrequencies(anyLong())).thenReturn(new ArrayList<>());
 
         //Set config_wifiPnoFrequencyCullingEnabled false, should ignore get frequency.
         mResources.setBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled, false);
@@ -3020,7 +3027,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         assertEquals("frequencies should be empty", 0, pnoNetworks.get(0).frequencies.length);
         assertEquals("frequencies should be empty", 0, pnoNetworks.get(1).frequencies.length);
 
-        ////Set config_wifiPnoFrequencyCullingEnabled false, should get the right frequency.
+        // Set config_wifiPnoFrequencyCullingEnabled false, should get the right frequency.
         mResources.setBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled, true);
         pnoNetworks = mWifiConnectivityManager.retrievePnoNetworkList();
         assertEquals(2, pnoNetworks.size());
@@ -3065,13 +3072,11 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         List<List<Integer>> results = new ArrayList<>();
         int i = 0;
         for (WifiConfiguration config : configs) {
-            List<Integer> channelList = new ArrayList<>();
-            channelList.add(TEST_FREQUENCY_1 + i);
-            channelList.add(TEST_FREQUENCY_2 + i);
-            channelList.add(TEST_FREQUENCY_3 + i);
+            List<Integer> channelList = Arrays.asList(TEST_FREQUENCY_1 + i, TEST_FREQUENCY_2 + i,
+                    TEST_FREQUENCY_3 + i);
             WifiScoreCard.PerNetwork perNetwork = mock(WifiScoreCard.PerNetwork.class);
             when(mWifiScoreCard.lookupNetwork(config.SSID)).thenReturn(perNetwork);
-            when(perNetwork.getFrequencies()).thenReturn(channelList);
+            when(perNetwork.getFrequencies(anyLong())).thenReturn(channelList);
             results.add(channelList);
             i++;
         }
@@ -3093,8 +3098,8 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         mLruConnectionTracker.addNetwork(configuration2);
         mLruConnectionTracker.addNetwork(configuration1);
 
-        assertEquals(new HashSet<>(freqs.get(0)),
-                mWifiConnectivityManager.fetchChannelSetForPartialScan(3));
+        assertEquals(new HashSet<>(freqs.get(0)), mWifiConnectivityManager
+                .fetchChannelSetForPartialScan(3, CHANNEL_CACHE_AGE_MINS));
     }
 
     /**
@@ -3160,5 +3165,32 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
                 configuration.networkId);
         assertEquals(maxListSize, results.size());
         assertFalse(results.contains(freqs.get(0).get(2)));
+    }
+
+    @Test
+    public void restartPnoScanForNetworkChanges() {
+        mWifiConnectivityManager.setWifiEnabled(true);
+
+        // starts a PNO scan
+        mWifiConnectivityManager.handleConnectionStateChanged(
+                WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
+        mWifiConnectivityManager.setTrustedConnectionAllowed(true);
+
+        InOrder inOrder = inOrder(mWifiScanner);
+
+        inOrder.verify(mWifiScanner).startDisconnectedPnoScan(any(), any(), any(), any());
+
+        // Add or update suggestions.
+        mSuggestionUpdateListenerCaptor.getValue().onSuggestionsAddedOrUpdated(
+                Arrays.asList(mWifiNetworkSuggestion));
+        // Ensure that we restarted PNO.
+        inOrder.verify(mWifiScanner).stopPnoScan(any());
+        inOrder.verify(mWifiScanner).startDisconnectedPnoScan(any(), any(), any(), any());
+
+        // Add saved network
+        mNetworkUpdateListenerCaptor.getValue().onNetworkAdded(new WifiConfiguration());
+        // Ensure that we restarted PNO.
+        inOrder.verify(mWifiScanner).stopPnoScan(any());
+        inOrder.verify(mWifiScanner).startDisconnectedPnoScan(any(), any(), any(), any());
     }
 }

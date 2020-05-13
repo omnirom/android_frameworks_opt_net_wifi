@@ -27,6 +27,12 @@ import static com.android.wifitrackerlib.WifiEntry.SECURITY_OWE;
 import static com.android.wifitrackerlib.WifiEntry.SECURITY_PSK;
 import static com.android.wifitrackerlib.WifiEntry.SECURITY_SAE;
 import static com.android.wifitrackerlib.WifiEntry.SECURITY_WEP;
+import static com.android.wifitrackerlib.WifiEntry.SPEED_FAST;
+import static com.android.wifitrackerlib.WifiEntry.SPEED_MODERATE;
+import static com.android.wifitrackerlib.WifiEntry.SPEED_NONE;
+import static com.android.wifitrackerlib.WifiEntry.SPEED_SLOW;
+import static com.android.wifitrackerlib.WifiEntry.SPEED_VERY_FAST;
+import static com.android.wifitrackerlib.WifiEntry.Speed;
 
 import static java.util.Comparator.comparingInt;
 import static java.util.stream.Collectors.groupingBy;
@@ -39,8 +45,13 @@ import android.content.pm.PackageManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
+import android.net.NetworkKey;
+import android.net.ScoredNetwork;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.PersistableBundle;
 import android.os.RemoteException;
 import android.os.UserHandle;
@@ -48,10 +59,18 @@ import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.text.Annotation;
+import android.text.SpannableString;
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.text.format.DateUtils;
+import android.text.style.ClickableSpan;
+import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+
+import com.android.settingslib.HelpUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -292,6 +311,53 @@ class Utils {
         return scanResultsByKey;
     }
 
+    @Speed
+    static int getAverageSpeedFromScanResults(@NonNull WifiNetworkScoreCache scoreCache,
+            @NonNull List<ScanResult> scanResults) {
+        int count = 0;
+        int totalSpeed = 0;
+        for (ScanResult scanResult : scanResults) {
+            ScoredNetwork scoredNetwork = scoreCache.getScoredNetwork(scanResult);
+            if (scoredNetwork == null) {
+                continue;
+            }
+            @Speed int speed = scoredNetwork.calculateBadge(scanResult.level);
+            if (speed != SPEED_NONE) {
+                count++;
+                totalSpeed += speed;
+            }
+        }
+        if (count == 0) {
+            return SPEED_NONE;
+        } else {
+            return roundToClosestSpeedEnum(totalSpeed / count);
+        }
+    }
+
+    @Speed
+    static int getSpeedFromWifiInfo(@NonNull WifiNetworkScoreCache scoreCache,
+            @NonNull WifiInfo wifiInfo) {
+        ScoredNetwork scoredNetwork = scoreCache.getScoredNetwork(
+                NetworkKey.createFromWifiInfo(wifiInfo));
+        if (scoredNetwork == null) {
+            return SPEED_NONE;
+        }
+        return roundToClosestSpeedEnum(scoredNetwork.calculateBadge(wifiInfo.getRssi()));
+    }
+
+    @Speed
+    private static int roundToClosestSpeedEnum(int speed) {
+        if (speed < (SPEED_SLOW + SPEED_MODERATE) / 2) {
+            return SPEED_SLOW;
+        } else if (speed < (SPEED_MODERATE + SPEED_FAST) / 2) {
+            return SPEED_MODERATE;
+        } else if (speed < (SPEED_FAST + SPEED_VERY_FAST) / 2) {
+            return SPEED_FAST;
+        } else {
+            return SPEED_VERY_FAST;
+        }
+    }
+
     static CharSequence getAppLabel(Context context, String packageName) {
         try {
             ApplicationInfo appInfo = context.getPackageManager().getApplicationInfoAsUser(
@@ -307,8 +373,12 @@ class Utils {
 
     static CharSequence getAppLabelForSavedNetwork(@NonNull Context context,
             @NonNull WifiEntry wifiEntry) {
-        final WifiConfiguration config = wifiEntry.getWifiConfiguration();
-        if (context == null || wifiEntry == null || config == null) {
+        return getAppLabelForWifiConfiguration(context, wifiEntry.getWifiConfiguration());
+    }
+
+    static CharSequence getAppLabelForWifiConfiguration(@NonNull Context context,
+            @NonNull WifiConfiguration config) {
+        if (context == null || config == null) {
             return "";
         }
 
@@ -408,11 +478,24 @@ class Utils {
     }
 
     static String getSpeedDescription(@NonNull Context context, @NonNull WifiEntry wifiEntry) {
-        // TODO(b/70983952): Fill this method in.
         if (context == null || wifiEntry == null) {
             return "";
         }
-        return "";
+
+        @Speed int speed = wifiEntry.getSpeed();
+        switch (speed) {
+            case SPEED_VERY_FAST:
+                return context.getString(R.string.speed_label_very_fast);
+            case SPEED_FAST:
+                return context.getString(R.string.speed_label_fast);
+            case SPEED_MODERATE:
+                return context.getString(R.string.speed_label_okay);
+            case SPEED_SLOW:
+                return context.getString(R.string.speed_label_slow);
+            case SPEED_NONE:
+            default:
+                return "";
+        }
     }
 
     static String getVerboseLoggingDescription(@NonNull WifiEntry wifiEntry) {
@@ -432,7 +515,45 @@ class Utils {
             sj.add(scanResultsDescription);
         }
 
+        final String networkSelectionDescription = wifiEntry.getNetworkSelectionDescription();
+        if (!TextUtils.isEmpty(networkSelectionDescription)) {
+            sj.add(networkSelectionDescription);
+        }
+
         return sj.toString();
+    }
+
+    static String getNetworkSelectionDescription(WifiConfiguration wifiConfig) {
+        if (wifiConfig == null) {
+            return "";
+        }
+
+        StringBuilder description = new StringBuilder();
+        NetworkSelectionStatus networkSelectionStatus = wifiConfig.getNetworkSelectionStatus();
+
+        if (networkSelectionStatus.getNetworkSelectionStatus() != NETWORK_SELECTION_ENABLED) {
+            description.append(" (" + networkSelectionStatus.getNetworkStatusString());
+            if (networkSelectionStatus.getDisableTime() > 0) {
+                long now = System.currentTimeMillis();
+                long elapsedSeconds = (now - networkSelectionStatus.getDisableTime()) / 1000;
+                description.append(" " + DateUtils.formatElapsedTime(elapsedSeconds));
+            }
+            description.append(")");
+        }
+
+        int maxNetworkSelectionDisableReason =
+                NetworkSelectionStatus.getMaxNetworkSelectionDisableReason();
+        for (int reason = 0; reason <= maxNetworkSelectionDisableReason; reason++) {
+            int disableReasonCounter = networkSelectionStatus.getDisableReasonCounter(reason);
+            if (disableReasonCounter == 0) {
+                continue;
+            }
+            description.append(" ")
+                    .append(NetworkSelectionStatus.getNetworkSelectionDisableReasonString(reason))
+                    .append("=")
+                    .append(disableReasonCounter);
+        }
+        return description.toString();
     }
 
     static String getCurrentNetworkCapabilitiesInformation(Context context,
@@ -561,5 +682,47 @@ class Utils {
         }
         return (bundle.getInt(CarrierConfigManager.IMSI_KEY_AVAILABILITY_INT)
                 & TelephonyManager.KEY_TYPE_WLAN) != 0;
+    }
+
+    static CharSequence getImsiProtectionDescription(Context context,
+            @Nullable WifiConfiguration wifiConfig) {
+        if (context == null || wifiConfig == null || !isSimCredential(wifiConfig)) {
+            return "";
+        }
+
+        int subId = getSubIdForConfig(context, wifiConfig);
+        if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                || isImsiPrivacyProtectionProvided(context, subId)) {
+            return "";
+        }
+
+        // IMSI protection is not provided, return warning message.
+        return linkifyAnnotation(context, context.getText(R.string.imsi_protection_warning), "url",
+                context.getString(R.string.help_url_imsi_protection));
+    }
+
+    /** Find the annotation of specified id in rawText and linkify it with helpUriString. */
+    static CharSequence linkifyAnnotation(Context context, CharSequence rawText, String id,
+            String helpUriString) {
+        SpannableString spannableText = new SpannableString(rawText);
+        Annotation[] annotations = spannableText.getSpans(0, spannableText.length(),
+                Annotation.class);
+
+        for (Annotation annotation : annotations) {
+            if (TextUtils.equals(annotation.getValue(), id)) {
+                SpannableStringBuilder builder = new SpannableStringBuilder(spannableText);
+                ClickableSpan link = new ClickableSpan() {
+                    @Override
+                    public void onClick(View view) {
+                        view.startActivityForResult(HelpUtils.getHelpIntent(context, helpUriString,
+                                view.getClass().getName()), 0);
+                    }
+                };
+                builder.setSpan(link, spannableText.getSpanStart(annotation),
+                        spannableText.getSpanEnd(annotation), spannableText.getSpanFlags(link));
+                return builder;
+            }
+        }
+        return rawText;
     }
 }

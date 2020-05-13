@@ -17,10 +17,6 @@
 package com.android.server.wifi;
 
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OWE;
-import static android.net.wifi.WifiManager.WIFI_GENERATION_4;
-import static android.net.wifi.WifiManager.WIFI_GENERATION_5;
-import static android.net.wifi.WifiManager.WIFI_GENERATION_6;
-import static android.net.wifi.WifiManager.WIFI_GENERATION_DEFAULT;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
@@ -593,11 +589,7 @@ public class WifiNative {
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
-            if (mHostapdHal.isVendorHostapdHal()) {
-                if (!mHostapdHal.removeVendorAccessPoint(iface.name)) {
-                    Log.e(TAG, "Failed to remove vendor access point on " + iface);
-                }
-            } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
+            if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
             if (!mWifiCondManager.tearDownSoftApInterface(iface.name)) {
@@ -1329,6 +1321,16 @@ public class WifiNative {
         }
     }
 
+    /* Set interface UP. */
+    public boolean setInterfaceUp(String ifname) {
+        if (TextUtils.isEmpty(ifname))
+            return false;
+
+        mNetdWrapper.setInterfaceUp(ifname);
+
+        return isInterfaceUp(ifname);
+    }
+
     /**
      * Setup an interface for Bridge mode operations.
      *
@@ -1661,7 +1663,6 @@ public class WifiNative {
 
     private ArrayList<ScanDetail> convertNativeScanResults(List<NativeScanResult> nativeResults) {
         ArrayList<ScanDetail> results = new ArrayList<>();
-        WifiNl80211Manager.WifiGenerationCapabilities wifiGenerationCapa = mWifiCondManager.getWifiGenerationCapabilities();
         for (NativeScanResult result : nativeResults) {
             WifiSsid wifiSsid = WifiSsid.createFromByteArray(result.getSsid());
             MacAddress bssidMac = result.getBssid();
@@ -1674,15 +1675,6 @@ public class WifiNative {
                     InformationElementUtil.parseInformationElements(result.getInformationElements());
             InformationElementUtil.Capabilities capabilities =
                     new InformationElementUtil.Capabilities();
-            if (wifiGenerationCapa != null && result.getFrequencyMhz() < 3000) {
-                capabilities.reportHt = wifiGenerationCapa.htSupport2g;
-                capabilities.reportVht = wifiGenerationCapa.vhtSupport2g;
-                capabilities.reportHe = wifiGenerationCapa.staHeSupport2g;
-            } else if (wifiGenerationCapa != null) {
-                capabilities.reportHt = wifiGenerationCapa.htSupport5g;
-                capabilities.reportVht = wifiGenerationCapa.vhtSupport5g;
-                capabilities.reportHe = wifiGenerationCapa.staHeSupport5g;
-            }
 
             capabilities.from(ies, result.getCapabilities(), isEnhancedOpenSupported());
             String flags = capabilities.generateCapabilitiesString();
@@ -1769,7 +1761,6 @@ public class WifiNative {
      * @return true on success.
      */
     public boolean startPnoScan(@NonNull String ifaceName, PnoSettings pnoSettings) {
-        removeAllNetworks(ifaceName);
         return mWifiCondManager.startPnoScan(ifaceName, pnoSettings.toNativePnoSettings(),
                 Runnable::run,
                 new WifiNl80211Manager.PnoScanRequestCallback() {
@@ -1963,22 +1954,16 @@ public class WifiNative {
             return false;
         }
 
-        WifiNl80211Manager.WifiGenerationCapabilities wifiGenerationCapabilities = mWifiCondManager.getWifiGenerationCapabilities();
-        int wifiGeneration = WIFI_GENERATION_DEFAULT;
+        int wifiStandard = getDeviceWifiStandard(ifaceName);
 
-        if (wifiGenerationCapabilities != null) {
-            if (config.getBand() == SoftApConfiguration.BAND_2GHZ)
-                wifiGeneration = wifiGenerationCapabilities.sapHeSupport2g ? WIFI_GENERATION_6 :
-                                 (wifiGenerationCapabilities.vhtSupport2g ? WIFI_GENERATION_5 :
-                                 (wifiGenerationCapabilities.htSupport2g ? WIFI_GENERATION_4 : WIFI_GENERATION_DEFAULT));
-            else {
-                wifiGeneration = wifiGenerationCapabilities.sapHeSupport5g ? WIFI_GENERATION_6 :
-                                 (wifiGenerationCapabilities.vhtSupport5g ? WIFI_GENERATION_5 :
-                                 (wifiGenerationCapabilities.htSupport5g ? WIFI_GENERATION_4 : WIFI_GENERATION_DEFAULT));
-           }
+        if (config.getBand() == SoftApConfiguration.BAND_2GHZ &&
+                wifiStandard == ScanResult.WIFI_STANDARD_11AC) {
+            Log.i(TAG, ifaceName + ": Do not consider vendor extensions of VHT on 2.4 GHz as 11AC");
+            wifiStandard = ScanResult.WIFI_STANDARD_11N;
         }
 
-        WifiInjector.getInstance().getWifiApConfigStore().setWifiGeneration(wifiGeneration);
+        Log.i(TAG, ifaceName + ": SoftAp Wifi Standard: " + wifiStandard);
+        mWifiInjector.getWifiApConfigStore().setWifiStandard(wifiStandard);
 
         return true;
     }
@@ -2682,6 +2667,15 @@ public class WifiNative {
         mSupplicantStaIfaceHal.removeNetworkCachedData(networkId);
     }
 
+    /** Clear HAL cached data for |networkId| if MAC address is changed.
+     *
+     * @param networkId network id of the network to be checked.
+     * @param curMacAddress current MAC address
+     */
+    public void removeNetworkCachedDataIfNeeded(int networkId, MacAddress curMacAddress) {
+        mSupplicantStaIfaceHal.removeNetworkCachedDataIfNeeded(networkId, curMacAddress);
+    }
+
     /*
      * DPP
      */
@@ -3191,19 +3185,6 @@ public class WifiNative {
     }
 
     /**
-     * Set the MAC OUI during scanning.
-     * An OUI {Organizationally Unique Identifier} is a 24-bit number that
-     * uniquely identifies a vendor or manufacturer.
-     *
-     * @param ifaceName Name of the interface.
-     * @param oui OUI to set.
-     * @return true for success
-     */
-    public boolean setScanningMacOui(@NonNull String ifaceName, byte[] oui) {
-        return mWifiVendorHal.setScanningMacOui(ifaceName, oui);
-    }
-
-    /**
      * Get the APF (Android Packet Filter) capabilities of the device
      * @param ifaceName Name of the interface.
      */
@@ -3241,18 +3222,6 @@ public class WifiNative {
     public boolean setCountryCodeHal(@NonNull String ifaceName, String countryCode) {
         mHostapdHal.setCountryCode(countryCode);
         return mWifiVendorHal.setCountryCodeHal(ifaceName, countryCode);
-    }
-
-    /**
-     * Set hostapd parameters via QSAP command.
-     *
-     * This would call QSAP library APIs via hostapd hidl.
-     *
-     * @param cmd QSAP command.
-     * @return true on success, false otherwise.
-     */
-    public boolean setHostapdParams(@NonNull String cmd) {
-        return mHostapdHal.setHostapdParams(cmd);
     }
 
     //---------------------------------------------------------------------------------
@@ -4006,4 +3975,22 @@ public class WifiNative {
     public String dppConfiguratorGetKey(@NonNull String ifaceName, int id) {
         return mSupplicantStaIfaceHal.dppConfiguratorGetKey(ifaceName, id);
     }
+
+    public int getDeviceWifiStandard(@NonNull String ifaceName) {
+        DeviceWiphyCapabilities deviceCapabilities = getDeviceWiphyCapabilities(ifaceName);
+
+        if (deviceCapabilities == null)
+            return ScanResult.WIFI_STANDARD_LEGACY;
+        if (deviceCapabilities.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AX)
+                && mHostapdHal.is11axSupportEnabled())
+            return ScanResult.WIFI_STANDARD_11AX;
+        if (deviceCapabilities.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AC)
+                && mHostapdHal.is11acSupportEnabled())
+            return ScanResult.WIFI_STANDARD_11AC;
+        if (deviceCapabilities.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11N))
+            return ScanResult.WIFI_STANDARD_11N;
+
+        return ScanResult.WIFI_STANDARD_LEGACY;
+    }
+
 }

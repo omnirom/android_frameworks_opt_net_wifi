@@ -52,9 +52,9 @@ import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.MissingCounterTimerLockList;
-import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 import com.android.wifi.resources.R;
@@ -104,8 +104,7 @@ public class WifiConfigManager {
     public static final String PASSWORD_MASK = "*";
 
     /**
-     * Interface for other modules to listen to the network updated
-     * events.
+     * Interface for other modules to listen to the network updated events.
      * Note: Credentials are masked to avoid accidentally sending credentials outside the stack.
      * Use WifiConfigManager#getConfiguredNetworkWithPassword() to retrieve credentials.
      */
@@ -200,6 +199,9 @@ public class WifiConfigManager {
 
     @VisibleForTesting
     public static final int SCAN_RESULT_MISSING_COUNT_THRESHOLD = 1;
+    @VisibleForTesting
+    protected static final String ENHANCED_MAC_RANDOMIZATION_FEATURE_FORCE_ENABLE_FLAG =
+            "enhanced_mac_randomization_force_enabled";
 
     /**
      * General sorting algorithm of all networks for scanning purposes:
@@ -241,7 +243,7 @@ public class WifiConfigManager {
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
     private final WifiInjector mWifiInjector;
     private final MacAddressUtil mMacAddressUtil;
-    private final TelephonyUtil mTelephonyUtil;
+    private final WifiCarrierInfoManager mWifiCarrierInfoManager;
     private final WifiScoreCard mWifiScoreCard;
     // Keep order of network connection.
     private final LruConnectionTracker mLruConnectionTracker;
@@ -332,7 +334,7 @@ public class WifiConfigManager {
      */
     WifiConfigManager(
             Context context, Clock clock, UserManager userManager,
-            TelephonyUtil telephonyUtil, WifiKeyStore wifiKeyStore,
+            WifiCarrierInfoManager wifiCarrierInfoManager, WifiKeyStore wifiKeyStore,
             WifiConfigStore wifiConfigStore,
             WifiPermissionsUtil wifiPermissionsUtil,
             WifiPermissionsWrapper wifiPermissionsWrapper,
@@ -347,7 +349,7 @@ public class WifiConfigManager {
         mClock = clock;
         mUserManager = userManager;
         mBackupManagerProxy = new BackupManagerProxy();
-        mTelephonyUtil = telephonyUtil;
+        mWifiCarrierInfoManager = wifiCarrierInfoManager;
         mWifiKeyStore = wifiKeyStore;
         mWifiConfigStore = wifiConfigStore;
         mWifiPermissionsUtil = wifiPermissionsUtil;
@@ -424,6 +426,10 @@ public class WifiConfigManager {
         if (!isMacRandomizationSupported()
                 || config.macRandomizationSetting != WifiConfiguration.RANDOMIZATION_PERSISTENT) {
             return false;
+        }
+        if (mFrameworkFacade.getIntegerSetting(mContext,
+                ENHANCED_MAC_RANDOMIZATION_FEATURE_FORCE_ENABLE_FLAG, 0) == 1) {
+            return true;
         }
         if (config.getIpConfiguration().getIpAssignment() == IpConfiguration.IpAssignment.STATIC) {
             return false;
@@ -1199,6 +1205,25 @@ public class WifiConfigManager {
         return newInternalConfig;
     }
 
+    private void logUserActionEvents(WifiConfiguration before, WifiConfiguration after) {
+        // Logs changes in meteredOverride.
+        if (before.meteredOverride != after.meteredOverride) {
+            mWifiInjector.getWifiMetrics().logUserActionEvent(
+                    WifiMetrics.convertMeteredOverrideEnumToUserActionEventType(
+                            after.meteredOverride),
+                    after.networkId);
+        }
+
+        // Logs changes in macRandomizationSetting.
+        if (before.macRandomizationSetting != after.macRandomizationSetting) {
+            mWifiInjector.getWifiMetrics().logUserActionEvent(
+                    after.macRandomizationSetting == WifiConfiguration.RANDOMIZATION_NONE
+                            ? UserActionEvent.EVENT_CONFIGURE_MAC_RANDOMIZATION_OFF
+                            : UserActionEvent.EVENT_CONFIGURE_MAC_RANDOMIZATION_ON,
+                    after.networkId);
+        }
+    }
+
     /**
      * Add a network or update a network configuration to our database.
      * If the supplied networkId is INVALID_NETWORK_ID, we create a new empty
@@ -1243,6 +1268,10 @@ public class WifiConfigManager {
                 Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                         + config.getKey());
                 return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
+            }
+            if (mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)
+                    && !config.isPasspoint()) {
+                logUserActionEvents(existingInternalConfig, config);
             }
             newInternalConfig =
                     updateExistingInternalWifiConfigurationFromExternal(
@@ -2691,12 +2720,13 @@ public class WifiConfigManager {
      * @param network Input can be SSID or FQDN. And caller must ensure that the SSID passed thru
      *                this API matched the WifiConfiguration.SSID rules, and thus be surrounded by
      *                quotes.
+     *        uid     UID of the calling process.
      */
-    public void userTemporarilyDisabledNetwork(String network) {
+    public void userTemporarilyDisabledNetwork(String network, int uid) {
         mUserTemporarilyDisabledList.add(network, USER_DISCONNECT_NETWORK_BLOCK_EXPIRY_MS);
-        Log.d(TAG, "Temporarily disable network: " + network + " num="
+        Log.d(TAG, "Temporarily disable network: " + network + " uid=" + uid + " num="
                 + mUserTemporarilyDisabledList.size());
-        removeUserChoiceFromDisabledNetwork(network);
+        removeUserChoiceFromDisabledNetwork(network, uid);
     }
 
     /**
@@ -2710,9 +2740,13 @@ public class WifiConfigManager {
     }
 
     private void removeUserChoiceFromDisabledNetwork(
-            @NonNull String network) {
+            @NonNull String network, int uid) {
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
             if (TextUtils.equals(config.SSID, network) || TextUtils.equals(config.FQDN, network)) {
+                if (mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
+                    mWifiInjector.getWifiMetrics().logUserActionEvent(
+                            UserActionEvent.EVENT_DISCONNECT_WIFI, config.networkId);
+                }
                 removeConnectChoiceFromAllNetworks(config.getKey());
             }
         }
@@ -2734,6 +2768,7 @@ public class WifiConfigManager {
             network = configuration.SSID;
         }
         mUserTemporarilyDisabledList.remove(network);
+        mWifiInjector.getBssidBlocklistMonitor().clearBssidBlocklistForSsid(configuration.SSID);
         Log.d(TAG, "Enable disabled network: " + network + " num="
                 + mUserTemporarilyDisabledList.size());
     }
@@ -2757,7 +2792,7 @@ public class WifiConfigManager {
             }
             if (config.enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.PEAP) {
                 Pair<String, String> currentIdentity =
-                        mTelephonyUtil.getSimIdentity(config);
+                        mWifiCarrierInfoManager.getSimIdentity(config);
                 if (mVerboseLoggingEnabled) {
                     Log.d(TAG, "New identity for config " + config + ": " + currentIdentity);
                 }
@@ -2772,7 +2807,7 @@ public class WifiConfigManager {
             } else {
                 // reset identity as well: supplicant will ask us for it
                 config.enterpriseConfig.setIdentity("");
-                if (!TelephonyUtil.isAnonymousAtRealmIdentity(
+                if (!WifiCarrierInfoManager.isAnonymousAtRealmIdentity(
                         config.enterpriseConfig.getAnonymousIdentity())) {
                     config.enterpriseConfig.setAnonymousIdentity("");
                 }
@@ -3225,7 +3260,7 @@ public class WifiConfigManager {
         pw.println("WifiConfigManager - PNO scan recency sorting enabled = "
                 + mContext.getResources().getBoolean(R.bool.config_wifiPnoRecencySortingEnabled));
         mWifiConfigStore.dump(fd, pw, args);
-        mTelephonyUtil.dump(fd, pw, args);
+        mWifiCarrierInfoManager.dump(fd, pw, args);
     }
 
     /**
@@ -3254,7 +3289,7 @@ public class WifiConfigManager {
     }
 
     /**
-     * Set the network update event listener
+     * Add the network update event listener
      */
     public void addOnNetworkUpdateListener(OnNetworkUpdateListener listener) {
         mListeners.add(listener);

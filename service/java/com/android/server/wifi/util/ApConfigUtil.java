@@ -176,6 +176,8 @@ public class ApConfigUtil {
                 return SoftApConfiguration.BAND_5GHZ;
             case WifiConfiguration.AP_BAND_ANY:
                 return SoftApConfiguration.BAND_2GHZ | SoftApConfiguration.BAND_5GHZ;
+            case WifiConfiguration.AP_BAND_DUAL:
+                return SoftApConfiguration.BAND_DUAL;
             default:
                 return SoftApConfiguration.BAND_2GHZ;
         }
@@ -185,7 +187,8 @@ public class ApConfigUtil {
      * Checks if band is a valid combination of {link  SoftApConfiguration#BandType} values
      */
     public static boolean isBandValid(@BandType int band) {
-        return ((band != 0) && ((band & ~SoftApConfiguration.BAND_ANY) == 0));
+        return ((band != 0) && (((band & ~SoftApConfiguration.BAND_ANY) == 0)
+                                || (band == SoftApConfiguration.BAND_DUAL)));
     }
 
     /**
@@ -436,6 +439,9 @@ public class ApConfigUtil {
                 case WifiConfiguration.AP_BAND_5GHZ:
                     band = SoftApConfiguration.BAND_5GHZ;
                     break;
+                case WifiConfiguration.AP_BAND_DUAL:
+                    band = SoftApConfiguration.BAND_DUAL;
+                    break;
                 default:
                     // WifiConfiguration.AP_BAND_ANY means only 2GHz and 5GHz bands
                     band = SoftApConfiguration.BAND_2GHZ | SoftApConfiguration.BAND_5GHZ;
@@ -479,6 +485,11 @@ public class ApConfigUtil {
             Log.d(TAG, "Update Softap capability, add SAE feature support");
             features |= SoftApCapability.SOFTAP_FEATURE_WPA3_SAE;
         }
+
+        if (isWpa3OweSupported(context)) {
+            Log.d(TAG, "Update Softap capability, add OWE feature support");
+            features |= SoftApCapability.SOFTAP_FEATURE_WPA3_OWE;
+        }
         SoftApCapability capability = new SoftApCapability(features);
         int hardwareSupportedMaxClient = context.getResources().getInteger(
                 R.integer.config_wifiHardwareSoftapMaxClientCount);
@@ -510,6 +521,17 @@ public class ApConfigUtil {
     public static boolean isWpa3SaeSupported(@NonNull Context context) {
         return context.getResources().getBoolean(
                 R.bool.config_wifi_softap_sae_supported);
+    }
+
+    /**
+     * Helper function to get OWE support or not.
+     *
+     * @param context the caller context used to get value from resource file.
+     * @return true if supported, false otherwise.
+     */
+    public static boolean isWpa3OweSupported(@NonNull Context context) {
+        return context.getResources().getBoolean(
+                R.bool.config_vendor_wifi_softap_owe_supported);
     }
 
     /**

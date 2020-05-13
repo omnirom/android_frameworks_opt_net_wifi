@@ -36,6 +36,13 @@
            be checked via NL80211 interface -->
     <bool translatable="false" name="config_wifi11axSupportOverride">false</bool>
 
+    <!-- Indicates whether to enable overriding the max number of spatial stream supported by the device
+         If true, config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideValue
+         will be used to override the max number of spatial stream supported by the device.
+         If false, it will be left to WifiCond to derive the value from NL80211 interface -->
+    <bool translatable="false" name="config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideEnable">true</bool>
+    <integer translatable="false" name="config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideValue">2</integer>
+
     <!-- Boolean indicating whether 802.11r Fast BSS Transition is enabled on this platform -->
     <bool translatable="false" name="config_wifi_fast_bss_transition_enabled">false</bool>
 
@@ -89,8 +96,11 @@
          These values can be reduced to allow overlapping between categories. -->
     <integer translatable="false" name="config_wifiFrameworkSavedNetworkBonus">500</integer>
     <integer translatable="false" name="config_wifiFrameworkUnmeteredNetworkBonus">1000</integer>
-
-    <integer translatable="false" name="config_wifiFrameworkCurrentNetworkBonus">20</integer>
+    <!-- Integer specifying the minimum bonus for current network -->
+    <integer translatable="false" name="config_wifiFrameworkCurrentNetworkBonusMin">20</integer>
+    <!-- Integer specifying the percent bonus for current network. The percent is applied to
+         the sum of rssi base score and throughput score-->
+    <integer translatable="false" name="config_wifiFrameworkCurrentNetworkBonusPercent">20</integer>
     <integer translatable="false" name="config_wifiFrameworkSecureNetworkBonus">10</integer>
 
     <!-- The duration in minutes to strongly favor the last-selected network over other options. -->
@@ -126,8 +136,6 @@
 
     <!-- Integer indicating maximum hardware supported client number of soft ap -->
     <integer translatable="false" name="config_wifiHardwareSoftapMaxClientCount">16</integer>
-
-    <string  translatable="false" name="config_wifi_random_mac_oui">DA-A1-19</string>
 
     <!-- List of allowed channels in 2GHz band for softap. If the device doesn't want to restrict
          channels this should be empty. Values is a comma separated channel string and/or channel
@@ -190,6 +198,9 @@
 
     <!-- Wifi driver supports WPA3 Simultaneous Authentication of Equals (WPA3-SAE) for softap -->
     <bool translatable="false" name="config_wifi_softap_sae_supported">false</bool>
+
+    <!-- Wifi driver supports WPA3 Simultaneous Authentication of Equals (WPA3-OWE) for softap -->
+    <bool translatable="false" name="config_vendor_wifi_softap_owe_supported">false</bool>
 
     <!-- Wifi driver supports IEEE80211AC for softap -->
     <bool translatable="false" name="config_wifi_softap_ieee80211ac_supported">false</bool>
@@ -403,6 +414,16 @@
     <!-- Enable WPA2 to WPA3 auto-upgrade offload to capable Driver/Firmware -->
     <bool translatable="false" name="config_wifiSaeUpgradeOffloadEnabled">false</bool>
 
+    <!-- Number of self recoveries to be attempted per hour. Any fatal errors beyond this will
+         cause the wifi stack to turn wifi off and wait for user input.
+         Set to 0 to turn off recovery attempts and always turn off wifi on failures -->
+    <integer translatable="false" name="config_wifiMaxNativeFailureSelfRecoveryPerHour">2</integer>
+    <!-- Ignore the open saved network if from carrier provisioning app, there is a same open suggestion and a secure suggestion from same carrier available -->
+    <bool translatable="false" name="config_wifiIgnoreOpenSavedNetworkWhenSecureSuggestionAvailable">true</bool>
+
     <!-- Do not translate. Default bridge interface name for Dual SAP tethering -->
     <string name="config_vendor_wifi_tether_bridge_interface_name" translatable="false">wifi_br0</string>
+
+    <!-- Boolean to provide support to keep wifi5 symbol for 8SS supported device and 11ax AP -->
+    <bool translatable="false" name="config_vendorWifi11axReadySupport">true</bool>
 </resources>

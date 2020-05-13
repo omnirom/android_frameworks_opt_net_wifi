@@ -596,6 +596,7 @@ public class WifiNetworkSelectorTest extends WifiBaseTest {
         verify(mWifiConfigManager, times(savedConfigs.length)).tryEnableNetwork(anyInt());
         verify(mWifiConfigManager, times(savedConfigs.length))
                 .clearNetworkCandidateScanResult(anyInt());
+        verify(mWifiMetrics, atLeastOnce()).addMeteredStat(any(), anyBoolean());
     }
 
     /**
@@ -1436,6 +1437,42 @@ public class WifiNetworkSelectorTest extends WifiBaseTest {
         verify(mWifiConfigManager).addOrUpdateNetwork(existingConfig,
                 existingConfig.creatorUid, existingConfig.creatorName);
         assertEquals(ssids[0], candidate.SSID);
+    }
+
+    @Test
+    public void testIsFromCarrierOrPrivilegedApp() {
+        String[] ssids = {"\"test1\"", "\"test2\""};
+        String[] bssids = {"6c:f3:7f:ae:8c:f3", "6c:f3:7f:ae:8c:f4"};
+        int[] freqs = {2437, 5180};
+        String[] caps = {"[WPA2-EAP-CCMP][ESS]", "[WPA2-EAP-CCMP][ESS]"};
+        int[] levels = {mThresholdMinimumRssi2G + 1, mThresholdMinimumRssi5G + 1};
+        int[] securities = {SECURITY_EAP, SECURITY_EAP};
+        HashSet<String> blacklist = new HashSet<>();
+        ScanDetailsAndWifiConfigs scanDetailsAndConfigs =
+                WifiNetworkSelectorTestUtil.setupScanDetailsAndConfigStore(ssids, bssids,
+                        freqs, caps, levels, securities, mWifiConfigManager, mClock);
+        List<ScanDetail> scanDetails = scanDetailsAndConfigs.getScanDetails();
+        WifiConfiguration[] configs = scanDetailsAndConfigs.getWifiConfigs();
+        // Mark one of the networks as carrier privileged.
+        configs[0].fromWifiNetworkSuggestion = true;
+        configs[0].carrierId = 5;
+        mWifiNetworkSelector.registerNetworkNominator(
+                new AllNetworkNominator(scanDetailsAndConfigs));
+        List<WifiCandidates.Candidate> candidates = mWifiNetworkSelector.getCandidatesFromScan(
+                scanDetails, blacklist, mWifiInfo, false, true, true);
+        // Expect one privileged and one regular candidate.
+        assertEquals(2, candidates.size());
+        boolean foundCarrierOrPrivilegedAppCandidate = false;
+        boolean foundNotCarrierOrPrivilegedAppCandidate = false;
+        for (WifiCandidates.Candidate candidate : candidates) {
+            if (candidate.isCarrierOrPrivileged()) {
+                foundCarrierOrPrivilegedAppCandidate = true;
+            } else {
+                foundNotCarrierOrPrivilegedAppCandidate = true;
+            }
+        }
+        assertTrue(foundCarrierOrPrivilegedAppCandidate);
+        assertTrue(foundNotCarrierOrPrivilegedAppCandidate);
     }
 
     /**

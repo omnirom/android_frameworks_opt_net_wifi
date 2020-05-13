@@ -17,7 +17,7 @@
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <string name="summary_separator" msgid="6533720408587140819">" / "</string>
-    <string name="auto_connect_disable" msgid="1078319396240632542">"\'Automatisch verbinding maken\' is uitgeschakeld"</string>
+    <string name="auto_connect_disable" msgid="1078319396240632542">"\'Automatisch verbinding maken\' staat uit"</string>
     <string name="saved_network" msgid="6241977554502802914">"Opgeslagen door \'<xliff:g id="NAME">%1$s</xliff:g>\'"</string>
     <string name="wifi_no_internet_no_reconnect" msgid="3089980800841926268">"Er wordt niet automatisch verbinding gemaakt"</string>
     <string name="wifi_no_internet" msgid="4461212237521310895">"Geen internettoegang"</string>
@@ -46,5 +46,11 @@
     <string name="osu_completing_sign_up" msgid="7188493241442946231">"Aanmelding voltooien…"</string>
     <string name="osu_sign_up_failed" msgid="2725057866968590279">"Kan aanmelding niet voltooien. Tik om het opnieuw te proberen."</string>
     <string name="osu_sign_up_complete" msgid="7013805426618985953">"Aanmelding voltooid. Verbinden…"</string>
-    <string name="imsi_protection_warning" msgid="3771878632537231149">"Dit netwerk ontvangt een unieke ID die kan worden gebruikt om de apparaatlocatie bij te houden.\n"<annotation id="url">"Meer informatie"</annotation></string>
+    <string name="imsi_protection_warning" msgid="3207104049473134195">"Dit netwerk ontvangt een unieke ID die kan worden gebruikt om de apparaatlocatie bij te houden. "<annotation id="url">"Meer informatie"</annotation></string>
+    <string name="speed_label_very_slow" msgid="2401582671941367179">"Zeer langzaam"</string>
+    <string name="speed_label_slow" msgid="8410385703344502127">"Langzaam"</string>
+    <string name="speed_label_okay" msgid="3741857805086997968">"Redelijk"</string>
+    <string name="speed_label_medium" msgid="3175703848952862009">"Gemiddeld"</string>
+    <string name="speed_label_fast" msgid="8344116097613544322">"Snel"</string>
+    <string name="speed_label_very_fast" msgid="1595806641512447877">"Zeer snel"</string>
 </resources>

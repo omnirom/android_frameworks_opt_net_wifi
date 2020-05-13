@@ -29,6 +29,8 @@ import static android.net.wifi.WifiManager.EXTRA_ICON;
 import static android.net.wifi.WifiManager.EXTRA_SUBSCRIPTION_REMEDIATION_METHOD;
 import static android.net.wifi.WifiManager.EXTRA_URL;
 
+import static java.security.cert.PKIXReason.NO_TRUST_ANCHOR;
+
 import android.annotation.NonNull;
 import android.app.AppOpsManager;
 import android.content.Context;
@@ -52,6 +54,7 @@ import android.util.Pair;
 
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.NetworkUpdateResult;
+import com.android.server.wifi.WifiCarrierInfoManager;
 import com.android.server.wifi.WifiConfigManager;
 import com.android.server.wifi.WifiConfigStore;
 import com.android.server.wifi.WifiInjector;
@@ -62,10 +65,19 @@ import com.android.server.wifi.hotspot2.anqp.ANQPElement;
 import com.android.server.wifi.hotspot2.anqp.Constants;
 import com.android.server.wifi.hotspot2.anqp.HSOsuProvidersElement;
 import com.android.server.wifi.hotspot2.anqp.OsuProviderInfo;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.InformationElementUtil;
-import com.android.server.wifi.util.TelephonyUtil;
 
+import java.io.IOException;
 import java.io.PrintWriter;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.cert.CertPath;
+import java.security.cert.CertPathValidator;
+import java.security.cert.CertPathValidatorException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.PKIXParameters;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -118,7 +130,7 @@ public class PasspointManager {
     private final WifiMetrics mWifiMetrics;
     private final PasspointProvisioner mPasspointProvisioner;
     private final AppOpsManager mAppOps;
-    private final TelephonyUtil mTelephonyUtil;
+    private final WifiCarrierInfoManager mWifiCarrierInfoManager;
 
     /**
      * Map of package name of an app to the app ops changed listener for the app.
@@ -331,7 +343,7 @@ public class PasspointManager {
             PasspointObjectFactory objectFactory, WifiConfigManager wifiConfigManager,
             WifiConfigStore wifiConfigStore,
             WifiMetrics wifiMetrics,
-            TelephonyUtil telephonyUtil) {
+            WifiCarrierInfoManager wifiCarrierInfoManager) {
         mPasspointEventHandler = objectFactory.makePasspointEventHandler(wifiNative,
                 new CallbackHandler(context));
         mWifiInjector = wifiInjector;
@@ -344,9 +356,9 @@ public class PasspointManager {
         mWifiConfigManager = wifiConfigManager;
         mWifiMetrics = wifiMetrics;
         mProviderIndex = 0;
-        mTelephonyUtil = telephonyUtil;
+        mWifiCarrierInfoManager = wifiCarrierInfoManager;
         wifiConfigStore.registerStoreData(objectFactory.makePasspointConfigUserStoreData(
-                mKeyStore, mTelephonyUtil, new UserDataSourceHandler()));
+                mKeyStore, mWifiCarrierInfoManager, new UserDataSourceHandler()));
         wifiConfigStore.registerStoreData(objectFactory.makePasspointConfigSharedStoreData(
                 new SharedDataSourceHandler()));
         mPasspointProvisioner = objectFactory.makePasspointProvisioner(context, wifiNative,
@@ -433,11 +445,39 @@ public class PasspointManager {
             return false;
         }
 
-        mTelephonyUtil.tryUpdateCarrierIdForPasspoint(config);
+        mWifiCarrierInfoManager.tryUpdateCarrierIdForPasspoint(config);
         // Create a provider and install the necessary certificates and keys.
         PasspointProvider newProvider = mObjectFactory.makePasspointProvider(config, mKeyStore,
-                mTelephonyUtil, mProviderIndex++, uid, packageName, isFromSuggestion);
+                mWifiCarrierInfoManager, mProviderIndex++, uid, packageName, isFromSuggestion);
         newProvider.setTrusted(isTrusted);
+
+        boolean metricsNoRootCa = false;
+        boolean metricsSelfSignedRootCa = false;
+        boolean metricsSubscriptionExpiration = false;
+
+        if (config.getCredential().getUserCredential() != null
+                || config.getCredential().getCertCredential() != null) {
+            X509Certificate[] x509Certificates = config.getCredential().getCaCertificates();
+            if (x509Certificates == null) {
+                metricsNoRootCa = true;
+            } else {
+                try {
+                    for (X509Certificate certificate : x509Certificates) {
+                        verifyCaCert(certificate);
+                    }
+                } catch (CertPathValidatorException e) {
+                    // A self signed Root CA will fail path validation checks with NO_TRUST_ANCHOR
+                    if (e.getReason() == NO_TRUST_ANCHOR) {
+                        metricsSelfSignedRootCa = true;
+                    }
+                } catch (Exception e) {
+                    // Other exceptions, fall through, will be handled below
+                }
+            }
+        }
+        if (config.getSubscriptionExpirationTimeMillis() != Long.MIN_VALUE) {
+            metricsSubscriptionExpiration = true;
+        }
 
         if (!newProvider.installCertsAndKeys()) {
             Log.e(TAG, "Failed to install certificates and keys to keystore");
@@ -477,6 +517,15 @@ public class PasspointManager {
         Log.d(TAG, "Added/updated Passpoint configuration for FQDN: "
                 + config.getHomeSp().getFqdn() + " with unique ID: " + config.getUniqueId()
                 + " by UID: " + uid);
+        if (metricsNoRootCa) {
+            mWifiMetrics.incrementNumPasspointProviderWithNoRootCa();
+        }
+        if (metricsSelfSignedRootCa) {
+            mWifiMetrics.incrementNumPasspointProviderWithSelfSignedRootCa();
+        }
+        if (metricsSubscriptionExpiration) {
+            mWifiMetrics.incrementNumPasspointProviderWithSubscriptionExpiration();
+        }
         mWifiMetrics.incrementNumPasspointProviderInstallSuccess();
         return true;
     }
@@ -580,7 +629,12 @@ public class PasspointManager {
                 Log.e(TAG, "Config doesn't exist");
                 return false;
             }
-            provider.setAutojoinEnabled(enableAutojoin);
+            if (provider.setAutojoinEnabled(enableAutojoin)) {
+                mWifiMetrics.logUserActionEvent(enableAutojoin
+                                ? UserActionEvent.EVENT_CONFIGURE_AUTO_CONNECT_ON
+                                : UserActionEvent.EVENT_CONFIGURE_AUTO_CONNECT_OFF,
+                        provider.isFromSuggestion(), true);
+            }
             mWifiConfigManager.saveToStore(true);
             return true;
         }
@@ -591,7 +645,12 @@ public class PasspointManager {
         // FQDN provided, loop through all profiles with matching FQDN
         for (PasspointProvider provider : passpointProviders) {
             if (TextUtils.equals(provider.getConfig().getHomeSp().getFqdn(), fqdn)) {
-                provider.setAutojoinEnabled(enableAutojoin);
+                if (provider.setAutojoinEnabled(enableAutojoin)) {
+                    mWifiMetrics.logUserActionEvent(enableAutojoin
+                                    ? UserActionEvent.EVENT_CONFIGURE_AUTO_CONNECT_ON
+                                    : UserActionEvent.EVENT_CONFIGURE_AUTO_CONNECT_OFF,
+                            provider.isFromSuggestion(), true);
+                }
                 found = true;
             }
         }
@@ -616,6 +675,10 @@ public class PasspointManager {
             if (TextUtils.equals(provider.getConfig().getHomeSp().getFqdn(), fqdn)) {
                 boolean settingChanged = provider.setMacRandomizationEnabled(enable);
                 if (settingChanged) {
+                    mWifiMetrics.logUserActionEvent(enable
+                                    ? UserActionEvent.EVENT_CONFIGURE_MAC_RANDOMIZATION_ON
+                                    : UserActionEvent.EVENT_CONFIGURE_MAC_RANDOMIZATION_OFF,
+                            provider.isFromSuggestion(), true);
                     mWifiConfigManager.removePasspointConfiguredNetwork(
                             provider.getWifiConfig().getKey());
                 }
@@ -641,7 +704,12 @@ public class PasspointManager {
         // Loop through all profiles with matching FQDN
         for (PasspointProvider provider : passpointProviders) {
             if (TextUtils.equals(provider.getConfig().getHomeSp().getFqdn(), fqdn)) {
-                provider.setMeteredOverride(meteredOverride);
+                if (provider.setMeteredOverride(meteredOverride)) {
+                    mWifiMetrics.logUserActionEvent(
+                            WifiMetrics.convertMeteredOverrideEnumToUserActionEventType(
+                                    meteredOverride),
+                            provider.isFromSuggestion(), true);
+                }
                 found = true;
             }
         }
@@ -1171,7 +1239,7 @@ public class PasspointManager {
         // Note that for legacy configuration, the alias for client private key is the same as the
         // alias for the client certificate.
         PasspointProvider provider = new PasspointProvider(passpointConfig, mKeyStore,
-                mTelephonyUtil,
+                mWifiCarrierInfoManager,
                 mProviderIndex++, wifiConfig.creatorUid, null, false,
                 Arrays.asList(enterpriseConfig.getCaCertificateAlias()),
                 enterpriseConfig.getClientCertificateAlias(), null, false, false);
@@ -1226,7 +1294,7 @@ public class PasspointManager {
             @NonNull PasspointConfiguration passpointConfiguration,
             @NonNull List<ScanResult> scanResults) {
         PasspointProvider provider = mObjectFactory.makePasspointProvider(passpointConfiguration,
-                null, mTelephonyUtil, 0, 0, null, false);
+                null, mWifiCarrierInfoManager, 0, 0, null, false);
         List<ScanResult> filteredScanResults = new ArrayList<>();
         for (ScanResult scanResult : scanResults) {
             PasspointMatch matchInfo = provider.match(getANQPElements(scanResult),
@@ -1255,5 +1323,26 @@ public class PasspointManager {
     public void clearAnqpRequestsAndFlushCache() {
         mAnqpRequestManager.clear();
         mAnqpCache.flush();
+    }
+
+    /**
+     * Verify that the given certificate is trusted by one of the pre-loaded public CAs in the
+     * system key store.
+     *
+     * @param caCert The CA Certificate to verify
+     * @throws CertPathValidatorException
+     * @throws Exception
+     */
+    private void verifyCaCert(X509Certificate caCert)
+            throws GeneralSecurityException, IOException {
+        CertificateFactory factory = CertificateFactory.getInstance("X.509");
+        CertPathValidator validator =
+                CertPathValidator.getInstance(CertPathValidator.getDefaultType());
+        CertPath path = factory.generateCertPath(Arrays.asList(caCert));
+        KeyStore ks = KeyStore.getInstance("AndroidCAStore");
+        ks.load(null, null);
+        PKIXParameters params = new PKIXParameters(ks);
+        params.setRevocationEnabled(false);
+        validator.validate(path, params);
     }
 }

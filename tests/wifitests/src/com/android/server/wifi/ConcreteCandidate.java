@@ -33,11 +33,14 @@ public final class ConcreteCandidate implements WifiCandidates.Candidate {
     private boolean mIsTrusted = true;
     private boolean mCarrierOrPrivileged;
     private boolean mIsMetered;
+    private boolean mHasNoInternetAccess;
+    private boolean mIsNoInternetAccessExpected;
     private int mNominatorId = -1;
     private double mLastSelectionWeight;
     private int mScanRssi = -127;
     private int mFrequency = -1;
     private int mPredictedThroughputMbps = 0;
+    private int mEstimatedPercentInternetAvailability = 50;
 
     private final Map<WifiScoreCardProto.Event, WifiScoreCardProto.Signal>
             mEventStatisticsMap = new ArrayMap<>();
@@ -56,11 +59,15 @@ public final class ConcreteCandidate implements WifiCandidates.Candidate {
         mIsTrusted = candidate.isTrusted();
         mCarrierOrPrivileged = candidate.isCarrierOrPrivileged();
         mIsMetered = candidate.isMetered();
+        mHasNoInternetAccess = candidate.hasNoInternetAccess();
+        mIsNoInternetAccessExpected = candidate.isNoInternetAccessExpected();
         mNominatorId = candidate.getNominatorId();
         mLastSelectionWeight = candidate.getLastSelectionWeight();
         mScanRssi = candidate.getScanRssi();
         mFrequency = candidate.getFrequency();
         mPredictedThroughputMbps = candidate.getPredictedThroughputMbps();
+        mEstimatedPercentInternetAvailability = candidate
+                .getEstimatedPercentInternetAvailability();
         for (WifiScoreCardProto.Event event : WifiScoreCardProto.Event.values()) {
             WifiScoreCardProto.Signal signal = candidate.getEventStatistics(event);
             if (signal != null) {
@@ -149,6 +156,26 @@ public final class ConcreteCandidate implements WifiCandidates.Candidate {
         return mIsMetered;
     }
 
+    public ConcreteCandidate setNoInternetAccess(boolean hasNoInternetAccess) {
+        mHasNoInternetAccess = hasNoInternetAccess;
+        return this;
+    }
+
+    @Override
+    public boolean hasNoInternetAccess() {
+        return mHasNoInternetAccess;
+    }
+
+    public ConcreteCandidate setNoInternetAccessExpected(boolean isNoInternetAccessExpected) {
+        mIsNoInternetAccessExpected = isNoInternetAccessExpected;
+        return this;
+    }
+
+    @Override
+    public boolean isNoInternetAccessExpected() {
+        return mIsNoInternetAccessExpected;
+    }
+
     public ConcreteCandidate setNominatorId(int nominatorId) {
         mNominatorId = nominatorId;
         return this;
@@ -217,6 +244,16 @@ public final class ConcreteCandidate implements WifiCandidates.Candidate {
     @Override
     public int getPredictedThroughputMbps() {
         return mPredictedThroughputMbps;
+    }
+
+    public ConcreteCandidate setEstimatedPercentInternetAvailability(int percent) {
+        mEstimatedPercentInternetAvailability = percent;
+        return this;
+    }
+
+    @Override
+    public int getEstimatedPercentInternetAvailability() {
+        return mEstimatedPercentInternetAvailability;
     }
 
     public ConcreteCandidate setEventStatistics(

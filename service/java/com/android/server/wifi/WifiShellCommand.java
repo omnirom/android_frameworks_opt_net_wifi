@@ -29,6 +29,8 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.wifi.IActionListener;
+import android.net.wifi.IScoreUpdateObserver;
+import android.net.wifi.IWifiConnectedNetworkScorer;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SupplicantState;
@@ -48,6 +50,7 @@ import android.util.Pair;
 
 import com.android.server.wifi.util.ApConfigUtil;
 import com.android.server.wifi.util.ArrayUtils;
+import com.android.server.wifi.util.GeneralUtil;
 import com.android.server.wifi.util.ScanResultUtil;
 
 import java.io.PrintWriter;
@@ -90,6 +93,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
             "list-suggestions",
             "remove-suggestion",
             "remove-all-suggestions",
+            "reset-connected-score",
+            "set-connected-score",
             "set-scan-always-available",
             "set-verbose-logging",
             "set-wifi-enabled",
@@ -111,6 +116,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     private final WifiServiceImpl mWifiService;
     private final Context mContext;
     private final ConnectivityManager mConnectivityManager;
+    private final WifiCarrierInfoManager mWifiCarrierInfoManager;
 
     WifiShellCommand(WifiInjector wifiInjector, WifiServiceImpl wifiService, Context context) {
         mClientModeImpl = wifiInjector.getClientModeImpl();
@@ -124,6 +130,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         mWifiService = wifiService;
         mContext = context;
         mConnectivityManager = context.getSystemService(ConnectivityManager.class);
+        mWifiCarrierInfoManager = wifiInjector.getWifiCarrierInfoManager();
     }
 
     @Override
@@ -216,7 +223,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                         return -1;
                     }
                     boolean approved = getNextArgRequiredTrueOrFalse("yes", "no");
-                    mWifiNetworkSuggestionsManager
+                    mWifiCarrierInfoManager
                             .setHasUserApprovedImsiPrivacyExemptionForCarrier(approved, carrierId);
                     return 0;
                 }
@@ -231,7 +238,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                 + "- 'carrierId' must be an Integer");
                         return -1;
                     }
-                    boolean hasUserApproved = mWifiNetworkSuggestionsManager
+                    boolean hasUserApproved = mWifiCarrierInfoManager
                             .hasUserApprovedImsiPrivacyExemptionForCarrier(carrierId);
                     pw.println(hasUserApproved ? "yes" : "no");
                     return 0;
@@ -247,7 +254,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                 + "- 'carrierId' must be an Integer");
                         return -1;
                     }
-                    mWifiNetworkSuggestionsManager.clearImsiPrivacyExemptionForCarrier(carrierId);
+                    mWifiCarrierInfoManager.clearImsiPrivacyExemptionForCarrier(carrierId);
                     return 0;
                 }
                 case "network-requests-remove-user-approved-access-points": {
@@ -405,11 +412,12 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                             countDownLatch.countDown();
                         }
                     };
+                    WifiConfiguration config = buildWifiConfiguration(pw);
                     mWifiService.connect(
-                            buildWifiConfiguration(pw), -1, new Binder(), actionListener,
-                            actionListener.hashCode());
+                            config, -1, new Binder(), actionListener, actionListener.hashCode());
                     // wait for status.
                     countDownLatch.await(500, TimeUnit.MILLISECONDS);
+                    setAutoJoin(pw, config.SSID, config.allowAutojoin);
                     break;
                 }
                 case "add-network": {
@@ -427,11 +435,12 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                             countDownLatch.countDown();
                         }
                     };
+                    WifiConfiguration config = buildWifiConfiguration(pw);
                     mWifiService.save(
-                            buildWifiConfiguration(pw), new Binder(), actionListener,
-                            actionListener.hashCode());
+                            config, new Binder(), actionListener, actionListener.hashCode());
                     // wait for status.
                     countDownLatch.await(500, TimeUnit.MILLISECONDS);
+                    setAutoJoin(pw, config.SSID, config.allowAutojoin);
                     break;
                 }
                 case "forget-network": {
@@ -470,9 +479,13 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                             pw.println("Wifi is connected to " + info.getSSID());
                             pw.println("WifiInfo: " + info);
                             Network network = mWifiService.getCurrentNetwork();
-                            NetworkCapabilities capabilities =
-                                    mConnectivityManager.getNetworkCapabilities(network);
-                            pw.println("NetworkCapabilities: " + capabilities);
+                            try {
+                                NetworkCapabilities capabilities =
+                                        mConnectivityManager.getNetworkCapabilities(network);
+                                pw.println("NetworkCapabilities: " + capabilities);
+                            } catch (SecurityException e) {
+                                // ignore on unrooted shell.
+                            }
                         } else {
                             pw.println("Wifi is not connected");
                         }
@@ -483,10 +496,12 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     mWifiService.enableVerboseLogging(enabled ? 1 : 0);
                     break;
                 }
-                case "add-suggestion":
+                case "add-suggestion": {
+                    WifiNetworkSuggestion suggestion = buildSuggestion(pw);
                     mWifiService.addNetworkSuggestions(
-                            Arrays.asList(buildSuggestion(pw)), SHELL_PACKAGE_NAME, null);
+                            Arrays.asList(suggestion), SHELL_PACKAGE_NAME, null);
                     break;
+                }
                 case "remove-suggestion": {
                     String ssid = getNextArgRequired();
                     List<WifiNetworkSuggestion> suggestions =
@@ -599,6 +614,58 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     pw.println(hasUserApproved ? "yes" : "no");
                     return 0;
                 }
+                case "set-connected-score": {
+                    int score = Integer.parseInt(getNextArgRequired());
+                    CountDownLatch countDownLatch = new CountDownLatch(2);
+                    GeneralUtil.Mutable<IScoreUpdateObserver> scoreUpdateObserverMutable =
+                            new GeneralUtil.Mutable<>();
+                    GeneralUtil.Mutable<Integer> sessionIdMutable = new GeneralUtil.Mutable<>();
+                    IWifiConnectedNetworkScorer.Stub connectedScorer =
+                            new IWifiConnectedNetworkScorer.Stub() {
+                        @Override
+                        public void onStart(int sessionId) {
+                            sessionIdMutable.value = sessionId;
+                            countDownLatch.countDown();
+                        }
+                        @Override
+                        public void onStop(int sessionId) {
+                            // clear the external scorer on disconnect.
+                            mWifiService.clearWifiConnectedNetworkScorer();
+                        }
+                        @Override
+                        public void onSetScoreUpdateObserver(IScoreUpdateObserver observerImpl) {
+                            scoreUpdateObserverMutable.value = observerImpl;
+                            countDownLatch.countDown();
+                        }
+                    };
+                    mWifiService.clearWifiConnectedNetworkScorer(); // clear any previous scorer
+                    if (mWifiService.setWifiConnectedNetworkScorer(new Binder(), connectedScorer)) {
+                        // wait for retrieving the session id & score observer.
+                        countDownLatch.await(1000, TimeUnit.MILLISECONDS);
+                    }
+                    if (scoreUpdateObserverMutable.value == null
+                            || sessionIdMutable.value == null) {
+                        pw.println("Did not receive session id and/or the score update observer. "
+                                + "Is the device connected to a wifi network?");
+                        mWifiService.clearWifiConnectedNetworkScorer();
+                        return -1;
+                    }
+                    pw.println("Updating score: " + score + " for session id: "
+                            + sessionIdMutable.value);
+                    try {
+                        scoreUpdateObserverMutable.value.notifyScoreUpdate(
+                                sessionIdMutable.value, score);
+                    } catch (RemoteException e) {
+                        pw.println("Failed to send the score update");
+                        mWifiService.clearWifiConnectedNetworkScorer();
+                        return -1;
+                    }
+                    return 0;
+                }
+                case "reset-connected-score": {
+                    mWifiService.clearWifiConnectedNetworkScorer(); // clear any previous scorer
+                    return 0;
+                }
                 default:
                     return handleDefaultCommands(cmd);
             }
@@ -646,6 +713,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         while (option != null) {
             if (option.equals("-m")) {
                 configuration.meteredOverride = METERED_OVERRIDE_METERED;
+            } else if (option.equals("-d")) {
+                configuration.allowAutojoin = false;
             } else {
                 pw.println("Ignoring unknown option " + option);
             }
@@ -679,6 +748,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 suggestionBuilder.setIsMetered(true);
             } else if (option.equals("-s")) {
                 suggestionBuilder.setCredentialSharedWithUser(true);
+            } else if (option.equals("-d")) {
+                suggestionBuilder.setIsInitialAutojoinEnabled(false);
             } else {
                 pw.println("Ignoring unknown option " + option);
             }
@@ -722,6 +793,23 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 .removeCapability(NET_CAPABILITY_INTERNET)
                 .setNetworkSpecifier(specifierBuilder.build())
                 .build();
+    }
+
+    private void setAutoJoin(PrintWriter pw, String ssid, boolean allowAutojoin) {
+        // For suggestions, this will work only if the config has already been added
+        // to WifiConfigManager.
+        WifiConfiguration retrievedConfig =
+                mWifiService.getPrivilegedConfiguredNetworks(SHELL_PACKAGE_NAME, null)
+                        .getList()
+                        .stream()
+                        .filter(n -> n.SSID.equals(ssid))
+                        .findAny()
+                        .orElse(null);
+        if (retrievedConfig == null) {
+            pw.println("Cannot retrieve config, autojoin setting skipped.");
+            return;
+        }
+        mWifiService.allowAutojoin(retrievedConfig.networkId, allowAutojoin);
     }
 
     private int sendLinkProbe(PrintWriter pw) throws InterruptedException {
@@ -789,7 +877,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Start a new scan");
         pw.println("  list-networks");
         pw.println("    Lists the saved networks");
-        pw.println("  connect-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m]");
+        pw.println("  connect-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m] [-d]");
         pw.println("    Connect to a network with provided params and add to saved networks list");
         pw.println("    <ssid> - SSID of the network");
         pw.println("    open|owe|wpa2|wpa3 - Security type of the network.");
@@ -800,7 +888,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("           - 'wpa2' - WPA-2 PSK networks (Most prevalent)");
         pw.println("           - 'wpa3' - WPA-3 PSK networks");
         pw.println("    -m - Mark the network metered.");
-        pw.println("  add-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m]");
+        pw.println("    -d - Mark the network autojoin disabled.");
+        pw.println("  add-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m] [-d]");
         pw.println("    Add/update saved network with provided params");
         pw.println("    <ssid> - SSID of the network");
         pw.println("    open|owe|wpa2|wpa3 - Security type of the network.");
@@ -811,6 +900,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("           - 'wpa2' - WPA-2 PSK networks (Most prevalent)");
         pw.println("           - 'wpa3' - WPA-3 PSK networks");
         pw.println("    -m - Mark the network metered.");
+        pw.println("    -d - Mark the network autojoin disabled.");
         pw.println("  forget-network <networkId>");
         pw.println("    Remove the network mentioned by <networkId>");
         pw.println("        - Use list-networks to retrieve <networkId> for the network");
@@ -818,7 +908,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Current wifi status");
         pw.println("  set-verbose-logging enabled|disabled ");
         pw.println("    Set the verbose logging enabled or disabled");
-        pw.println("  add-suggestion <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-u] [-m] [-s]");
+        pw.println("  add-suggestion <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-u] [-m] [-s] [-d]");
         pw.println("    Add a network suggestion with provided params");
         pw.println("    Use 'network-suggestions-set-user-approved " + SHELL_PACKAGE_NAME + " yes'"
                 +  " to approve suggestions added via shell (Needs root access)");
@@ -833,12 +923,24 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    -u - Mark the suggestion untrusted.");
         pw.println("    -m - Mark the suggestion metered.");
         pw.println("    -s - Share the suggestion with user.");
+        pw.println("    -d - Mark the suggestion autojoin disabled.");
         pw.println("  remove-suggestion <ssid>");
         pw.println("    Remove a network suggestion with provided SSID of the network");
         pw.println("  remove-all-suggestions");
         pw.println("    Removes all suggestions added via shell");
         pw.println("  list-suggestions");
         pw.println("    Lists the suggested networks added via shell");
+        pw.println("  set-connected-score <score>");
+        pw.println("    Set connected wifi network score (to choose between LTE & Wifi for "
+                + "default route).");
+        pw.println("    This turns off the active connected scorer (default or external).");
+        pw.println("    Only works while connected to a wifi network. This score will stay in "
+                + "effect until you call reset-connected-score or the device disconnects from the "
+                + "current network.");
+        pw.println("    <score> - Integer score should be in the range of 0 - 60");
+        pw.println("  reset-connected-score");
+        pw.println("    Turns on the default connected scorer.");
+        pw.println("    Note: Will clear any external scorer set.");
     }
 
     private void onHelpPrivileged(PrintWriter pw) {

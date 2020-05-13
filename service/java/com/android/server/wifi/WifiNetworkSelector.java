@@ -218,6 +218,17 @@ public class WifiNetworkSelector {
     }
 
     /**
+     * Check if current network has internet or is expected to not have internet
+     */
+    public boolean hasInternetOrExpectNoInternet(WifiInfo wifiInfo) {
+        WifiConfiguration network =
+                mWifiConfigManager.getConfiguredNetwork(wifiInfo.getNetworkId());
+        if (network == null) {
+            return false;
+        }
+        return !network.hasNoInternetAccess() || network.isNoInternetAccessExpected();
+    }
+    /**
      * Determines whether the currently connected network is sufficient.
      *
      * If the network is good enough, or if switching to a new network is likely to
@@ -262,7 +273,7 @@ public class WifiNetworkSelector {
         }
 
         // Network without internet access is not sufficient, unless expected
-        if (network.hasNoInternetAccess() && !network.isNoInternetAccessExpected()) {
+        if (!hasInternetOrExpectNoInternet(wifiInfo)) {
             localLog("Current network has [" + network.numNoInternetAccessReports
                     + "] no-internet access reports");
             return false;
@@ -665,16 +676,24 @@ public class WifiNetworkSelector {
      * This is sticky to prevent continuous flip-flopping between networks, when the metered
      * status is learned after association.
      */
-    private boolean isEverMetered(@NonNull WifiConfiguration config, @Nullable WifiInfo info) {
+    private boolean isEverMetered(@NonNull WifiConfiguration config, @Nullable WifiInfo info,
+            @NonNull ScanDetail scanDetail) {
         // If info does not match config, don't use it.
-        // TODO(b/149988649) Metrics
         if (info != null && info.getNetworkId() != config.networkId) info = null;
         boolean metered = WifiConfiguration.isMetered(config, info);
+        NetworkDetail networkDetail = scanDetail.getNetworkDetail();
+        if (networkDetail != null
+                && networkDetail.getAnt()
+                == NetworkDetail.Ant.ChargeablePublic) {
+            metered = true;
+        }
+        mWifiMetrics.addMeteredStat(config, metered);
         if (config.meteredOverride != WifiConfiguration.METERED_OVERRIDE_NONE) {
             // User override is in effect; we should trust it
             if (mKnownMeteredNetworkIds.remove(config.networkId)) {
                 localLog("KnownMeteredNetworkIds = " + mKnownMeteredNetworkIds);
             }
+            metered = config.meteredOverride == WifiConfiguration.METERED_OVERRIDE_METERED;
         } else if (mKnownMeteredNetworkIds.contains(config.networkId)) {
             // Use the saved information
             metered = true;
@@ -783,7 +802,7 @@ public class WifiNetworkSelector {
                         WifiCandidates.Key key = wifiCandidates.keyFromScanDetailAndConfig(
                                 scanDetail, config);
                         if (key != null) {
-                            boolean metered = isEverMetered(config, wifiInfo);
+                            boolean metered = isEverMetered(config, wifiInfo, scanDetail);
                             // TODO(b/151981920) Saved passpoint candidates are marked ephemeral
                             boolean added = wifiCandidates.add(key, config,
                                     registeredNominator.getId(),
@@ -1036,7 +1055,7 @@ public class WifiNetworkSelector {
 
     private static boolean isFromCarrierOrPrivilegedApp(WifiConfiguration config) {
         if (config.fromWifiNetworkSuggestion
-                && config.carrierId == TelephonyManager.UNKNOWN_CARRIER_ID) {
+                && config.carrierId != TelephonyManager.UNKNOWN_CARRIER_ID) {
             // Privileged carrier suggestion
             return true;
         }

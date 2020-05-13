@@ -68,7 +68,7 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
         super(lifecycle, context, wifiManager, connectivityManager, networkScoreManager,
                 mainHandler, workerHandler, clock, maxScanAgeMillis, scanIntervalMillis, TAG);
         mChosenEntry = new StandardWifiEntry(mContext, mMainHandler, key, mWifiManager,
-                false /* forSavedNetworksPage */);
+                mWifiNetworkScoreCache, false /* forSavedNetworksPage */);
         cacheNewScanResults();
         conditionallyUpdateScanResults(true /* lastScanSucceeded */);
         conditionallyUpdateConfig();
@@ -132,6 +132,13 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
 
     @WorkerThread
     @Override
+    protected void handleRssiChangedAction() {
+        mChosenEntry.updateConnectionInfo(mWifiManager.getConnectionInfo(),
+                mConnectivityManager.getActiveNetworkInfo());
+    }
+
+    @WorkerThread
+    @Override
     protected void handleLinkPropertiesChanged(@Nullable LinkProperties linkProperties) {
         if (mChosenEntry.getConnectedState() == CONNECTED_STATE_CONNECTED) {
             mChosenEntry.updateLinkProperties(linkProperties);
@@ -144,6 +151,12 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
         if (mChosenEntry.getConnectedState() == CONNECTED_STATE_CONNECTED) {
             mChosenEntry.updateNetworkCapabilities(capabilities);
         }
+    }
+
+    @WorkerThread
+    @Override
+    protected void handleNetworkScoreCacheUpdated() {
+        mChosenEntry.onScoreCacheUpdated();
     }
 
     /**
@@ -168,19 +181,17 @@ class StandardNetworkDetailsTracker extends NetworkDetailsTracker {
     }
 
     /**
-     * Updates the tracked entry's WifiConfiguration from getConfiguredNetworks(), or sets it to
-     * null if it does not exist.
+     * Updates the tracked entry's WifiConfiguration from getPrivilegedConfiguredNetworks(), or sets
+     * it to null if it does not exist.
      */
     private void conditionallyUpdateConfig() {
-        WifiConfiguration config = mWifiManager.getConfiguredNetworks().stream()
-                .filter(savedConfig -> TextUtils.equals(
-                        wifiConfigToStandardWifiEntryKey(savedConfig), mChosenEntry.getKey()))
-                .findAny().orElse(mWifiManager.getPrivilegedConfiguredNetworks().stream()
-                        .filter(suggestedConfig -> TextUtils.equals(
-                                wifiConfigToStandardWifiEntryKey(suggestedConfig),
+        WifiConfiguration updatedConfig = mWifiManager.getPrivilegedConfiguredNetworks().stream()
+                .filter(cachedConfig -> !cachedConfig.isPasspoint()
+                        && TextUtils.equals(
+                                wifiConfigToStandardWifiEntryKey(cachedConfig),
                                 mChosenEntry.getKey()))
-                        .findAny().orElse(null));
-        mChosenEntry.updateConfig(config);
+                .findAny().orElse(null);
+        mChosenEntry.updateConfig(updatedConfig);
     }
 
     /**

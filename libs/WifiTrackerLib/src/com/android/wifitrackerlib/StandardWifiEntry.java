@@ -16,20 +16,30 @@
 
 package com.android.wifitrackerlib;
 
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_AUTHENTICATION_NO_CREDENTIALS;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED;
 import static android.net.wifi.WifiInfo.sanitizeSsid;
 
 import static androidx.core.util.Preconditions.checkNotNull;
 
 import static com.android.wifitrackerlib.Utils.getAppLabel;
 import static com.android.wifitrackerlib.Utils.getAppLabelForSavedNetwork;
+import static com.android.wifitrackerlib.Utils.getAppLabelForWifiConfiguration;
 import static com.android.wifitrackerlib.Utils.getAutoConnectDescription;
+import static com.android.wifitrackerlib.Utils.getAverageSpeedFromScanResults;
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
+import static com.android.wifitrackerlib.Utils.getCarrierNameForSubId;
 import static com.android.wifitrackerlib.Utils.getCurrentNetworkCapabilitiesInformation;
 import static com.android.wifitrackerlib.Utils.getDisconnectedStateDescription;
+import static com.android.wifitrackerlib.Utils.getImsiProtectionDescription;
 import static com.android.wifitrackerlib.Utils.getMeteredDescription;
 import static com.android.wifitrackerlib.Utils.getNetworkDetailedState;
 import static com.android.wifitrackerlib.Utils.getSecurityTypeFromWifiConfiguration;
 import static com.android.wifitrackerlib.Utils.getSpeedDescription;
+import static com.android.wifitrackerlib.Utils.getSpeedFromWifiInfo;
+import static com.android.wifitrackerlib.Utils.getSubIdForConfig;
 import static com.android.wifitrackerlib.Utils.getVerboseLoggingDescription;
 
 import android.content.Context;
@@ -40,8 +50,10 @@ import android.net.NetworkScoreManager;
 import android.net.NetworkScorerAppData;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.text.TextUtils;
@@ -120,8 +132,10 @@ public class StandardWifiEntry extends WifiEntry {
             @NonNull String key,
             @NonNull List<ScanResult> scanResults,
             @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        this(context, callbackHandler, key, wifiManager, forSavedNetworksPage);
+        this(context, callbackHandler, key, wifiManager, scoreCache,
+                forSavedNetworksPage);
 
         checkNotNull(scanResults, "Cannot construct with null ScanResult list!");
         if (scanResults.isEmpty()) {
@@ -134,8 +148,10 @@ public class StandardWifiEntry extends WifiEntry {
     StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull String key, @NonNull WifiConfiguration config,
             @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        this(context, callbackHandler, key, wifiManager, forSavedNetworksPage);
+        this(context, callbackHandler, key, wifiManager, scoreCache,
+                forSavedNetworksPage);
 
         checkNotNull(config, "Cannot construct with null config!");
         checkNotNull(config.SSID, "Supplied config must have an SSID!");
@@ -144,9 +160,11 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     StandardWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
-            @NonNull String key, @NonNull WifiManager wifiManager, boolean forSavedNetworksPage) {
+            @NonNull String key, @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
+            boolean forSavedNetworksPage) {
         // TODO: second argument (isSaved = false) is bogus in this context
-        super(callbackHandler, wifiManager, forSavedNetworksPage);
+        super(callbackHandler, wifiManager, scoreCache, forSavedNetworksPage);
 
         if (!key.startsWith(KEY_PREFIX)) {
             throw new IllegalArgumentException("Key does not start with correct prefix!");
@@ -177,11 +195,6 @@ public class StandardWifiEntry extends WifiEntry {
     public String getSummary(boolean concise) {
         StringJoiner sj = new StringJoiner(mContext.getString(R.string.summary_separator));
 
-        final String speedDescription = getSpeedDescription(mContext, this);
-        if (!TextUtils.isEmpty(speedDescription)) {
-            sj.add(speedDescription);
-        }
-
         if (!concise && mForSavedNetworksPage && isSaved()) {
             final CharSequence appLabel = getAppLabelForSavedNetwork(mContext, this);
             if (!TextUtils.isEmpty(appLabel)) {
@@ -194,8 +207,17 @@ public class StandardWifiEntry extends WifiEntry {
             if (TextUtils.isEmpty(disconnectDescription)) {
                 if (concise) {
                     sj.add(mContext.getString(R.string.wifi_disconnected));
-                } else if (!mForSavedNetworksPage && isSaved()) {
-                    sj.add(mContext.getString(R.string.wifi_remembered));
+                } else if (!mForSavedNetworksPage) {
+                    // Summary for unconnected suggested network
+                    if (isSuggestion()) {
+                        String carrierName = getCarrierNameForSubId(mContext,
+                                getSubIdForConfig(mContext, mWifiConfig));
+                        sj.add(mContext.getString(R.string.available_via_app, carrierName != null
+                                ? carrierName
+                                : getAppLabelForWifiConfiguration(mContext, mWifiConfig)));
+                    } else if (isSaved()) {
+                        sj.add(mContext.getString(R.string.wifi_remembered));
+                    }
                 }
             } else {
                 sj.add(disconnectDescription);
@@ -205,6 +227,11 @@ public class StandardWifiEntry extends WifiEntry {
             if (!TextUtils.isEmpty(connectDescription)) {
                 sj.add(connectDescription);
             }
+        }
+
+        final String speedDescription = getSpeedDescription(mContext, this);
+        if (!TextUtils.isEmpty(speedDescription)) {
+            sj.add(speedDescription);
         }
 
         final String autoConnectDescription = getAutoConnectDescription(mContext, this);
@@ -229,7 +256,7 @@ public class StandardWifiEntry extends WifiEntry {
 
     private String getConnectStateDescription() {
         if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
-            if (!isSaved()) {
+            if (!isSaved() && !isSuggestion()) {
                 // Special case for connected + ephemeral networks.
                 if (!TextUtils.isEmpty(mRecommendationServiceLabel)) {
                     return String.format(mContext.getString(R.string.connected_via_network_scorer),
@@ -242,8 +269,12 @@ public class StandardWifiEntry extends WifiEntry {
             final String suggestionOrSpecifierPackageName = mWifiInfo != null
                     ? mWifiInfo.getRequestingPackageName() : null;
             if (!TextUtils.isEmpty(suggestionOrSpecifierPackageName)) {
-                return mContext.getString(R.string.connected_via_app,
-                        getAppLabel(mContext, suggestionOrSpecifierPackageName));
+                String carrierName = mWifiConfig != null
+                        ? getCarrierNameForSubId(mContext, getSubIdForConfig(mContext, mWifiConfig))
+                        : null;
+                return mContext.getString(R.string.connected_via_app, carrierName != null
+                        ? carrierName
+                        : getAppLabel(mContext, suggestionOrSpecifierPackageName));
             }
 
             String networkCapabilitiesinformation =
@@ -257,8 +288,9 @@ public class StandardWifiEntry extends WifiEntry {
     }
 
     @Override
-    public int getLevel() {
-        return mLevel;
+    public CharSequence getSecondSummary() {
+        return getConnectedState() == CONNECTED_STATE_CONNECTED
+                ? getImsiProtectionDescription(mContext, getWifiConfiguration()) : "";
     }
 
     @Override
@@ -295,7 +327,12 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean isSaved() {
-        return mWifiConfig != null;
+        return mWifiConfig != null && !mWifiConfig.isEphemeral();
+    }
+
+    @Override
+    public boolean isSuggestion() {
+        return mWifiConfig != null && mWifiConfig.fromWifiNetworkSuggestion;
     }
 
     @Override
@@ -305,10 +342,10 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public WifiConfiguration getWifiConfiguration() {
-        if (mWifiConfig != null && !mWifiConfig.fromWifiNetworkSuggestion) {
-            return mWifiConfig;
+        if (!isSaved()) {
+            return null;
         }
-        return null;
+        return mWifiConfig;
     }
 
     @Override
@@ -328,7 +365,11 @@ public class StandardWifiEntry extends WifiEntry {
         // We should flag this network to auto-open captive portal since this method represents
         // the user manually connecting to a network (i.e. not auto-join).
         mShouldAutoOpenCaptivePortal = true;
-        if (mWifiConfig == null) {
+
+        if (isSaved() || isSuggestion()) {
+            // Saved/suggested network
+            mWifiManager.connect(mWifiConfig.networkId, new ConnectActionListener());
+        } else {
             // Unsaved network
             if (mSecurity == SECURITY_NONE
                     || mSecurity == SECURITY_OWE) {
@@ -352,9 +393,6 @@ public class StandardWifiEntry extends WifiEntry {
                                     ConnectCallback.CONNECT_STATUS_FAILURE_NO_CONFIG));
                 }
             }
-        } else {
-            // Saved network
-            mWifiManager.connect(mWifiConfig.networkId, new ConnectActionListener());
         }
     }
 
@@ -509,7 +547,7 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canSetPrivacy() {
-        return getWifiConfiguration() != null;
+        return isSaved();
     }
 
     @Override
@@ -536,7 +574,7 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean isAutoJoinEnabled() {
-        if (!isSaved()) {
+        if (mWifiConfig == null) {
             return false;
         }
 
@@ -545,11 +583,15 @@ public class StandardWifiEntry extends WifiEntry {
 
     @Override
     public boolean canSetAutoJoinEnabled() {
-        return isSaved();
+        return isSaved() || isSuggestion();
     }
 
     @Override
     public void setAutoJoinEnabled(boolean enabled) {
+        if (!canSetAutoJoinEnabled()) {
+            return;
+        }
+
         mWifiManager.allowAutojoin(mWifiConfig.networkId, enabled);
     }
 
@@ -608,6 +650,34 @@ public class StandardWifiEntry extends WifiEntry {
         return false;
     }
 
+    @Override
+    public boolean shouldEditBeforeConnect() {
+        WifiConfiguration wifiConfig = getWifiConfiguration();
+        if (wifiConfig == null) {
+            return false;
+        }
+
+        // The secured Wi-Fi entry is never connected.
+        if (getSecurity() != SECURITY_NONE && getSecurity() != SECURITY_OWE
+                && !wifiConfig.getNetworkSelectionStatus().hasEverConnected()) {
+            return true;
+        }
+
+        // The network is disabled because of one of the authentication problems.
+        NetworkSelectionStatus networkSelectionStatus = wifiConfig.getNetworkSelectionStatus();
+        if (networkSelectionStatus.getNetworkSelectionStatus() != NETWORK_SELECTION_ENABLED) {
+            if (networkSelectionStatus.getDisableReasonCounter(DISABLED_AUTHENTICATION_FAILURE) > 0
+                    || networkSelectionStatus.getDisableReasonCounter(
+                    DISABLED_BY_WRONG_PASSWORD) > 0
+                    || networkSelectionStatus.getDisableReasonCounter(
+                    DISABLED_AUTHENTICATION_NO_CREDENTIALS) > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     @WorkerThread
     void updateScanResultInfo(@Nullable List<ScanResult> scanResults)
             throws IllegalArgumentException {
@@ -627,13 +697,23 @@ public class StandardWifiEntry extends WifiEntry {
         }
 
         final ScanResult bestScanResult = getBestScanResultByLevel(scanResults);
-        if (bestScanResult == null) {
-            mLevel = WIFI_LEVEL_UNREACHABLE;
-        } else {
-            mLevel = mWifiManager.calculateSignalLevel(bestScanResult.level);
+        if (bestScanResult != null) {
             updateEapType(bestScanResult);
             updatePskType(bestScanResult);
+            updateTransitionModeCapa(bestScanResult);
         }
+
+        if (getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
+            mLevel = bestScanResult != null
+                    ? mWifiManager.calculateSignalLevel(bestScanResult.level)
+                    : WIFI_LEVEL_UNREACHABLE;
+            synchronized (mLock) {
+                // Average speed is used to prevent speed label flickering from multiple APs.
+                mSpeed = getAverageSpeedFromScanResults(mScoreCache, mCurrentScanResults);
+            }
+        }
+
+        updateWifiGenerationInfo(mCurrentScanResults);
 
         notifyOnUpdated();
     }
@@ -648,6 +728,19 @@ public class StandardWifiEntry extends WifiEntry {
             mShouldAutoOpenCaptivePortal = false;
             signIn(null /* callback */);
         }
+    }
+
+    @WorkerThread
+    void onScoreCacheUpdated() {
+        if (mWifiInfo != null) {
+            mSpeed = getSpeedFromWifiInfo(mScoreCache, mWifiInfo);
+        } else {
+            synchronized (mLock) {
+                // Average speed is used to prevent speed label flickering from multiple APs.
+                mSpeed = getAverageSpeedFromScanResults(mScoreCache, mCurrentScanResults);
+            }
+        }
+        notifyOnUpdated();
     }
 
     private void updateEapType(ScanResult result) {
@@ -728,10 +821,6 @@ public class StandardWifiEntry extends WifiEntry {
         }
 
         if (mWifiConfig != null) {
-            if (mWifiConfig.fromWifiNetworkSuggestion) {
-                // Match network suggestions with SSID since the net id is prone to change.
-                return TextUtils.equals(mSsid, sanitizeSsid(wifiInfo.getSSID()));
-            }
             if (mWifiConfig.networkId == wifiInfo.getNetworkId()) {
                 return true;
             }
@@ -820,5 +909,10 @@ public class StandardWifiEntry extends WifiEntry {
         description.append(",").append(ageSeconds).append("s");
         description.append("}");
         return description.toString();
+    }
+
+    @Override
+    String getNetworkSelectionDescription() {
+        return Utils.getNetworkSelectionDescription(getWifiConfiguration());
     }
 }

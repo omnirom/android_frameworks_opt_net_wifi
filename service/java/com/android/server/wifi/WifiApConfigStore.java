@@ -16,13 +16,12 @@
 
 package com.android.server.wifi;
 
-import static android.net.wifi.WifiManager.WIFI_GENERATION_DEFAULT;
-
 import android.annotation.NonNull;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.net.MacAddress;
 import android.net.util.MacAddressUtils;
+import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApConfiguration;
 import android.os.Handler;
 import android.os.Process;
@@ -100,7 +99,7 @@ public class WifiApConfigStore {
     // Dual SAP config
     private boolean mDualSapStatus = false;
 
-    private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
+    private int mWifiStandard = ScanResult.WIFI_STANDARD_LEGACY;
 
     WifiApConfigStore(Context context,
             WifiInjector wifiInjector,
@@ -218,7 +217,9 @@ public class WifiApConfigStore {
 
         // some countries are unable to support 5GHz only operation, always allow for 2GHz when
         // config doesn't force channel
-        if (config.getChannel() == 0 && (config.getBand() & SoftApConfiguration.BAND_2GHZ) == 0) {
+        // Do not explicitly mark 2G support when BOTH 2G+5G band is requested in DBS mode.
+        if (config.getChannel() == 0 && ((config.getBand() & SoftApConfiguration.BAND_2GHZ) == 0)
+                && (config.getBand() != SoftApConfiguration.BAND_DUAL)) {
             Log.w(TAG, "Supplied ap config band without 2.4G, add allowing for 2.4GHz");
             if (convertedConfigBuilder == null) {
                 convertedConfigBuilder = new SoftApConfiguration.Builder(config);
@@ -411,7 +412,6 @@ public class WifiApConfigStore {
                 return false;
             }
         } else if (authType == SoftApConfiguration.SECURITY_TYPE_WPA2_PSK
-                || authType == SoftApConfiguration.SECURITY_TYPE_SAE
                 || authType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION
                 || authType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE) {
             // this is a config that should have a password - check that first
@@ -447,11 +447,11 @@ public class WifiApConfigStore {
         return sb.toString();
     }
 
-    public void setWifiGeneration(int generation) {
-        mWifiGeneration = generation;
+    public void setWifiStandard(int standard) {
+        mWifiStandard = standard;
     }
 
-    public int getWifiGeneration() {
-        return mWifiGeneration;
+    public int getWifiStandard() {
+        return mWifiStandard;
     }
 }

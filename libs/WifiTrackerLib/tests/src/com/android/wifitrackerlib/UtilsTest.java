@@ -23,19 +23,23 @@ import static com.android.wifitrackerlib.Utils.getAppLabelForSavedNetwork;
 import static com.android.wifitrackerlib.Utils.getAutoConnectDescription;
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
 import static com.android.wifitrackerlib.Utils.getCarrierNameForSubId;
+import static com.android.wifitrackerlib.Utils.getImsiProtectionDescription;
 import static com.android.wifitrackerlib.Utils.getMeteredDescription;
+import static com.android.wifitrackerlib.Utils.getNetworkSelectionDescription;
 import static com.android.wifitrackerlib.Utils.getSubIdForConfig;
 import static com.android.wifitrackerlib.Utils.isImsiPrivacyProtectionProvided;
 import static com.android.wifitrackerlib.Utils.isSimPresent;
+import static com.android.wifitrackerlib.Utils.linkifyAnnotation;
 import static com.android.wifitrackerlib.Utils.mapScanResultsToKey;
 import static com.android.wifitrackerlib.WifiEntry.SECURITY_NONE;
 import static com.android.wifitrackerlib.WifiEntry.SECURITY_PSK;
 
 import static com.google.common.truth.Truth.assertThat;
 
-
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
@@ -46,8 +50,11 @@ import android.net.NetworkInfo;
 import android.net.NetworkScoreManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
+import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.os.Handler;
 import android.os.PersistableBundle;
 import android.os.test.TestLooper;
@@ -55,18 +62,27 @@ import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.text.Annotation;
+import android.text.SpannableString;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ClickableSpan;
+
+import com.android.wifitrackerlib.shadow.ShadowSystem;
 
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.robolectric.annotation.Config;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
+@Config(shadows = {ShadowSystem.class})
 public class UtilsTest {
     private static final String LABEL_AUTO_CONNECTION_DISABLED = "Auto-Connection disabled";
     private static final String LABEL_METERED = "Metered";
@@ -83,6 +99,7 @@ public class UtilsTest {
     @Mock private Context mMockContext;
     @Mock private Resources mMockResources;
     @Mock private NetworkScoreManager mMockNetworkScoreManager;
+    @Mock private WifiNetworkScoreCache mMockScoreCache;
     @Mock private SubscriptionManager mSubscriptionManager;
     @Mock private TelephonyManager mTelephonyManager;
     @Mock private CarrierConfigManager mCarrierConfigManager;
@@ -194,7 +211,7 @@ public class UtilsTest {
 
         final CharSequence appLabel = getAppLabelForSavedNetwork(mMockContext, entry);
 
-        assertThat(appLabel).isEqualTo(APP_LABEL);
+        assertThat(appLabel.toString()).isEqualTo(APP_LABEL);
     }
 
     @Test
@@ -361,12 +378,78 @@ public class UtilsTest {
         assertEquals(TEST_SUB_ID, getSubIdForConfig(mMockContext, config));
     }
 
+    @Test
+    public void testGetImsiProtectionDescription_isSimCredentialFalse_returnEmptyString() {
+        final WifiConfiguration wificonfig = new WifiConfiguration();
+
+        assertEquals(getImsiProtectionDescription(mMockContext, wificonfig).toString(), "");
+    }
+
+    @Test
+    public void testGetImsiProtectionDescription_noValidSubId_returnEmptyString() {
+        final WifiConfiguration mockWifiConfig = mock(WifiConfiguration.class);
+        final WifiEnterpriseConfig mockWifiEnterpriseConfig = mock(WifiEnterpriseConfig.class);
+        when(mockWifiEnterpriseConfig.isAuthenticationSimBased()).thenReturn(true);
+        mockWifiConfig.enterpriseConfig = mockWifiEnterpriseConfig;
+
+        assertEquals(getImsiProtectionDescription(mMockContext, mockWifiConfig).toString(), "");
+    }
+
+    @Test
+    public void testLinkifyAnnotation_noAnnotation_returnOriginalText() {
+        final CharSequence testText = "test text";
+
+        final CharSequence output = linkifyAnnotation(mMockContext, testText, "id", "url");
+
+        final SpannableString outputSpannableString = new SpannableString(output);
+        assertEquals(output.toString(), testText);
+        assertEquals(outputSpannableString.getSpans(0, outputSpannableString.length(),
+                ClickableSpan.class).length, 0);
+    }
+
+    @Test
+    public void testLinkifyAnnotation_annotation_returnTextWithClickableSpan() {
+        final String annotationId = "id";
+        final CharSequence testText = "test text ";
+        final CharSequence testLink = "link";
+        final CharSequence expectedText = "test text link";
+        final SpannableStringBuilder builder = new SpannableStringBuilder(testText);
+        builder.append(testLink, new Annotation("key", annotationId),
+                Spanned.SPAN_INCLUSIVE_INCLUSIVE);
+
+        final CharSequence output = linkifyAnnotation(mMockContext, builder, annotationId, "url");
+
+        final SpannableString outputSpannableString = new SpannableString(output);
+        assertEquals(output.toString(), expectedText.toString());
+        assertEquals(outputSpannableString.getSpans(0, outputSpannableString.length(),
+                ClickableSpan.class).length, 1);
+    }
+
+    @Test
+    public void testGetNetworkSelectionDescription_disabledWrongPassword_showsWrongPasswordLabel() {
+        String expected = " (NETWORK_SELECTION_TEMPORARY_DISABLED 1:02:03) "
+                + "NETWORK_SELECTION_DISABLED_BY_WRONG_PASSWORD=2";
+        WifiConfiguration wifiConfig = spy(new WifiConfiguration());
+        NetworkSelectionStatus.Builder statusBuilder = new NetworkSelectionStatus.Builder();
+        NetworkSelectionStatus networkSelectionStatus = spy(statusBuilder.setNetworkSelectionStatus(
+                NetworkSelectionStatus.NETWORK_SELECTION_TEMPORARY_DISABLED)
+                .setNetworkSelectionDisableReason(NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD)
+                .build());
+        doReturn(2).when(networkSelectionStatus).getDisableReasonCounter(
+                NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD);
+        long now = System.currentTimeMillis();
+        // Network selection disable time is 1:02:03 ago.
+        doReturn(now - (60 * 60 + 2 * 60 + 3) * 1000).when(networkSelectionStatus).getDisableTime();
+        when(wifiConfig.getNetworkSelectionStatus()).thenReturn(networkSelectionStatus);
+
+        assertThat(getNetworkSelectionDescription(wifiConfig)).isEqualTo(expected);
+    }
 
     private StandardWifiEntry getStandardWifiEntry(WifiConfiguration config) {
         final WifiManager mockWifiManager = mock(WifiManager.class);
         final StandardWifiEntry entry = new StandardWifiEntry(mMockContext, mTestHandler,
                 wifiConfigToStandardWifiEntryKey(config), config,
-                mockWifiManager, false /* forSavedNetworksPage */);
+                mockWifiManager, mMockScoreCache, false /* forSavedNetworksPage */);
         final WifiInfo mockWifiInfo = mock(WifiInfo.class);
         final NetworkInfo mockNetworkInfo = mock(NetworkInfo.class);
 
