@@ -691,6 +691,9 @@ public class ClientModeImpl extends StateMachine {
     /* Vendor specific cmd: To handle IP Reachability session */
     private static final int CMD_IP_REACHABILITY_SESSION_END            = BASE + 311;
 
+    //Run Driver Command
+    private static final int CMD_DO_DRIVER_CMD                          = BASE + 312;
+
     // For message logging.
     private static final Class[] sMessageClasses = {
             AsyncChannel.class, ClientModeImpl.class };
@@ -3850,6 +3853,7 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_DISABLE_EPHEMERAL_NETWORK:
                 case WifiMonitor.DPP_EVENT:
                 case CMD_IP_REACHABILITY_SESSION_END:
+                case CMD_DO_DRIVER_CMD:
                     mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
@@ -5086,6 +5090,10 @@ public class ClientModeImpl extends StateMachine {
                 case WifiMonitor.DPP_EVENT:
                     Log.d(TAG, "DPP Event received. Type = " + message.arg1);
                     sendDppEventBroadcast(message.arg1, (DppResult) message.obj);
+                    break;
+                case CMD_DO_DRIVER_CMD:
+                    String reply = mWifiNative.doDriverCmd(mInterfaceName, (String) message.obj);
+                    replyToMessage(message, message.what, reply);
                     break;
                 default:
                     handleStatus = NOT_HANDLED;
@@ -7429,5 +7437,16 @@ public class ClientModeImpl extends StateMachine {
             }
         }
         return false;
+    }
+    /**
+     * Run Driver Command
+     * @param : Command string
+     */
+    public String doDriverCmd(AsyncChannel channel, String command)
+    {
+        Message resultMsg = channel.sendMessageSynchronously(CMD_DO_DRIVER_CMD, command);
+        String result = (String)resultMsg.obj;
+        resultMsg.recycle();
+        return result;
     }
 }

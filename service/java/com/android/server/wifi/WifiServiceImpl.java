@@ -4346,4 +4346,10 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(enable).flush();
         mFacade.setIntegerSetting(mContext, Settings.Global.WIFI_UNSAVED_NETWORK_LINKING_FEATURE_ENABLED, (enable ? 1 : 0));
     }
+
+    @Override
+    public String doDriverCmd(String command)
+    {
+        return mClientModeImpl.doDriverCmd(mClientModeImplChannel, command);
+    }
 }
