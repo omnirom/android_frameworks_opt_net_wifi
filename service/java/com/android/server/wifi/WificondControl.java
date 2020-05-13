@@ -651,7 +651,9 @@ public class WificondControl implements IBinder.DeathRecipient {
                         new InformationElementUtil.Capabilities();
                 if (wifiGenerationCapa != null && result.frequency < 3000) {
                     capabilities.reportHt = wifiGenerationCapa.htSupport2g;
-                    capabilities.reportVht = wifiGenerationCapa.vhtSupport2g;
+                    // Do not include subset of VHT on 2.4 GHz vendor extension
+                    // in consideration for reporting VHT.
+                    capabilities.reportVht = false;
                     capabilities.reportHe = wifiGenerationCapa.staHeSupport2g;
                 } else if (wifiGenerationCapa != null) {
                     capabilities.reportHt = wifiGenerationCapa.htSupport5g;
