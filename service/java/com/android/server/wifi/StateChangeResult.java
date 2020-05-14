@@ -27,17 +27,24 @@ import android.net.wifi.WifiSsid;
  */
 public class StateChangeResult {
     StateChangeResult(int networkId, WifiSsid wifiSsid, String BSSID,
-            SupplicantState state) {
+                      SupplicantState state) {
+        this(networkId, wifiSsid, BSSID, state, null);
+    }
+
+    StateChangeResult(int networkId, WifiSsid wifiSsid, String BSSID,
+            SupplicantState state, String interfaceName) {
         this.state = state;
         this.wifiSsid= wifiSsid;
         this.BSSID = BSSID;
         this.networkId = networkId;
+        this.interfaceName = interfaceName;
     }
 
     int networkId;
     WifiSsid wifiSsid;
     String BSSID;
     SupplicantState state;
+    String interfaceName;
 
     @Override
     public String toString() {
@@ -47,6 +54,7 @@ public class StateChangeResult {
         sb.append(" BSSID: ").append(BSSID);
         sb.append(" nid: ").append(networkId);
         sb.append(" state: ").append(state);
+        sb.append(" interfaceName: ").append(interfaceName);
         return sb.toString();
     }
 }

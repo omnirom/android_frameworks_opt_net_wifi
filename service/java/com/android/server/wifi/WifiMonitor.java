@@ -544,7 +544,7 @@ public class WifiMonitor {
                                                     String bssid,
                                                     SupplicantState newSupplicantState) {
         sendMessage(iface, SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
-                new StateChangeResult(networkId, wifiSsid, bssid, newSupplicantState));
+                new StateChangeResult(networkId, wifiSsid, bssid, newSupplicantState, iface));
     }
 
     /**
