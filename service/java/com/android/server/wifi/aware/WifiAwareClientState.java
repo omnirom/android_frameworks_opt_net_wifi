@@ -44,8 +44,7 @@ import java.util.Arrays;
 public class WifiAwareClientState {
     private static final String TAG = "WifiAwareClientState";
     private static final boolean VDBG = false; // STOPSHIP if true
-    /* package */ boolean mDbg = false;
-    private boolean mVerboseLoggingEnabled = false;
+    private boolean mDbg = false;
 
     /* package */ static final int CLUSTER_CHANGE_EVENT_STARTED = 0;
     /* package */ static final int CLUSTER_CHANGE_EVENT_JOINED = 1;
@@ -89,9 +88,11 @@ public class WifiAwareClientState {
         mWifiPermissionsUtil = wifiPermissionsUtil;
     }
 
-    public void setVerboseLoggingEnabled(boolean verboseLoggingEnabled)
-    {
-        mVerboseLoggingEnabled = verboseLoggingEnabled;
+    /**
+     * Enable verbose logging.
+     */
+    public void enableVerboseLogging(boolean verbose) {
+        mDbg = verbose | VDBG;
     }
 
     /**
@@ -222,7 +223,7 @@ public class WifiAwareClientState {
      *            client.
      */
     public void onInterfaceAddressChange(byte[] mac) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG,
                     "onInterfaceAddressChange: mClientId=" + mClientId + ", mNotifyIdentityChange="
                             + mNotifyIdentityChange + ", mac=" + String.valueOf(
@@ -234,7 +235,7 @@ public class WifiAwareClientState {
                 boolean hasPermission = mWifiPermissionsUtil.checkCallersLocationPermission(
                         mCallingPackage, mCallingFeatureId, mUid,
                         /* coarseForTargetSdkLessThanQ */ true, null);
-                if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "hasPermission=" + hasPermission);
+                if (mDbg) Log.v(TAG, "hasPermission=" + hasPermission);
                 mCallback.onIdentityChanged(hasPermission ? mac : ALL_ZERO_MAC);
             } catch (RemoteException e) {
                 Log.w(TAG, "onIdentityChanged: RemoteException - ignored: " + e);
@@ -255,7 +256,7 @@ public class WifiAwareClientState {
      * @param currentDiscoveryInterfaceMac The MAC address of the discovery interface.
      */
     public void onClusterChange(int flag, byte[] mac, byte[] currentDiscoveryInterfaceMac) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG,
                     "onClusterChange: mClientId=" + mClientId + ", mNotifyIdentityChange="
                             + mNotifyIdentityChange + ", mac=" + String.valueOf(
@@ -270,7 +271,7 @@ public class WifiAwareClientState {
                 boolean hasPermission = mWifiPermissionsUtil.checkCallersLocationPermission(
                         mCallingPackage, mCallingFeatureId, mUid,
                         /* coarseForTargetSdkLessThanQ */ true, null);
-                if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "hasPermission=" + hasPermission);
+                if (mDbg) Log.v(TAG, "hasPermission=" + hasPermission);
                 mCallback.onIdentityChanged(
                         hasPermission ? currentDiscoveryInterfaceMac : ALL_ZERO_MAC);
             } catch (RemoteException e) {
