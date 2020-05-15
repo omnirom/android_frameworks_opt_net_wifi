@@ -1164,7 +1164,6 @@ public class WifiConnectivityManager {
         // to provide periodic scan in an exponential backoff fashion.
         cancelPeriodicScanTimer();
         stopPnoScan();
-        mScanRestartCount = 0;
     }
 
     /**
@@ -1546,6 +1545,7 @@ public class WifiConnectivityManager {
         mCarrierNetworkNotifier.clearPendingNotification(true /* resetRepeatDelay */);
         mLastConnectionAttemptBssid = null;
         mWaitForFullBandScanResults = false;
+        mScanRestartCount = 0;
     }
 
     /**
