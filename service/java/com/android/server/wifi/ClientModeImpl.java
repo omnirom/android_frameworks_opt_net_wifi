@@ -70,6 +70,7 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.net.wifi.WifiNetworkAgentSpecifier;
 import android.net.wifi.WifiSsid;
+import android.net.wifi.WifiScanner;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
@@ -233,6 +234,7 @@ public class ClientModeImpl extends StateMachine {
     private final PasspointManager mPasspointManager;
     private final WifiDataStall mWifiDataStall;
     private final LinkProbeManager mLinkProbeManager;
+    private WifiScanner mWifiScanner = null;
 
     private final McastLockManagerFilterController mMcastLockManagerFilterController;
 
@@ -360,6 +362,48 @@ public class ClientModeImpl extends StateMachine {
     // Roaming failure count
     private int mRoamFailCount = 0;
 
+    // scan results listener
+    private class ScanListener implements WifiScanner.ScanListener {
+        List<ScanResult> mScanResults = new ArrayList<>();
+
+        public synchronized ScanResult getScanResultForSsid(String ssid) {
+            for (ScanResult scanRes : mScanResults) {
+                if (ssid.equals("\"" + scanRes.SSID + "\""))
+                    return scanRes;
+            }
+            return null;
+        }
+
+        @Override
+        public void onSuccess() {
+        }
+
+        @Override
+        public void onFailure(int reason, String description) {
+            loge("registerScanListener onFailure:"
+                    + " reason: " + reason + " description: " + description);
+        }
+
+        @Override
+        public void onPeriodChanged(int periodInMs) {
+        }
+
+        @Override
+        public synchronized void onResults(WifiScanner.ScanData[] results) {
+            mScanResults.clear();
+            for (WifiScanner.ScanData scanData : results) {
+                mScanResults.addAll(Arrays.asList(scanData.getResults()));
+            }
+            logd("onResults: total " + mScanResults.size() + " results");
+        }
+
+        @Override
+        public void onFullResult(ScanResult fullScanResult) {
+        }
+    }
+
+    private final ScanListener mScanListener = new ScanListener();
+
     // This is the BSSID we are trying to associate to, it can be set to SUPPLICANT_BSSID_ANY
     // if we havent selected a BSSID for joining.
     private String mTargetRoamBSSID = SUPPLICANT_BSSID_ANY;
@@ -369,6 +413,8 @@ public class ClientModeImpl extends StateMachine {
     private int mTargetNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
     private long mLastDriverRoamAttempt = 0;
     private WifiConfiguration mTargetWifiConfiguration = null;
+
+    private boolean mIsFSTConnection;
 
     int getPollRssiIntervalMsecs() {
         return mPollRssiIntervalMsecs;
@@ -1223,11 +1269,19 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void updateDataInterface() {
-        String dataInterfaceName = mWifiNative.getFstDataInterfaceName();
-        if (TextUtils.isEmpty(dataInterfaceName)) {
-            dataInterfaceName = mInterfaceName;
+        String prevDataInterfaceName = mDataInterfaceName;
+
+        if (!mIsFSTConnection) {
+            mDataInterfaceName = mInterfaceName;
+        } else {
+            mDataInterfaceName = mWifiNative.getFstDataInterfaceName();
+            if (TextUtils.isEmpty(mDataInterfaceName)) {
+                mDataInterfaceName = mInterfaceName;
+            }
         }
-        mDataInterfaceName = dataInterfaceName;
+
+        if (mDataInterfaceName.equals(prevDataInterfaceName))
+            return;
 
         if (mIpClient != null) {
             mIpClient.shutdown();
@@ -2164,6 +2218,8 @@ public class ClientModeImpl extends StateMachine {
         pw.println("mOperationalMode " + mOperationalMode);
         pw.println("mUserWantsSuspendOpt " + mUserWantsSuspendOpt);
         pw.println("mSuspendOptNeedsDisabled " + mSuspendOptNeedsDisabled);
+        pw.println("mInterfaceName " + mInterfaceName);
+        pw.println("mDataInterfaceName " + mDataInterfaceName);
         mCountryCode.dump(fd, pw, args);
         mNetworkFactory.dump(fd, pw, args);
         mUntrustedNetworkFactory.dump(fd, pw, args);
@@ -3034,6 +3090,11 @@ public class ClientModeImpl extends StateMachine {
 
     private SupplicantState handleSupplicantStateChange(Message message) {
         StateChangeResult stateChangeResult = (StateChangeResult) message.obj;
+        if (!mInterfaceName.equals(stateChangeResult.interfaceName)) {
+            Log.i(TAG, "ignoring SUPPLICANT_STATE_CHANGE_EVENT from inactive interface " +
+                    stateChangeResult.interfaceName);
+            return null;
+        }
         SupplicantState state = stateChangeResult.state;
         mWifiScoreCard.noteSupplicantStateChanging(mWifiInfo, state);
         // Supplicant state change
@@ -4067,6 +4128,12 @@ public class ClientModeImpl extends StateMachine {
 
         updateDataInterface();
         registerForWifiMonitorEvents();
+        /* If the secondary interface is not registered,
+         * WifiMonitor publishes its events to all registered monitors and
+         * this confuses ClientModeImpl.
+         * To avoid this, register secondary interface with dummy event.
+         */
+        mWifiMonitor.registerHandler(mWifiNative.getFstSlaveIface(), 0, getHandler());
         mWifiInjector.getWifiLastResortWatchdog().clearAllFailureCounts();
         setSupplicantLogLevel();
 
@@ -4246,6 +4313,11 @@ public class ClientModeImpl extends StateMachine {
             // Inform sar manager that wifi is Enabled
             mSarManager.setClientWifiState(WifiManager.WIFI_STATE_ENABLED);
             mWifiScoreCard.noteSupplicantStateChanged(mWifiInfo);
+
+            if (mWifiScanner == null) {
+                mWifiScanner = mWifiInjector.getWifiScanner();
+                mWifiScanner.registerScanListener(mScanListener);
+            }
         }
 
         @Override
@@ -4629,6 +4701,9 @@ public class ClientModeImpl extends StateMachine {
                         config.requirePMF = false;
                     }
 
+                    mWifiNative.enslaveClientInterfaces(false);
+                    mIsFSTConnection = false;
+
                     if (config.macRandomizationSetting
                             == WifiConfiguration.RANDOMIZATION_PERSISTENT
                             && mConnectedMacRandomzationSupported) {
@@ -4640,6 +4715,16 @@ public class ClientModeImpl extends StateMachine {
                     String currentMacAddress = mWifiNative.getMacAddress(mInterfaceName);
                     mWifiInfo.setMacAddress(currentMacAddress);
                     Log.i(TAG, "Connecting with " + currentMacAddress + " as the mac address");
+
+                    if (isFst(config)) {
+                        mWifiNative.setFstMasterInterfaceName(mInterfaceName);
+                        mWifiNative.enslaveClientInterfaces(true);
+                        logi("starting FST connection");
+                        mIsFSTConnection = true;
+                    }
+
+                    updateDataInterface();
+
                     if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
                          config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
                         device_capability = getCapabilities("key_mgmt");
@@ -5105,6 +5190,22 @@ public class ClientModeImpl extends StateMachine {
             }
 
             return handleStatus;
+        }
+
+        private boolean isFst(WifiConfiguration config) {
+            if (!mWifiNative.isFstAvailable()) {
+                logd("FST not available");
+                return false;
+            }
+
+            ScanResult scanRes = config.getNetworkSelectionStatus().getCandidate();
+            if (scanRes == null) {
+                scanRes = mScanListener.getScanResultForSsid(config.SSID);
+                if (scanRes == null) {
+                    return false;
+                }
+            }
+            return mWifiNative.isFstConnection(scanRes);
         }
     }
 

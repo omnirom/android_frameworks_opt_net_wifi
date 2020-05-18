@@ -173,6 +173,7 @@ public class WifiNativeTest {
     @Mock private Handler mHandler;
     @Mock private SendMgmtFrameCallback mSendMgmtFrameCallback;
     @Mock private Random mRandom;
+    @Mock private FstManagerGroupHal mFstManagerGroupHal;
     private WifiNative mWifiNative;
 
     @Before
@@ -183,7 +184,8 @@ public class WifiNativeTest {
         when(mWifiVendorHal.startVendorHalAp()).thenReturn(true);
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mStaIfaceHal, mHostapdHal, mWificondControl,
-                mWifiMonitor, mNwService, mPropertyService, mWifiMetrics, mHandler, mRandom);
+                mWifiMonitor, mNwService, mPropertyService, mWifiMetrics, mHandler, mRandom,
+                mFstManagerGroupHal);
     }
 
     /**

@@ -79,6 +79,7 @@ public class WifiNativeInterfaceManagementTest {
     @Mock private INetworkManagementService mNwManagementService;
     @Mock private PropertyService mPropertyService;
     @Mock private WifiMetrics mWifiMetrics;
+    @Mock private FstManagerGroupHal mFstManagerGroupHal;
 
     @Mock private WifiNative.StatusListener mStatusListener;
     @Mock private WifiNative.InterfaceCallback mIfaceCallback0;
@@ -164,10 +165,11 @@ public class WifiNativeInterfaceManagementTest {
         mInOrder = inOrder(mWifiVendorHal, mWificondControl, mSupplicantStaIfaceHal, mHostapdHal,
                 mWifiMonitor, mNwManagementService, mIfaceCallback0, mIfaceCallback1, mWifiMetrics);
 
+        mFstManagerGroupHal = new FstManagerGroupHal(mLooper.getLooper());
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWificondControl,
                 mWifiMonitor, mNwManagementService, mPropertyService, mWifiMetrics,
-                new Handler(mLooper.getLooper()), null);
+                new Handler(mLooper.getLooper()), null, mFstManagerGroupHal);
         mWifiNative.initialize();
         mWifiNative.registerStatusListener(mStatusListener);
 

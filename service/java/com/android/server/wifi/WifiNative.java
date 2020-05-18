@@ -37,6 +37,7 @@ import android.net.wifi.WifiDppConfig;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.text.TextUtils;
+import android.util.ArraySet;
 import android.util.Log;
 import android.util.SparseArray;
 
@@ -93,13 +94,17 @@ public class WifiNative {
     private boolean mVerboseLoggingEnabled = false;
     private boolean mIs5GhzBandSupportedInitialized = false;
     private boolean mIs5GhzBandSupported = true;
-
+    private final FstManagerGroupHal mFstManagerGroupHal;
+    private boolean mIsFstAvailable;
+    private String mFstSlaveIface;
+    private String mFstGroupName;
+    private String mFstMuxInterface;
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
                       WificondControl condControl, WifiMonitor wifiMonitor,
                       INetworkManagementService nwService,
                       PropertyService propertyService, WifiMetrics wifiMetrics,
-                      Handler handler, Random random) {
+                      Handler handler, Random random, FstManagerGroupHal fstManagerGroupHal) {
         mWifiVendorHal = vendorHal;
         mSupplicantStaIfaceHal = staIfaceHal;
         mHostapdHal = hostapdHal;
@@ -113,6 +118,7 @@ public class WifiNative {
         qtiConnectedbands = new BitSet();
         qtiConnectedbands.set(ConnectedBand.BAND_NONE);
         mIfaceBands = new HashMap<>();
+        mFstManagerGroupHal = fstManagerGroupHal;
     }
 
     /**
@@ -124,6 +130,7 @@ public class WifiNative {
         mSupplicantStaIfaceHal.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiVendorHal.enableVerboseLogging(mVerboseLoggingEnabled);
         mHostapdHal.enableVerboseLogging(mVerboseLoggingEnabled);
+        mFstManagerGroupHal.enableVerboseLogging(mVerboseLoggingEnabled);
     }
 
     public static class WifiGenerationStatus {
@@ -172,11 +179,9 @@ public class WifiNative {
         public static final int IFACE_TYPE_AP = 0;
         public static final int IFACE_TYPE_STA_FOR_CONNECTIVITY = 1;
         public static final int IFACE_TYPE_STA_FOR_SCAN = 2;
-        public static final int IFACE_TYPE_FST = 3;
         public static final int IFACE_TYPE_BRIDGE = 4;
 
-       @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA_FOR_CONNECTIVITY, IFACE_TYPE_STA_FOR_SCAN, IFACE_TYPE_FST,
-                IFACE_TYPE_BRIDGE})
+       @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA_FOR_CONNECTIVITY, IFACE_TYPE_STA_FOR_SCAN, IFACE_TYPE_BRIDGE})
         @Retention(RetentionPolicy.SOURCE)
         public @interface IfaceType{}
 
@@ -213,9 +218,6 @@ public class WifiNative {
                     break;
                 case IFACE_TYPE_AP:
                     typeString = "AP";
-                    break;
-                case IFACE_TYPE_FST:
-                    typeString = "FST";
                     break;
                 case IFACE_TYPE_BRIDGE:
                     typeString = "BRIDGE";
@@ -339,6 +341,17 @@ public class WifiNative {
             return iface.name;
         }
 
+        private @NonNull Set<String> findAllStaIfaceNames() {
+            Set<String> ifaceNames = new ArraySet<>();
+            for (Iface iface : mIfaces.values()) {
+                if (iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY
+                        || iface.type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
+                    ifaceNames.add(iface.name);
+                }
+            }
+            return ifaceNames;
+        }
+
         /** Removes the existing iface that does not match the provided id. */
         public Iface removeExistingIface(int newIfaceId) {
             Iface removedIface = null;
@@ -428,6 +441,32 @@ public class WifiNative {
         while (!connected && connectTries++ < CONNECT_TO_SUPPLICANT_RETRY_TIMES) {
             // Check if the initialization is complete.
             connected = mSupplicantStaIfaceHal.isInitializationComplete();
+            if (connected) {
+                break;
+            }
+            try {
+                Thread.sleep(CONNECT_TO_SUPPLICANT_RETRY_INTERVAL_MS);
+            } catch (InterruptedException ignore) {
+            }
+        }
+        return connected;
+    }
+
+    private boolean startAndWaitForFstManagerConnection() {
+        // Start initialization if not already started.
+        if (!mFstManagerGroupHal.isInitializationStarted()
+                && !mFstManagerGroupHal.initialize()) {
+            return false;
+        }
+        if (!mFstManagerGroupHal.startDaemon()) {
+            Log.e(TAG, "Failed to startup fst manager");
+            return false;
+        }
+        boolean connected = false;
+        int connectTries = 0;
+        while (!connected && connectTries++ < CONNECT_TO_SUPPLICANT_RETRY_TIMES) {
+            // Check if the initialization is complete.
+            connected = mFstManagerGroupHal.isInitializationComplete();
             if (connected) {
                 break;
             }
@@ -530,8 +569,16 @@ public class WifiNative {
     private void onClientInterfaceForConnectivityDestroyed(@NonNull Iface iface) {
         synchronized (mLock) {
             mWifiMonitor.stopMonitoring(iface.name);
+
+            stopFst();
+
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
+            }
+            if (mIsFstAvailable) {
+                if (!mSupplicantStaIfaceHal.teardownIface(getFstSlaveIface())) {
+                    Log.e(TAG, "Failed to teardown iface " + getFstSlaveIface() + " in supplicant");
+                }
             }
             if (!mSupplicantStaIfaceHal.teardownIface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in supplicant on " + iface);
@@ -541,7 +588,6 @@ public class WifiNative {
             }
             stopSupplicantIfNecessary();
             stopHalAndWificondIfNecessary();
-            removeFstInterface();
         }
     }
 
@@ -556,7 +602,6 @@ public class WifiNative {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
             stopHalAndWificondIfNecessary();
-            removeFstInterface();
         }
     }
 
@@ -578,7 +623,6 @@ public class WifiNative {
             }
             stopHostapdIfNecessary();
             stopHalAndWificondIfNecessary();
-            removeFstInterface();
         }
     }
 
@@ -998,80 +1042,8 @@ public class WifiNative {
         }
     }
 
-    private boolean setupFstInterface(@NonNull Iface iface)
-    {
-        int fstEnabled = SystemProperties.getInt("persist.vendor.fst.rate.upgrade.en", 0);
-        Log.d(TAG, "fst " + ((fstEnabled == 1) ? "enabled" : "disabled"));
-        if (fstEnabled != 1) {
-            Log.d(TAG, "FST disabled, not creating FST interface");
-            return true;
-        }
-        boolean hasOther = mIfaceMgr.hasAnyIfaceOfType(iface.type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY ?
-                                                       Iface.IFACE_TYPE_AP : Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY);
-        if (hasOther) {
-            Log.e(TAG, "FST not supported in STA/SAP concurrency");
-            return false;
-        }
-        Iface fstIface = mIfaceMgr.findAnyIfaceOfType(iface.IFACE_TYPE_FST);
-        if (fstIface != null) {
-            Log.e(TAG, "FST interface already added");
-            return false;
-        }
-
-        fstIface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_FST);
-        if (fstIface == null) {
-            Log.e(TAG, "Failed to allocate FST interface");
-            return false;
-        }
-        fstIface.name = TetheringConfiguration.getFstInterfaceName();
-        fstIface.externalListener = iface.externalListener;
-        iface.externalListener = new InterfaceCallback() {
-            public void onDestroyed(String ifaceName) {
-                /* nothing */
-            }
-            public void onDown(String ifaceName) {
-                /* nothing */
-            }
-            public void onUp(String ifaceName) {
-                /* nothing */
-            }
-        };
-        iface.networkObserver = new NetworkObserverInternal(iface.id);
-        if (!registerNetworkObserver(iface.networkObserver)) {
-            Log.e(TAG, "Failed to register network observer on " + fstIface);
-            iface.externalListener = fstIface.externalListener;
-            teardownInterface(fstIface.name);
-            return false;
-        }
-        return true;
-    }
-
-    private void removeFstInterface() {
-        Iface iface = mIfaceMgr.findAnyIfaceOfType(Iface.IFACE_TYPE_FST);
-        if (iface == null) {
-            return;
-        }
-        mIfaceMgr.removeIface(iface.id);
-        // the FST bonding interface is never destroyed
-        // make sure it is just brought down
-        try {
-            mNwManagementService.setInterfaceDown(iface.name);
-            mNwManagementService.clearInterfaceAddresses(iface.name);
-        } catch (RemoteException re) {
-            Log.e(TAG, "Unable to change interface settings: " + re);
-        } catch (IllegalStateException ie) {
-            Log.e(TAG, "Unable to change interface settings: " + ie);
-        }
-    }
-
     public String getFstDataInterfaceName() {
-        synchronized(mLock) {
-            Iface iface = mIfaceMgr.findAnyIfaceOfType(Iface.IFACE_TYPE_FST);
-            if (iface != null) {
-                return iface.name;
-            }
-            return null;
-        }
+        return mFstMuxInterface;
     }
 
     /**
@@ -1092,6 +1064,11 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToHal();
                 return null;
             }
+
+            boolean res = startFst();
+            if (!res)
+                return null;
+
             if (!startSupplicant()) {
                 Log.e(TAG, "Failed to start supplicant");
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToSupplicant();
@@ -1110,12 +1087,6 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToHal();
                 return null;
             }
-            if (!setupFstInterface(iface)) {
-                Log.e(TAG, "Failed to setup fst interface from: " + iface);
-                teardownInterface(iface.name);
-                mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToWificond();
-                return null;
-            }
             if (mWificondControl.setupInterfaceForClientMode(iface.name) == null) {
                 Log.e(TAG, "Failed to setup iface in wificond on " + iface);
                 teardownInterface(iface.name);
@@ -1127,6 +1098,13 @@ public class WifiNative {
                 teardownInterface(iface.name);
                 mWifiMetrics.incrementNumSetupClientInterfaceFailureDueToSupplicant();
                 return null;
+            }
+            if (mIsFstAvailable) {
+                if (!mSupplicantStaIfaceHal.setupIface(getFstSlaveIface())) {
+                    Log.e(TAG, "Failed to setup iface " + getFstSlaveIface() + " in supplicant on");
+                    teardownInterface(iface.name);
+                    return null;
+                }
             }
             iface.networkObserver = new NetworkObserverInternal(iface.id);
             if (!registerNetworkObserver(iface.networkObserver)) {
@@ -1245,12 +1223,6 @@ public class WifiNative {
                 Log.e(TAG, "Failed to create AP iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
-                return null;
-            }
-            if (!setupFstInterface(iface)) {
-                Log.e(TAG, "Failed to setup fst interface from: " + iface);
-                teardownInterface(iface.name);
-                mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToWificond();
                 return null;
             }
             if (mWificondControl.setupInterfaceForSoftApMode(iface.name) == null) {
@@ -1420,6 +1392,17 @@ public class WifiNative {
     public String getClientInterfaceName() {
         synchronized (mLock) {
             return mIfaceMgr.findAnyStaIfaceName();
+        }
+    }
+
+    /**
+     * Get names of all the client interfaces.
+     *
+     * @return List of interface name of all active client interfaces.
+     */
+    public Set<String> getClientInterfaceNames() {
+        synchronized (mLock) {
+            return mIfaceMgr.findAllStaIfaceNames();
         }
     }
 
@@ -3852,5 +3835,186 @@ public class WifiNative {
     String doDriverCmd(String ifaceName, String command)
     {
         return mSupplicantStaIfaceHal.doDriverCmd(ifaceName, command);
+    }
+
+    /**
+     * Death handler for the fst manager daemon.
+     * TODO currently does the same as the p2p supplicant death handler,
+     * consider merging the two.
+     */
+    private class FstManagerDeathHandlerInternal implements SupplicantDeathEventHandler {
+        @Override
+        public void onDeath() {
+            Log.i(TAG, "fst manager died. Cleaning up internal state.");
+            onNativeDaemonDeath();
+            // TODO: mWifiMetrics.incrementNumFstManagerCrashes();
+        }
+    }
+
+    private boolean startFstManager() {
+        if (!startAndWaitForFstManagerConnection()) {
+            Log.e(TAG, "Failed to connect to fst manager");
+            return false;
+        }
+        if (!mFstManagerGroupHal.registerDeathHandler(
+                new FstManagerDeathHandlerInternal())) {
+            Log.e(TAG, "Failed to register fst manager death handler");
+            return false;
+        }
+        return true;
+    }
+
+    private void stopFstManager() {
+        if (!mFstManagerGroupHal.deregisterDeathHandler()) {
+            Log.e(TAG, "Failed to deregister supplicant death handler");
+        }
+        mFstManagerGroupHal.terminate();
+    }
+
+    /**
+     * start FST manager and setup communication to FST group
+     * FST is started if multiple Wifi chips exist.
+     * fst-manager should be running as long as WIFI STA is enabled.
+     */
+    private synchronized boolean startFst() {
+        // cache FST available property
+        mIsFstAvailable = mPropertyService.getBoolean("persist.vendor.fst.rate.upgrade.en", false);
+        if (!mIsFstAvailable) {
+            if (mVerboseLoggingEnabled) {
+                Log.i(TAG, "FST feature not enabled, skip startFst");
+            }
+            return true;
+        }
+
+        Log.i(TAG, "startFst");
+
+        if (!startFstManager()) {
+            Log.e(TAG, "failed to start fst manager");
+            mIsFstAvailable = false;
+            return false;
+        }
+
+        mFstGroupName = mFstManagerGroupHal.setupGroup(null);
+        if (TextUtils.isEmpty(mFstGroupName)) {
+            Log.e(TAG, "failed to setup FST group");
+            stopFstManager();
+            mIsFstAvailable = false;
+            return false;
+        }
+
+        mFstMuxInterface = mFstManagerGroupHal.getMuxInterfaceName(mFstGroupName);
+        if (mFstMuxInterface == null) {
+            Log.e(TAG, "getMuxInterfaceName failed");
+            mFstManagerGroupHal.teardownGroup(mFstGroupName);
+            stopFstManager();
+            mIsFstAvailable = false;
+            return false;
+        }
+
+        mWifiMonitor.startMonitoring(mFstMuxInterface);
+
+        Log.i(TAG, "startFst completed, mFstMuxInterface=" + mFstMuxInterface);
+
+        return true;
+    }
+
+    /**
+     * detach from FST group and stop FST manager
+     */
+    public synchronized void stopFst() {
+        boolean hasAnyStaIface = mIfaceMgr.hasAnyStaIfaceForConnectivity();
+        if (!mIsFstAvailable || hasAnyStaIface) {
+            if (mVerboseLoggingEnabled)
+                Log.i(TAG, "stopFst skipped, mIsFstAvailable=" + mIsFstAvailable + ", hasAnyStaIface=" + hasAnyStaIface);
+            return;
+        }
+
+        Log.i(TAG, "stopFst");
+
+        mWifiMonitor.stopMonitoring(mFstMuxInterface);
+
+        if (!mFstManagerGroupHal.teardownGroup(mFstGroupName)) {
+            Log.e(TAG, "Failed to teardown fst group " + mFstGroupName);
+        }
+        stopFstManager();
+
+        mIsFstAvailable = false;
+    }
+
+    public synchronized void setFstMasterInterfaceName(String interfaceName) {
+        ArrayList<String> ifaces = mFstManagerGroupHal.listInterfaces(mFstGroupName);
+
+        for (String iface : ifaces) {
+            if (mFstManagerGroupHal.isRateUpgradeMaster(mFstGroupName, iface) &&
+                    !iface.equals(interfaceName)) {
+                Log.i(TAG, "rename " + iface + " => " + interfaceName);
+                if (!mFstManagerGroupHal.renameInterface(mFstGroupName, iface, interfaceName)) {
+                    Log.e(TAG, "failed to rename " + iface + " => " + interfaceName);
+                }
+
+                break;
+            }
+        }
+    }
+
+    public boolean enslaveInterface(String interfaceName, boolean enslave) {
+        if (!mIsFstAvailable)
+            return false;
+
+        boolean res = mFstManagerGroupHal.enslave(mFstGroupName, interfaceName, enslave);
+        if (!res) {
+            Log.e(TAG, "failed to " + (enslave ? "enslave " : "release ") + interfaceName);
+        }
+
+        return res;
+    }
+
+    public synchronized boolean enslaveClientInterfaces(boolean enslave) {
+        boolean res;
+        String iface = getClientInterfaceName();
+
+        // enslave primary first and then slave
+        Log.i(TAG, (enslave ? "enslaving " : "releasing ") + iface);
+        res = enslaveInterface(iface, enslave);
+        if (!res) {
+            return false;
+        }
+
+        Log.i(TAG, (enslave ? "enslaving " : "releasing ") + getFstSlaveIface());
+        res = enslaveInterface(getFstSlaveIface(), enslave);
+        if (!res) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public boolean isFstConnection(ScanResult scanRes) {
+        if (!mIsFstAvailable)
+            return false;
+
+        final int EID_MULTI_BAND = 158; // TODO add to ScanResult.InformationElement
+        for (ScanResult.InformationElement ie : scanRes.informationElements) {
+            if (ie.id == EID_MULTI_BAND) {
+                if (mVerboseLoggingEnabled)
+                    Log.d(TAG, "fst SSID " + scanRes.SSID);
+                //TODO - check that 60GHz band is inside the IE
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public boolean isFstAvailable() {
+        Log.d(TAG, "mIsFstAvailable = " + mIsFstAvailable);
+        return mIsFstAvailable;
+    }
+
+    public String getFstSlaveIface() {
+        if (TextUtils.isEmpty(mFstSlaveIface)) {
+            mFstSlaveIface = mPropertyService.getString("persist.vendor.wigig.interface", "wigig0");
+        }
+        return mFstSlaveIface;
     }
 }

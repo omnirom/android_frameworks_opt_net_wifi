@@ -157,6 +157,7 @@ public class WifiInjector {
     private final CellularLinkLayerStatsCollector mCellularLinkLayerStatsCollector;
     private final MacAddressUtil mMacAddressUtil;
     private final ConnectionFailureNotificationBuilder mConnectionFailureNotificationBuilder;
+    private final FstManagerGroupHal mFstManagerGroupHal;
 
     public WifiInjector(Context context) {
         if (context == null) {
@@ -222,10 +223,12 @@ public class WifiInjector {
                 clientModeImplLooper, mClock);
         mNwManagementService = INetworkManagementService.Stub.asInterface(
                 ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE));
+        mFstManagerGroupHal = new FstManagerGroupHal(clientModeImplLooper);
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWificondControl,
                 mWifiMonitor, mNwManagementService, mPropertyService, mWifiMetrics,
-                new Handler(mWifiCoreHandlerThread.getLooper()), new Random());
+                new Handler(mWifiCoreHandlerThread.getLooper()), new Random(),
+                mFstManagerGroupHal);
         mWifiP2pMonitor = new WifiP2pMonitor(this);
         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
         mWifiP2pNative = new WifiP2pNative(
