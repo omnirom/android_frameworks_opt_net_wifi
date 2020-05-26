@@ -453,7 +453,8 @@ public class HostapdHal {
             if (enableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
                 if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
-                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                    ifaceParams.channelParams.acsShouldExcludeDfs = !mContext.getResources()
+                            .getBoolean(R.bool.config_wifiSoftapAcsIncludeDfs);
                 }
             }
             ifaceParams.channelParams.channel =
