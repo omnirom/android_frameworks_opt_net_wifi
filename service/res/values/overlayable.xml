@@ -132,6 +132,7 @@
           <item type="bool" name="config_wifiSaeUpgradeOffloadEnabled" />
           <item type="integer" name="config_wifiMaxNativeFailureSelfRecoveryPerHour" />
           <item type="bool" name="config_wifiIgnoreOpenSavedNetworkWhenSecureSuggestionAvailable" />
+          <item type="bool" name="config_wifiSoftapAcsIncludeDfs" />
           <item type="bool" name="config_vendorWifi11axReadySupport" />
           <!-- Params from config.xml that can be overlayed -->
 
