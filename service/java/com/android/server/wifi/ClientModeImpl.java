@@ -3527,6 +3527,15 @@ public class ClientModeImpl extends StateMachine {
         mWifiScoreCard.noteIpConfiguration(mWifiInfo);
     }
 
+    /* Do Broadcast WIFI NETWORK DISCONNECTION Intent with message.arg1 and message.arg2 */
+    private void NotifyBroadcastNetworkDisconnection(int arg1, int arg2) {
+        loge("ClientModeImpl: NotifyBroadcastNetworkDisconnection called with" + arg1 + ", " + arg2);
+        Intent intent = new Intent(WifiManager.WIFI_NETWORK_DISCONNECTION);
+        intent.putExtra(WifiManager.EXTRA_WIFI_NETWORK_DISCONNECTION_ARG1, arg1);
+        intent.putExtra(WifiManager.EXTRA_WIFI_NETWORK_DISCONNECTION_ARG2, arg2);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
     /* Do Broadcast DHCP FAILURE Intent with reason code i.e. REPORT_REASON_DHCP_FAILURE */
     private void NotifyBroadcastDhcpFailure() {
         Intent intent = new Intent(WifiManager.WIFI_DHCP_FAILURE);
@@ -6376,6 +6385,7 @@ public class ClientModeImpl extends StateMachine {
                                 + " Network Selection Status=" + (config == null ? "Unavailable"
                                     : config.getNetworkSelectionStatus().getNetworkStatusString()));
                     }
+                    NotifyBroadcastNetworkDisconnection(message.arg1, message.arg2);
                     break;
                 case CMD_START_ROAM:
                     // Clear the driver roam indication since we are attempting a framework roam
