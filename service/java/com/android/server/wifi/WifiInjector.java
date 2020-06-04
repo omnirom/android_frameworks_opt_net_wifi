@@ -122,6 +122,7 @@ public class WifiInjector {
     private final WifiConfigStore mWifiConfigStore;
     private final WifiKeyStore mWifiKeyStore;
     private final WifiConfigManager mWifiConfigManager;
+    private WifiConfigManager mQtiWifiConfigManager = null;
     private final WifiConnectivityHelper mWifiConnectivityHelper;
     private final LocalLog mConnectivityLocalLog;
     private final WifiNetworkSelector mWifiNetworkSelector;
@@ -400,11 +401,13 @@ public class WifiInjector {
         return sWifiInjector;
     }
 
+    private int mVerboseLoggingEnabled = 0;
     /**
      * Enable verbose logging in Injector objects. Called from the WifiServiceImpl (based on
      * binder call).
      */
     public void enableVerboseLogging(int verbose) {
+        mVerboseLoggingEnabled = verbose;
         mWifiLastResortWatchdog.enableVerboseLogging(verbose);
         mWifiBackupRestore.enableVerboseLogging(verbose);
         mHalDeviceManager.enableVerboseLogging(verbose);
@@ -414,6 +417,7 @@ public class WifiInjector {
         LogcatLog.enableVerboseLogging(verbose);
         mDppManager.enableVerboseLogging(verbose);
         mWifiCarrierInfoManager.enableVerboseLogging(verbose);
+        mActiveModeWarden.enableVerboseLogging(verbose);
     }
 
     public UserManager getUserManager() {
@@ -847,5 +851,101 @@ public class WifiInjector {
 
     public DeviceConfigFacade getDeviceConfigFacade() {
         return mDeviceConfigFacade;
+    }
+
+    /**
+     * Create QtiWifiConfigManager
+     */
+    public WifiConfigManager makeOrGetQtiWifiConfigManager() {
+        if(mQtiWifiConfigManager == null)
+        {
+            Handler wifiHandler = new Handler(mWifiHandlerThread.getLooper()); 
+            WifiConfigStore mQtiWifiConfigStore = new WifiConfigStore(mContext, wifiHandler, mClock, mWifiMetrics,
+                mFrameworkFacade.isNiapModeOn(mContext), WifiManager.STA_SECONDARY);
+            mQtiWifiConfigManager = new WifiConfigManager(mContext, mClock,
+                mUserManager, mWifiCarrierInfoManager,
+                mWifiKeyStore, mQtiWifiConfigStore, mWifiPermissionsUtil,
+                mWifiPermissionsWrapper, this,
+                new NetworkListSharedStoreData(mContext),
+                new NetworkListUserStoreData(mContext),
+                new RandomizedMacStoreData(), mFrameworkFacade, wifiHandler, mDeviceConfigFacade,
+                mWifiScoreCard, mLruConnectionTracker);
+            mQtiWifiConfigManager.loadFromStore();
+        }
+        return mQtiWifiConfigManager;
+    }
+
+
+    /**
+     * Create a QtiClientModeManager
+     *
+     * @param id interface id for  QtiClientModeManager
+     * @param listener listener for QtiClientModeManager state changes
+     * @return a new instance of QtiClientModeManager
+     */
+    public QtiClientModeManager makeQtiClientModeManager(QtiClientModeManager.Listener listener) {
+        return new QtiClientModeManager(mContext, mWifiHandlerThread.getLooper(), mClock,
+                mWifiNative, listener, this,  mSarManager, mWakeupController,
+                WifiManager.STA_SECONDARY, makeOrGetQtiWifiConfigManager());
+    }
+
+    /**
+     * Construct a new instance of QtiClientModeImpl to manage addtional stations.
+     *
+     * Create and return a new QtiClientModeImpl.
+     * @param identity staId.
+     * @param listener listener for QtiClientModeManager state changes
+     */
+    public QtiClientModeImpl makeQtiClientModeImpl(QtiClientModeManager.Listener listener, WifiConfigManager qtiWifiConfigManager ) {
+        Handler wifiHandler = new Handler(mWifiHandlerThread.getLooper()); 
+        SupplicantStateTracker supplicantStateTracker = new SupplicantStateTracker(
+                mContext, qtiWifiConfigManager, mBatteryStats, wifiHandler);
+        return new QtiClientModeImpl(mContext, mFrameworkFacade, mWifiHandlerThread.getLooper(),
+                       this, mWifiNative,new WrongPasswordNotifier(mContext, mFrameworkFacade),
+                       mWifiTrafficPoller, mLinkProbeManager, WifiManager.STA_SECONDARY, mBatteryStats,
+                       supplicantStateTracker, mMboOceController, mWifiCarrierInfoManager,
+                       new EapFailureNotifier(mContext, mFrameworkFacade, mWifiCarrierInfoManager),
+                       new SimRequiredNotifier(mContext, mFrameworkFacade), 
+                       listener, qtiWifiConfigManager);
+    }
+
+    /**
+     * Construct a new instance of QtiWifiConnectivityManager and its dependencies.
+     *
+     * Create and return a new QtiWifiConnectivityManager.
+     * @param identity staId.
+     * @param qtiClientModeImpl Instance of client mode impl.
+     */
+    public QtiWifiConnectivityManager makeQtiWifiConnectivityManager(QtiClientModeImpl qtiClientModeImpl, WifiConfigManager qtiWifiConfigManager) {
+        WifiConnectivityHelper mQtiWifiConnectivityHelper = new WifiConnectivityHelper(mWifiNative);
+
+        ScoringParams scoringParams = new ScoringParams(mContext);
+        WifiNetworkSelector wifiNetworkSelector = new WifiNetworkSelector(mContext, mWifiScoreCard, scoringParams,
+                qtiWifiConfigManager, mClock, mConnectivityLocalLog, mWifiMetrics, mWifiNative,
+                mThroughputPredictor);
+        CompatibilityScorer compatibilityScorer = new CompatibilityScorer(scoringParams);
+        wifiNetworkSelector.registerCandidateScorer(compatibilityScorer);
+        ScoreCardBasedScorer scoreCardBasedScorer = new ScoreCardBasedScorer(scoringParams);
+        wifiNetworkSelector.registerCandidateScorer(scoreCardBasedScorer);
+        BubbleFunScorer bubbleFunScorer = new BubbleFunScorer(scoringParams);
+        wifiNetworkSelector.registerCandidateScorer(bubbleFunScorer);
+        ThroughputScorer throughputScorer = new ThroughputScorer(scoringParams);
+        wifiNetworkSelector.registerCandidateScorer(throughputScorer);
+        PasspointNetworkNominateHelper nominateHelper =
+                new PasspointNetworkNominateHelper(mPasspointManager, qtiWifiConfigManager,
+                        mConnectivityLocalLog);
+        SavedNetworkNominator savedNetworkNominator = new SavedNetworkNominator(
+                qtiWifiConfigManager, nominateHelper, mConnectivityLocalLog, mWifiCarrierInfoManager,
+                mWifiPermissionsUtil, mWifiNetworkSuggestionsManager);
+        wifiNetworkSelector.registerNetworkNominator(savedNetworkNominator);
+
+        Handler wifiHandler = new Handler(mWifiHandlerThread.getLooper());
+        return new QtiWifiConnectivityManager(mContext, scoringParams,
+                qtiClientModeImpl, this, qtiWifiConfigManager, wifiNetworkSelector,
+                mQtiWifiConnectivityHelper, wifiHandler, mClock, mConnectivityLocalLog, WifiManager.STA_SECONDARY);
+    }
+
+    public int getVerboseLogging() {
+        return mVerboseLoggingEnabled;
     }
 }

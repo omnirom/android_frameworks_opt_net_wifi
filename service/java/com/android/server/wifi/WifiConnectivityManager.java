@@ -317,8 +317,9 @@ public class WifiConnectivityManager {
 
         localLog(listenerName + " onResults: start network selection");
 
+        List<ScanDetail> filteredScans = mStateMachine.qtiGetFilteredScan(scanDetails);
         List<WifiCandidates.Candidate> candidates = mNetworkSelector.getCandidatesFromScan(
-                scanDetails, bssidBlocklist, mWifiInfo, mStateMachine.isConnected(),
+                filteredScans, bssidBlocklist, mWifiInfo, mStateMachine.isConnected(),
                 mStateMachine.isDisconnected(), mUntrustedConnectionAllowed);
         mLatestCandidates = candidates;
         mLatestCandidatesTimestampMs = mClock.getElapsedSinceBootMillis();
@@ -938,7 +939,7 @@ public class WifiConnectivityManager {
             // Framework specifies the connection target BSSID if firmware doesn't support
             // {@link android.net.wifi.WifiManager#WIFI_FEATURE_CONTROL_ROAMING} or the
             // candidate configuration contains a specified BSSID.
-            if (mConnectivityHelper.isFirmwareRoamingSupported() && (candidate.BSSID == null
+            if (!mStateMachine.isActiveDualMode() && mConnectivityHelper.isFirmwareRoamingSupported() && (candidate.BSSID == null
                       || candidate.BSSID.equals(ClientModeImpl.SUPPLICANT_BSSID_ANY))) {
                 targetBssid = ClientModeImpl.SUPPLICANT_BSSID_ANY;
                 localLog("connectToNetwork: Connect to " + candidate.SSID + ":" + targetBssid

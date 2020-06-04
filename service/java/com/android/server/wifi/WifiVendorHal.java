@@ -2627,6 +2627,16 @@ public class WifiVendorHal {
         }
     }
 
+    /**
+     * Returns whether Dual STA is supported or not.
+     */
+    public boolean isDualStaSupported() {
+        synchronized (sLock) {
+            return mHalDeviceManager.canSupportIfaceCombo(new SparseArray<Integer>() {{
+                    put(IfaceType.STA, 2);
+                }});
+        }
+    }
     // This creates a blob of IE elements from the array received.
     // TODO: This ugly conversion can be removed if we put IE elements in ScanResult.
     private static byte[] hidlIeArrayToFrameworkIeBlob(ArrayList<WifiInformationElement> ies) {

@@ -17,12 +17,12 @@
 package com.android.server.wifi;
 
 import android.content.Context;
+import static android.net.wifi.WifiManager.STA_SECONDARY;
 
 /**
  * Serialization & Deserialization of shared WiFi network configurations.
  */
 public class NetworkListSharedStoreData extends NetworkListStoreData {
-
     public NetworkListSharedStoreData(Context context) {
         super(context);
     }
@@ -30,6 +30,13 @@ public class NetworkListSharedStoreData extends NetworkListStoreData {
     @Override
     public @WifiConfigStore.StoreFileId int getStoreFileId() {
         // Shared general store.
+        return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
+    }
+    @Override
+    public @WifiConfigStore.StoreFileId int getStoreFileId(int staId) {
+        // Shared general store.
+        if (staId == STA_SECONDARY)
+            return WifiConfigStore.QTI_STORE_FILE_SHARED_SECONDARY;
         return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
     }
 }
