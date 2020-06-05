@@ -82,9 +82,9 @@ public class ClientModeManager implements ActiveModeManager {
 
     private String mClientInterfaceName;
     private boolean mIfaceIsUp = false;
-    private @Role int mRole = ROLE_UNSPECIFIED;
     private DeferStopHandler mDeferStopHandler;
-    private int mTargetRole = ROLE_UNSPECIFIED;
+    private @Role int mRole = ROLE_UNSPECIFIED;
+    private @Role int mTargetRole = ROLE_UNSPECIFIED;
     private int mActiveSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
 
     ClientModeManager(Context context, @NonNull Looper looper, Clock clock, WifiNative wifiNative,
@@ -126,6 +126,11 @@ public class ClientModeManager implements ActiveModeManager {
                     WifiManager.WIFI_STATE_ENABLING);
         }
         mDeferStopHandler.start(getWifiOffDeferringTimeMs());
+    }
+
+    @Override
+    public boolean isStopping() {
+        return mTargetRole == ROLE_UNSPECIFIED && mRole != ROLE_UNSPECIFIED;
     }
 
     private class DeferStopHandler extends WifiHandler {
