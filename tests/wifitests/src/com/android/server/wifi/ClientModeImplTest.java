@@ -997,6 +997,8 @@ public class ClientModeImplTest extends WifiBaseTest {
     @Test
     public void connect() throws Exception {
         triggerConnect();
+        WifiConfiguration config = mWifiConfigManager.getConfiguredNetwork(FRAMEWORK_NETWORK_ID);
+        config.carrierId = CARRIER_ID_1;
         when(mWifiConfigManager.getScanDetailCacheForNetwork(FRAMEWORK_NETWORK_ID))
                 .thenReturn(mScanDetailCache);
 
@@ -1045,6 +1047,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         assertEquals("", mConnectedNetwork.enterpriseConfig.getAnonymousIdentity());
         verify(mWifiStateTracker).updateState(eq(WifiStateTracker.CONNECTED));
         assertEquals("ConnectedState", getCurrentState().getName());
+        verify(mWifiMetrics).incrementNumOfCarrierWifiConnectionSuccess();
         verify(mWifiLockManager).updateWifiClientConnected(true);
         verify(mWifiNative).getConnectionCapabilities(any());
         verify(mThroughputPredictor).predictMaxTxThroughput(any());
@@ -1535,6 +1538,60 @@ public class ClientModeImplTest extends WifiBaseTest {
     }
 
     /**
+     * If caller tries to connect to a network that is already connecting, the connection request
+     * should succeed.
+     *
+     * Test: Create and trigger connect to a network, then try to reconnect to the same network.
+     * Verify that connection request returns with CONNECT_NETWORK_SUCCEEDED and did not trigger a
+     * new connection.
+     */
+    @Test
+    public void reconnectToConnectingNetwork() throws Exception {
+        triggerConnect();
+
+        // try to reconnect to the same network (before connection is established).
+        IActionListener connectActionListener = mock(IActionListener.class);
+        mCmi.connect(null, FRAMEWORK_NETWORK_ID, mock(Binder.class), connectActionListener, 0,
+                Binder.getCallingUid());
+        mLooper.dispatchAll();
+        verify(connectActionListener).onSuccess();
+
+        // Verify that we didn't trigger a second connection.
+        verify(mWifiNative, times(1)).connectToNetwork(eq(WIFI_IFACE_NAME), any());
+    }
+
+    /**
+     * If caller tries to connect to a network that is already connecting, the connection request
+     * should succeed.
+     *
+     * Test: Create and trigger connect to a network, then try to reconnect to the same network.
+     * Verify that connection request returns with CONNECT_NETWORK_SUCCEEDED and did trigger a new
+     * connection.
+     */
+    @Test
+    public void reconnectToConnectingNetworkWithCredentialChange() throws Exception {
+        triggerConnect();
+
+        // try to reconnect to the same network with a credential changed (before connection is
+        // established).
+        WifiConfiguration config = new WifiConfiguration();
+        config.networkId = FRAMEWORK_NETWORK_ID;
+        NetworkUpdateResult networkUpdateResult =
+                new NetworkUpdateResult(false /* ip */, false /* proxy */, true /* credential */);
+        networkUpdateResult.setNetworkId(FRAMEWORK_NETWORK_ID);
+        when(mWifiConfigManager.addOrUpdateNetwork(eq(config), anyInt()))
+                .thenReturn(networkUpdateResult);
+        IActionListener connectActionListener = mock(IActionListener.class);
+        mCmi.connect(config, WifiConfiguration.INVALID_NETWORK_ID, mock(Binder.class),
+                connectActionListener, 0, Binder.getCallingUid());
+        mLooper.dispatchAll();
+        verify(connectActionListener).onSuccess();
+
+        // Verify that we triggered a second connection.
+        verify(mWifiNative, times(2)).connectToNetwork(eq(WIFI_IFACE_NAME), any());
+    }
+
+    /**
      * If caller tries to connect to a new network while still provisioning the current one,
      * the connection attempt should succeed.
      */
@@ -1703,6 +1760,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         WifiConfiguration config = new WifiConfiguration();
         config.SSID = sSSID;
         config.getNetworkSelectionStatus().setHasEverConnected(false);
+        config.carrierId = CARRIER_ID_1;
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
 
         mCmi.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT,
@@ -1712,7 +1770,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWrongPasswordNotifier).onWrongPasswordError(eq(sSSID));
         verify(mWifiConfigManager).updateNetworkSelectionStatus(anyInt(),
                 eq(WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD));
-
+        verify(mWifiMetrics).incrementNumOfCarrierWifiConnectionAuthFailure();
         assertEquals("DisconnectedState", getCurrentState().getName());
     }
 
@@ -2944,6 +3002,8 @@ public class ClientModeImplTest extends WifiBaseTest {
      */
     @Test
     public void testReportConnectionEventIsCalledAfterAssociationFailure() throws Exception {
+        mConnectedNetwork.getNetworkSelectionStatus()
+                .setCandidate(getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq).getScanResult());
         // Setup CONNECT_MODE & a WifiConfiguration
         initializeAndAddNetworkAndVerifySuccess();
         mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
@@ -2962,6 +3022,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiNetworkSuggestionsManager).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_REJECTION),
                 any(WifiConfiguration.class), eq(null));
+        verify(mWifiMetrics, never())
+                .incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware();
         verifyConnectionEventTimeoutDoesNotOccur();
     }
 
@@ -2973,6 +3035,8 @@ public class ClientModeImplTest extends WifiBaseTest {
      */
     @Test
     public void testReportConnectionEventIsCalledAfterAuthenticationFailure() throws Exception {
+        mConnectedNetwork.getNetworkSelectionStatus()
+                .setCandidate(getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq).getScanResult());
         // Setup CONNECT_MODE & a WifiConfiguration
         initializeAndAddNetworkAndVerifySuccess();
         mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
@@ -2991,6 +3055,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiNetworkSuggestionsManager).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_AUTHENTICATION_FAILURE),
                 any(WifiConfiguration.class), eq(null));
+        verify(mWifiMetrics, never())
+                .incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware();
         verifyConnectionEventTimeoutDoesNotOccur();
     }
 
@@ -3069,6 +3135,8 @@ public class ClientModeImplTest extends WifiBaseTest {
     @Test
     public void testAssociationRejectionUpdatesWatchdog() throws Exception {
         initializeAndAddNetworkAndVerifySuccess();
+        WifiConfiguration config = mWifiConfigManager.getConfiguredNetwork(FRAMEWORK_NETWORK_ID);
+        config.carrierId = CARRIER_ID_1;
         mCmi.sendMessage(ClientModeImpl.CMD_START_CONNECT, 0, 0, sBSSID);
         mCmi.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT, 0, 0, sBSSID);
         mLooper.dispatchAll();
@@ -3076,6 +3144,7 @@ public class ClientModeImplTest extends WifiBaseTest {
                 anyString(), anyString(), anyInt());
         verify(mBssidBlocklistMonitor).handleBssidConnectionFailure(sBSSID, sSSID,
                 BssidBlocklistMonitor.REASON_ASSOCIATION_REJECTION, false);
+        verify(mWifiMetrics).incrementNumOfCarrierWifiConnectionNonAuthFailure();
     }
 
     /**
@@ -3165,6 +3234,8 @@ public class ClientModeImplTest extends WifiBaseTest {
      */
     @Test
     public void testReportConnectionEventIsCalledAfterDhcpFailure() throws Exception {
+        mConnectedNetwork.getNetworkSelectionStatus()
+                .setCandidate(getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq).getScanResult());
         testDhcpFailure();
         verify(mWifiDiagnostics, atLeastOnce()).reportConnectionEvent(
                 eq(WifiDiagnostics.CONNECTION_EVENT_FAILED));
@@ -3175,6 +3246,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiNetworkSuggestionsManager, atLeastOnce()).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_DHCP), any(WifiConfiguration.class),
                 any(String.class));
+        verify(mWifiMetrics, never())
+                .incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware();
         verifyConnectionEventTimeoutDoesNotOccur();
     }
 
@@ -3186,8 +3259,9 @@ public class ClientModeImplTest extends WifiBaseTest {
      */
     @Test
     public void testReportConnectionEventIsCalledAfterSuccessfulConnection() throws Exception {
+        mConnectedNetwork.getNetworkSelectionStatus()
+                .setCandidate(getGoogleGuestScanDetail(TEST_RSSI, sBSSID1, sFreq).getScanResult());
         connect();
-
         ArgumentCaptor<Messenger> messengerCaptor = ArgumentCaptor.forClass(Messenger.class);
         verify(mConnectivityManager).registerNetworkAgent(messengerCaptor.capture(),
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
@@ -3209,6 +3283,8 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mWifiNetworkSuggestionsManager).handleConnectionAttemptEnded(
                 eq(WifiMetrics.ConnectionEvent.FAILURE_NONE), any(WifiConfiguration.class),
                 any(String.class));
+        // BSSID different, record this connection.
+        verify(mWifiMetrics).incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware();
         verifyConnectionEventTimeoutDoesNotOccur();
     }
 
@@ -3235,8 +3311,8 @@ public class ClientModeImplTest extends WifiBaseTest {
      */
     @Test
     public void testScoreCardNoteConnectionComplete() throws Exception {
-        Pair<String, String> l2KeyAndGroupHint = Pair.create("Wad", "Gab");
-        when(mWifiScoreCard.getL2KeyAndGroupHint(any())).thenReturn(l2KeyAndGroupHint);
+        Pair<String, String> l2KeyAndCluster = Pair.create("Wad", "Gab");
+        when(mWifiScoreCard.getL2KeyAndGroupHint(any())).thenReturn(l2KeyAndCluster);
         connect();
         mLooper.dispatchAll();
         verify(mWifiScoreCard).noteIpConfiguration(any());
@@ -3245,7 +3321,7 @@ public class ClientModeImplTest extends WifiBaseTest {
         verify(mIpClient, atLeastOnce()).updateLayer2Information(captor.capture());
         final Layer2InformationParcelable info = captor.getValue();
         assertEquals(info.l2Key, "Wad");
-        assertEquals(info.groupHint, "Gab");
+        assertEquals(info.cluster, "Gab");
     }
 
     /**
