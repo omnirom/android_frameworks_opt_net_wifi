@@ -931,6 +931,14 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mLog.info("startSoftAp uid=%").c(Binder.getCallingUid()).flush();
 
+        SoftApConfiguration softApConfig = null;
+        if (wifiConfig != null) {
+            softApConfig = ApConfigUtil.fromWifiConfiguration(wifiConfig);
+            if (softApConfig == null) {
+                return false;
+            }
+        }
+
         if (!mTetheredSoftApTracker.setEnablingIfAllowed()) {
             mLog.err("Tethering is already active.").flush();
             return false;
@@ -942,17 +950,14 @@ public class WifiServiceImpl extends BaseWifiService {
             mLohsSoftApTracker.stopAll();
         }
 
-        if (wifiConfig != null) {
-            SoftApConfiguration softApConfig = ApConfigUtil.fromWifiConfiguration(wifiConfig);
-            if (softApConfig == null) return false;
-            return startSoftApInternal(new SoftApModeConfiguration(
-                    WifiManager.IFACE_IP_MODE_TETHERED,
-                    softApConfig, mTetheredSoftApTracker.getSoftApCapability()));
-        } else {
-            return startSoftApInternal(new SoftApModeConfiguration(
-                    WifiManager.IFACE_IP_MODE_TETHERED, null,
-                    mTetheredSoftApTracker.getSoftApCapability()));
+        if (!startSoftApInternal(new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, softApConfig,
+                mTetheredSoftApTracker.getSoftApCapability()))) {
+            mTetheredSoftApTracker.setFailedWhileEnabling();
+            return false;
         }
+
+        return true;
     }
 
     private boolean validateSoftApBand(int apBand) {
@@ -1012,11 +1017,15 @@ public class WifiServiceImpl extends BaseWifiService {
             mLohsSoftApTracker.stopAll();
         }
 
-        return startSoftApInternal(new SoftApModeConfiguration(
+        if (!startSoftApInternal(new SoftApModeConfiguration(
                 WifiManager.IFACE_IP_MODE_TETHERED, softApConfig,
-                mTetheredSoftApTracker.getSoftApCapability()));
-    }
+                mTetheredSoftApTracker.getSoftApCapability()))) {
+            mTetheredSoftApTracker.setFailedWhileEnabling();
+            return false;
+        }
 
+        return true;
+    }
 
     /**
      * Internal method to start softap mode. Callers of this method should have already checked
@@ -1127,6 +1136,14 @@ public class WifiServiceImpl extends BaseWifiService {
                 }
                 mTetheredSoftApState = WIFI_AP_STATE_ENABLING;
                 return true;
+            }
+        }
+
+        public void setFailedWhileEnabling() {
+            synchronized (mLock) {
+                if (mTetheredSoftApState == WIFI_AP_STATE_ENABLING) {
+                    mTetheredSoftApState = WIFI_AP_STATE_FAILED;
+                }
             }
         }
 

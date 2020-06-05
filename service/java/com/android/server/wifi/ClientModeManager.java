@@ -19,6 +19,11 @@ package com.android.server.wifi;
 import android.annotation.NonNull;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.ConnectivityManager.NetworkCallback;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.wifi.WifiManager;
 import android.net.ConnectivityManager.NetworkCallback;
 import android.net.ConnectivityManager;
@@ -33,6 +38,7 @@ import android.os.PersistableBundle;
 import android.os.UserHandle;
 import android.telephony.AccessNetworkConstants;
 import android.telephony.CarrierConfigManager;
+import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.telephony.SubscriptionInfo;
@@ -51,6 +57,7 @@ import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
 import com.android.server.wifi.WifiNative.InterfaceCallback;
 import com.android.server.wifi.util.WifiHandler;
+import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -128,8 +135,6 @@ public class ClientModeManager implements ActiveModeManager {
         private final Runnable mRunnable = () -> continueToStopWifi();
         private int mMaximumDeferringTimeMillis = 0;
         private long mDeferringStartTimeMillis = 0;
-
-        private static final int QTI_DELAY_DISCONNECT_ON_NETWORK_LOST_MS = 1000;
         private NetworkRequest mImsRequest = null;
         private ConnectivityManager mConnectivityManager = null;
 
@@ -153,23 +158,32 @@ public class ClientModeManager implements ActiveModeManager {
                 };
 
         private NetworkCallback mImsNetworkCallback = new NetworkCallback() {
-            private int countRegIMS = 0;
+            private int mRegisteredImsNetworkCount = 0;
             @Override
             public void onAvailable(Network network) {
-                Log.d(TAG, "IMS network available id: " + network);
-                countRegIMS++;
+                synchronized (this) {
+                    Log.d(TAG, "IMS network available: " + network);
+                    mRegisteredImsNetworkCount++;
+                }
             }
 
             @Override
             public void onLost(Network network) {
-                Log.d(TAG, "IMS network lost: " + network);
-                countRegIMS--;
-                // Add additional delay of 1 sec after onLost() indication as IMS PDN down
-                // at modem takes additional 500ms+ of delay.
-                // TODO: this should be fixed.
-                if (mIsDeferring && (countRegIMS == 0)
-                        && !postDelayed(mRunnable, QTI_DELAY_DISCONNECT_ON_NETWORK_LOST_MS))
-                    continueToStopWifi();
+                synchronized (this) {
+                    Log.d(TAG, "IMS network lost: " + network
+                            + " ,isDeferring: " + mIsDeferring
+                            + " ,registered IMS network count: " + mRegisteredImsNetworkCount);
+                    mRegisteredImsNetworkCount--;
+                    if (mIsDeferring && mRegisteredImsNetworkCount <= 0) {
+                        mRegisteredImsNetworkCount = 0;
+                        // Add delay for targets where IMS PDN down at modem takes additional delay.
+                        int delay = mContext.getResources()
+                                .getInteger(R.integer.config_wifiDelayDisconnectOnImsLostMs);
+                        if (delay == 0 || !postDelayed(mRunnable, delay)) {
+                            continueToStopWifi();
+                        }
+                    }
+                }
             }
         };
 
@@ -198,8 +212,7 @@ public class ClientModeManager implements ActiveModeManager {
 
             mIsDeferring = true;
             Log.d(TAG, "Start DeferWifiOff handler with deferring time "
-                    + delayMs + " ms. for subId: " + mActiveSubId);
-
+                    + delayMs + " ms for subId: " + mActiveSubId);
             try {
                 mImsMmTelManager.registerImsRegistrationCallback(
                         new HandlerExecutor(new Handler(mLooper)),
@@ -215,8 +228,8 @@ public class ClientModeManager implements ActiveModeManager {
                 .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                 .build();
 
-            mConnectivityManager = (ConnectivityManager)mContext.getSystemService
-                                   (Context.CONNECTIVITY_SERVICE);
+            mConnectivityManager =
+                    (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
 
             mConnectivityManager.registerNetworkCallback(mImsRequest, mImsNetworkCallback,
                                                          new Handler(mLooper));
@@ -281,16 +294,16 @@ public class ClientModeManager implements ActiveModeManager {
             return 0;
         }
 
-        // Get the delay for first active subscription latched on IWLAN.
-        int delay = 0;
+        // Get the maximum delay for the active subscription latched on IWLAN.
+        int maxDelay = 0;
         for (SubscriptionInfo subInfo : subInfoList) {
-            delay = getWifiOffDeferringTimeMs(subInfo.getSubscriptionId());
-            if (delay > 0) {
+            int curDelay = getWifiOffDeferringTimeMs(subInfo.getSubscriptionId());
+            if (curDelay > maxDelay) {
+                maxDelay = curDelay;
                 mActiveSubId = subInfo.getSubscriptionId();
-                break;
             }
         }
-        return delay;
+        return maxDelay;
     }
 
     private int getWifiOffDeferringTimeMs(int subId) {
