@@ -7071,12 +7071,17 @@ public class ClientModeImpl extends StateMachine {
 
         final boolean isUsingStaticIp =
                 (config.getIpAssignment() == IpConfiguration.IpAssignment.STATIC);
+        final boolean isUsingMacRandomization =
+                config.macRandomizationSetting
+                        == WifiConfiguration.RANDOMIZATION_PERSISTENT
+                        && isConnectedMacRandomizationEnabled();
         if (mVerboseLoggingEnabled) {
             final String key = config.getKey();
             log("startIpClient netId=" + Integer.toString(mLastNetworkId)
                     + " " + key + " "
                     + " roam=" + mIsAutoRoaming
                     + " static=" + isUsingStaticIp
+                    + " randomMac=" + isUsingMacRandomization
                     + " isFilsConnection=" + isFilsConnection);
         }
 
@@ -7095,15 +7100,18 @@ public class ClientModeImpl extends StateMachine {
                 return false;
             }
             setConfigurationsPriorToIpClientProvisioning(config);
-            final ProvisioningConfiguration prov =
+            final ProvisioningConfiguration.Builder prov =
                     new ProvisioningConfiguration.Builder()
                     .withPreDhcpAction()
                     .withPreconnection()
                     .withApfCapabilities(
                     mWifiNative.getApfCapabilities(mInterfaceName))
-                    .withLayer2Information(layer2Info)
-                    .build();
-            mIpClient.startProvisioning(prov);
+                    .withLayer2Information(layer2Info);
+            if (isUsingMacRandomization) {
+                // Use EUI64 address generation for link-local IPv6 addresses.
+                prov.withRandomMacAddress();
+            }
+            mIpClient.startProvisioning(prov.build());
         } else {
             sendNetworkChangeBroadcast(DetailedState.OBTAINING_IPADDR);
             // We must clear the config BSSID, as the wifi chipset may decide to roam
@@ -7145,7 +7153,7 @@ public class ClientModeImpl extends StateMachine {
                 }
             }
 
-            final ProvisioningConfiguration prov;
+            final ProvisioningConfiguration.Builder prov;
             ProvisioningConfiguration.ScanResultInfo scanResultInfo = null;
             if (scanResult != null) {
                 final List<ScanResultInfo.InformationElement> ies =
@@ -7166,8 +7174,7 @@ public class ClientModeImpl extends StateMachine {
                     .withNetwork(getCurrentNetwork())
                     .withDisplayName(config.SSID)
                     .withScanResultInfo(scanResultInfo)
-                    .withLayer2Information(layer2Info)
-                    .build();
+                    .withLayer2Information(layer2Info);
             } else {
                 StaticIpConfiguration staticIpConfig = config.getStaticIpConfiguration();
                 prov = new ProvisioningConfiguration.Builder()
@@ -7175,10 +7182,13 @@ public class ClientModeImpl extends StateMachine {
                         .withApfCapabilities(mWifiNative.getApfCapabilities(mInterfaceName))
                         .withNetwork(getCurrentNetwork())
                         .withDisplayName(config.SSID)
-                        .withLayer2Information(layer2Info)
-                        .build();
+                        .withLayer2Information(layer2Info);
             }
-            mIpClient.startProvisioning(prov);
+            if (isUsingMacRandomization) {
+                // Use EUI64 address generation for link-local IPv6 addresses.
+                prov.withRandomMacAddress();
+            }
+            mIpClient.startProvisioning(prov.build());
         }
 
         return true;

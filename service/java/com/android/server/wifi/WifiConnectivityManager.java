@@ -1869,6 +1869,7 @@ public class WifiConnectivityManager {
         if (!mWifiEnabled) return;
         localLog("forceConnectivityScan in request of " + workSource);
 
+        clearConnectionAttemptTimeStamps();
         mWaitForFullBandScanResults = true;
         startForcedSingleScan(true, workSource);
     }
