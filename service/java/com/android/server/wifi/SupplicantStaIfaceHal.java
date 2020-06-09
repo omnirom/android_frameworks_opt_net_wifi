@@ -1257,15 +1257,6 @@ public class SupplicantStaIfaceHal {
                     loge("Failed to remove existing networks");
                     return false;
                 }
-               /**
-                * Handle connection to saved FILS network when wifi is
-                * restarted with altered driver configuration.
-                */
-                if (!getCapabilities(ifaceName, "key_mgmt").contains("FILS-SHA256"))
-                    config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA256);
-
-                if (!getCapabilities(ifaceName, "key_mgmt").contains("FILS-SHA384"))
-                    config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA384);
 
                 Pair<SupplicantStaNetworkHal, WifiConfiguration> pair =
                         addNetworkAndSaveConfig(ifaceName, config);
@@ -1276,7 +1267,6 @@ public class SupplicantStaIfaceHal {
                 mCurrentNetworkRemoteHandles.put(ifaceName, pair.first);
                 mCurrentNetworkLocalConfigs.put(ifaceName, pair.second);
             }
-            getCapabilities(ifaceName, "key_mgmt");
             SupplicantStaNetworkHal networkHandle =
                     checkSupplicantStaNetworkAndLogFailure(ifaceName, "connectToNetwork");
             if (networkHandle == null) {

@@ -327,15 +327,10 @@ public class SupplicantStaNetworkHal {
                     Log.e(TAG, "failed to set Key Management");
                     return false;
                 }
-                if (!setVendorKeyMgmt(wifiConfigurationToSupplicantVendorKeyMgmtMask(keyMgmtMask))) {
+                if (!setVendorKeyMgmt(wifiConfigurationToSupplicantVendorKeyMgmtMask(keyMgmtMask)))
                     Log.e(TAG, "failed to set Vendor Key Management");
-                } else {
-                    if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
-                        keyMgmtMask.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
-                        config.enterpriseConfig.setFieldValue(WifiEnterpriseConfig.EAP_ERP, "1");
-                    }
-                }
-                // Check and set DPP configurations.
+
+		// Check and set DPP configurations.
                 if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.DPP) && !saveDppConfig(config)) {
                     Log.e(TAG, "Failed to set DPP configurations.");
                         return false;
@@ -763,19 +758,8 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, ssid + ": failed to set proactive key caching: " + eapParam);
                 return false;
             }
-           /** EAP ERP */
-           eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.EAP_ERP);
-           if (!TextUtils.isEmpty(eapParam) && eapParam.equals("1")) {
-               if (!setEapErp(true)) {
-                   Log.e(TAG, ssid + ": failed to set eap erp");
-                   return false;
-               } else if (!setAuthAlg(0)) {
-                   /* Reset Auth Alg in order to allow supplicant to use both OPEN and FILS types */
-                   Log.e(TAG, ssid + ": failed to reset AuthAlgorithm");
-                   return false;
-               }
-           }
-            /** SIM Number */
+
+	    /** SIM Number */
             eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.KEY_SIMNUM);
             if (!TextUtils.isEmpty(eapParam)
                 && !setVendorSimNumber(Integer.parseInt(eapParam))) {
@@ -907,20 +891,14 @@ public class SupplicantStaNetworkHal {
         int mask = 0;
         for (int bit = keyMgmt.nextSetBit(0); bit != -1; bit = keyMgmt.nextSetBit(bit + 1)) {
             switch (bit) {
-                case WifiConfiguration.KeyMgmt.FILS_SHA256:
-                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: " + WifiConfiguration.KeyMgmt.FILS_SHA256);
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA256;
-                    break;
-                case WifiConfiguration.KeyMgmt.FILS_SHA384:
-                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: " + WifiConfiguration.KeyMgmt.FILS_SHA384);
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA384;
-                    break;
                 case WifiConfiguration.KeyMgmt.DPP:
                     mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.DPP;
                     break;
                 case WifiConfiguration.KeyMgmt.OWE: //This is now supported with V1_2.ISupplicantStaNetwork.KeyMgmtMask
                 case WifiConfiguration.KeyMgmt.SAE:
                 case WifiConfiguration.KeyMgmt.SUITE_B_192:
+		case WifiConfiguration.KeyMgmt.FILS_SHA256:
+		case WifiConfiguration.KeyMgmt.FILS_SHA384:
                     break;
                 default:
                     Log.e(TAG, "Invalid VendorKeyMgmtMask bit in keyMgmt: " + bit);

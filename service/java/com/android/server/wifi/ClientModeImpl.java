@@ -742,11 +742,6 @@ public class ClientModeImpl extends StateMachine {
     /* Tracks IpClient start state until (FILS_)NETWORK_CONNECTION_EVENT event */
     private boolean mIpClientWithPreConnection = false;
 
-    private State mFilsState = new FilsState();
-    private boolean mIsFilsConnection = false;
-    private boolean mIsIpClientStarted = false;
-    private WifiConfiguration mFilsConfig;
-
     /**
      * One of  {@link WifiManager#WIFI_STATE_DISABLED},
      * {@link WifiManager#WIFI_STATE_DISABLING},
@@ -919,7 +914,6 @@ public class ClientModeImpl extends StateMachine {
                     addState(mRoamingState, mL2ConnectedState);
                 addState(mDisconnectingState, mConnectModeState);
                 addState(mDisconnectedState, mConnectModeState);
-                addState(mFilsState, mConnectModeState);
         // CHECKSTYLE:ON IndentationCheck
 
         setInitialState(mDefaultState);
@@ -982,8 +976,6 @@ public class ClientModeImpl extends StateMachine {
                 mWifiMetrics.getHandler());
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.TARGET_BSSID_EVENT,
                 mWifiMetrics.getHandler());
-        mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.FILS_NETWORK_CONNECTION_EVENT,
-                getHandler());
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.DPP_EVENT, getHandler());
         mWifiMonitor.registerHandler(mInterfaceName, WifiMonitor.NETWORK_CONNECTION_EVENT,
                 mWifiInjector.getWifiLastResortWatchdog().getHandler());
@@ -1123,8 +1115,9 @@ public class ClientModeImpl extends StateMachine {
                 mIpClient.notifyPreconnectionComplete(false);
             }
             mIpClient.stop();
-            mIsIpClientStarted = false;
         }
+	mIpClientWithPreConnection = false;
+	mSentHLPs = false;
     }
 
     public void setWifiDiagnostics(BaseWifiDiagnostics WifiDiagnostics) {
@@ -1136,8 +1129,6 @@ public class ClientModeImpl extends StateMachine {
         if (mTrafficPoller != null) {
             mTrafficPoller.setInterface(mDataInterfaceName);
         }
-        mIpClientWithPreConnection = false;
-        mSentHLPs = false;
     }
 
     private void stopDhcpSetup() {
@@ -1584,13 +1575,7 @@ public class ClientModeImpl extends StateMachine {
     }
 
     public boolean isDisconnected() {
-        /* Control stays in FilsState during connection with Fils networks. If connection
-           attempt fails(Due to ASSOC_REJECT/AUTH_TIMEOUT), control stays in FilsState.
-           If QNS kicks in during this time, it fails to go for candidate selection,
-           because, WifiStateMachine is not in DisconnectedState. Since FilsState is
-           equivalent to disconnected state add the conditional logic.*/
-        return ((getCurrentState() == mDisconnectedState) ||
-               (getCurrentState() == mFilsState));
+        return getCurrentState() == mDisconnectedState;
     }
 
     /**
@@ -2940,53 +2925,6 @@ public class ClientModeImpl extends StateMachine {
         }
     }
 
-    void buildDiscoverWithRapidCommitPacket() {
-        // TODO(b/124083198): IIpClient does not define buildDiscoverWithRapidCommitPacket.
-        ByteBuffer mDiscoverPacket = null; // = mIpClient.buildDiscoverWithRapidCommitPacket();
-        if (mDiscoverPacket != null) {
-            byte [] bytes = mDiscoverPacket.array();
-            StringBuilder dst = new StringBuilder();
-            for(int i = 0; i < 5; i++) {
-                dst.append(String.format("%02x:", bytes[i]));
-            }
-            dst.append(String.format("%02x", bytes[5]));
-            byte [] payloadBytes = Arrays.copyOfRange(bytes, 12, bytes.length);
-            mWifiNative.flushAllHlp(mInterfaceName);
-            mWifiNative.addHlpReq(mInterfaceName, MacAddress.fromString(dst.toString()),
-                payloadBytes);
-        }
-    }
-
-    /* Pre DHCP operations are similar to normal pre DHCP. But if we
-       set the power save driver shall reject the connection attempt(With
-       FILS conenction DHCP starts first then connection request to
-       driver made later). Hence seperated the pre DHCP operations into
-       two parts handlePreFilsDhcpSetup and setPowerSaveForFilsDhcp.
-       In case if AP is not responed with rapid commit then we should go
-       for normal DHCP handshake. Hence use setPowerSaveForFilsDhcp.
-    */
-    void handlePreFilsDhcpSetup() {
-        if (mWifiP2pChannel != null) {
-            /* P2p discovery breaks dhcp, shut it down in order to get through this */
-            Message msg = new Message();
-            msg.what = WifiP2pServiceImpl.BLOCK_DISCOVERY;
-            msg.arg1 = WifiP2pServiceImpl.ENABLED;
-            msg.arg2 = CMD_PRE_DHCP_ACTION_COMPLETE;
-            msg.obj = ClientModeImpl.this;
-            mWifiP2pChannel.sendMessage(msg);
-        } else {
-            // If the p2p service is not running, we can proceed directly.
-            sendMessage(CMD_PRE_DHCP_ACTION_COMPLETE);
-        }
-    }
-
-    void setPowerSaveForFilsDhcp() {
-        mWifiNative.setBluetoothCoexistenceMode(
-               mInterfaceName, mWifiNative.BLUETOOTH_COEXISTENCE_MODE_DISABLED);
-        setSuspendOptimizationsNative(SUSPEND_DUE_TO_DHCP, false);
-        mWifiNative.setPowerSave(mInterfaceName, false);
-    }
-
     void addLayer2PacketsToHlpReq(List<Layer2PacketParcelable> packets) {
         List<Layer2PacketParcelable> mLayer2Packet = packets;
         if ((mLayer2Packet != null) && (mLayer2Packet.size() > 0)) {
@@ -4037,7 +3975,6 @@ public class ClientModeImpl extends StateMachine {
             boolean timedOut;
             boolean handleStatus = HANDLED;
             int callbackIdentifier = -1;
-            String device_capability;
 
             int level2FailureReason =
                     WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN;
@@ -4263,7 +4200,6 @@ public class ClientModeImpl extends StateMachine {
                     mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_START_CONNECT:
-                    mIsFilsConnection = false;
                     /* connect command coming from auto-join */
                     netId = message.arg1;
                     int uid = message.arg2;
@@ -4304,32 +4240,6 @@ public class ClientModeImpl extends StateMachine {
                     String currentMacAddress = mWifiNative.getMacAddress(mInterfaceName);
                     mWifiInfo.setMacAddress(currentMacAddress);
                     Log.i(TAG, "Connecting with " + currentMacAddress + " as the mac address");
-                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
-                         config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
-                        device_capability = getCapabilities("key_mgmt");
-                        if (!device_capability.contains("FILS-SHA256")) {
-                             Log.d(TAG, "FILS_SHA256 not supported, device capability: " +
-                                                                             device_capability);
-                             config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA256);
-                        }
-                        if (!device_capability.contains("FILS-SHA384")) {
-                             Log.d(TAG, "FILS_SHA384 not supported, device capability: " +
-                                                                             device_capability);
-                             config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA384);
-                        }
-                    }
-                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
-                         config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
-                        /*
-                         * Config object is required in Fils state to issue
-                         * conenction to supplicant, hence saving in global
-                         * variable.
-                         */
-                        mFilsConfig = config;
-                        transitionTo(mFilsState);
-                        break;
-                    }
-
                     mTargetWifiConfiguration = config;
                     /* Check for FILS configuration again after updating the config */
                     if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256)
@@ -4525,7 +4435,7 @@ public class ClientModeImpl extends StateMachine {
                         !mTargetWifiConfiguration.SSID.equals("\""+scanResult.SSID+"\"");
                     clearNetworkCachedDataIfNeeded(getTargetWifiConfiguration(), message.arg2);
                     handleNetworkDisconnect(mConnectionInProgress);
-                    if (getCurrentState() != mFilsState || !mConnectionInProgress)
+                    if (!mConnectionInProgress)
                         transitionTo(mDisconnectedState);
                     break;
                 case CMD_QUERY_OSU_ICON:
@@ -5075,10 +4985,6 @@ public class ClientModeImpl extends StateMachine {
 
         @Override
         public void exit() {
-            if (mIpClient != null) {
-                mIsIpClientStarted = false;
-            }
-
             // This is handled by receiving a NETWORK_DISCONNECTION_EVENT in ConnectModeState
             // Bug: 15347363
             // For paranoia's sake, call handleNetworkDisconnect
@@ -5432,22 +5338,16 @@ public class ClientModeImpl extends StateMachine {
             // ignoring enable power save request sent in ObtainingIpState.
             mWifiNative.setPowerSave(mInterfaceName, false);
 
-            if (mIsFilsConnection && mIsIpClientStarted) {
-                setPowerSaveForFilsDhcp();
+            WifiConfiguration currentConfig = getCurrentWifiConfiguration();
+            if (mIpClientWithPreConnection && mIpClient != null) {
+                mIpClient.notifyPreconnectionComplete(mSentHLPs);
+                mIpClientWithPreConnection = false;
+                mSentHLPs = false;
             } else {
-                WifiConfiguration currentConfig = getCurrentWifiConfiguration();
-                if (mIpClientWithPreConnection && mIpClient != null) {
-                    mIpClient.notifyPreconnectionComplete(mSentHLPs);
-                    mIpClientWithPreConnection = false;
-                    mSentHLPs = false;
-                } else {
-                    startIpClient(currentConfig, false);
-                    mIsIpClientStarted = true;
-                }
+                startIpClient(currentConfig, false);
             }
             // Get Link layer stats so as we get fresh tx packet counters
             getWifiLinkLayerStats();
-            mIsFilsConnection = false;
         }
 
         @Override
@@ -6088,117 +5988,6 @@ public class ClientModeImpl extends StateMachine {
         public void exit() {
             mWifiConnectivityManager.handleConnectionStateChanged(
                      WifiConnectivityManager.WIFI_STATE_TRANSITIONING);
-        }
-    }
-
-    class FilsState  extends State {
-
-        @Override
-        public void enter() {
-            if (mVerboseLoggingEnabled) {
-                Log.d(TAG, "Filsstate enter");
-            }
-            final ProvisioningConfiguration prov = new ProvisioningConfiguration.Builder()
-                         .withPreDhcpAction()
-                         .withApfCapabilities(mWifiNative.getApfCapabilities(mInterfaceName))
-                         .build();
-               mIpClient.startProvisioning(prov);
-               mIsIpClientStarted = true;
-        }
-
-        @Override
-        public boolean processMessage(Message message) {
-            logStateAndMessage(message, this);
-            WifiConfiguration config;
-            switch (message.what) {
-                case CMD_PRE_DHCP_ACTION:
-                    handlePreFilsDhcpSetup();
-                    break;
-                case CMD_PRE_DHCP_ACTION_COMPLETE:
-                    mIpClient.completedPreDhcpAction();
-                    buildDiscoverWithRapidCommitPacket();
-
-                    reportConnectionAttemptStart(mFilsConfig, mTargetBssid,
-                            WifiMetricsProto.ConnectionEvent.ROAM_UNRELATED);
-                    if (mWifiNative.connectToNetwork(mInterfaceName, mFilsConfig)) {
-                        mWifiMetrics.logStaEvent(StaEvent.TYPE_CMD_START_CONNECT, mFilsConfig);
-                        mLastConnectAttemptTimestamp = mClock.getWallClockMillis();
-                        mTargetWifiConfiguration = mFilsConfig;
-                        mIsAutoRoaming = false;
-                    } else {
-                        loge("Failed to connect to FILS network " + mFilsConfig);
-                        reportConnectionAttemptEnd(
-                                WifiMetrics.ConnectionEvent.FAILURE_CONNECT_NETWORK_FAILED,
-                                WifiMetricsProto.ConnectionEvent.HLF_NONE,
-                                WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
-                        replyToMessage(message, WifiMetrics.ConnectionEvent.FAILURE_CONNECT_NETWORK_FAILED,
-                                WifiManager.ERROR);
-                        break;
-                    }
-                    break;
-                case WifiMonitor.FILS_NETWORK_CONNECTION_EVENT:
-                    mIsFilsConnection = true;
-                case WifiMonitor.NETWORK_CONNECTION_EVENT:
-                    if (mVerboseLoggingEnabled)
-                        log("Network connection established with FILS " + mIsFilsConnection);
-                    mLastNetworkId = message.arg1;
-                    mLastBssid = (String) message.obj;
-                    int reasonCode = message.arg2;
-                    // TODO: This check should not be needed after WifiStateMachinePrime refactor.
-                    // Currently, the last connected network configuration is left in
-                    // wpa_supplicant, this may result in wpa_supplicant initiating connection
-                    // to it after a config store reload. Hence the old network Id lookups may not
-                    // work, so disconnect the network and let network selector reselect a new
-                    // network.
-                    config = getCurrentWifiConfiguration();
-                    if (config != null) {
-                        mWifiInfo.setBSSID(mLastBssid);
-                        mWifiInfo.setNetworkId(mLastNetworkId);
-                        // TODO(b/i144863648): trackBssid has been removed
-                        //mWifiConnectivityManager.trackBssid(mLastBssid, true, reasonCode);
-                        // We need to get the updated pseudonym from supplicant for EAP-SIM/AKA/AKA'
-                        if (config.enterpriseConfig != null
-                                && config.enterpriseConfig.isAuthenticationSimBased()) {
-                            String anonymousIdentity =
-                                    mWifiNative.getEapAnonymousIdentity(mInterfaceName);
-                            if (anonymousIdentity != null) {
-                                config.enterpriseConfig.setAnonymousIdentity(anonymousIdentity);
-                            } else {
-                                Log.d(TAG, "Failed to get updated anonymous identity"
-                                        + " from supplicant, reset it in WifiConfiguration.");
-                                config.enterpriseConfig.setAnonymousIdentity(null);
-                            }
-                            mWifiConfigManager.addOrUpdateNetwork(config, Process.WIFI_UID);
-                        }
-                        transitionTo(mObtainingIpState);
-                    }
-                    break;
-                case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
-                    /* fall-through */
-                case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
-                    stopIpClient();
-                    return NOT_HANDLED;
-                case CMD_POST_DHCP_ACTION:
-                    deferMessage(message);
-                    break;
-                case CMD_IPV4_PROVISIONING_SUCCESS:
-                    deferMessage(message);
-                    break;
-                case CMD_IP_CONFIGURATION_SUCCESSFUL:
-                    deferMessage(message);
-                    break;
-                case CMD_IPV4_PROVISIONING_FAILURE:
-                    stopIpClient();
-                    deferMessage(message);
-                    break;
-                default :
-                    return NOT_HANDLED;
-            }
-            return HANDLED;
-        }
-
-        @Override
-        public void exit() {
         }
     }
 
