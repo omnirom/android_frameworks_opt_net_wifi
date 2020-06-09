@@ -153,14 +153,6 @@ public class WifiConfigurationUtil {
                 || isConfigForEapSuiteBNetwork(config)));
     }
 
-    public static boolean isConfigForSha256Network(WifiConfiguration config) {
-        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256);
-    }
-
-    public static boolean isConfigForSha384Network(WifiConfiguration config) {
-        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384);
-    }
-
     /**
      * Compare existing and new WifiConfiguration objects after a network update and return if
      * IP parameters have changed or not.
