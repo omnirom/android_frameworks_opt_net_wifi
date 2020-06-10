@@ -468,17 +468,12 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     }
 
     synchronized void onWifiAlert(int errorCode, @NonNull byte[] buffer) {
-        if (errorCode < DATA_STALL_OFFSET_REASON_CODE) {
-            captureAlertData(errorCode, buffer);
-            mWifiMetrics.logFirmwareAlert(errorCode);
-        } else {
-            errorCode = errorCode - DATA_STALL_OFFSET_REASON_CODE;
-            captureAlertData(errorCode, buffer);
-            mWifiMetrics.logFirmwareAlert(errorCode);
-            Intent intent = new Intent(WifiManager.WIFI_DATA_STALL);
-            intent.putExtra(WifiManager.EXTRA_WIFI_DATA_STALL_REASON, errorCode);
-            mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-        }
+        captureAlertData(errorCode, buffer);
+        mWifiMetrics.logFirmwareAlert(errorCode);
+
+        Intent intent = new Intent(WifiManager.WIFI_ALERT);
+        intent.putExtra(WifiManager.EXTRA_WIFI_ALERT_REASON, errorCode);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
     }
 
     /**
