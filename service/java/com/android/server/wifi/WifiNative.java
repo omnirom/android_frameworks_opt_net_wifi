@@ -3785,35 +3785,6 @@ public class WifiNative {
         }
     }
 
-    /**
-     * Check if a mac address is already in use by one of the interfaces.
-     * This only checks for Station interfaces.
-     *
-     * @param ifaceName String representing iface name to ignore.
-     * @param macAddr MacAddress to check
-     * returns true if given mac is in use, false otherwise.
-     */
-    public boolean isMacAddressAlreadyInUse(String ifaceName, MacAddress macAddr) {
-        if (!WifiConfiguration.isValidMacAddressForRandomization(macAddr)) {
-            Log.e(TAG, "Not a valid address to compare.");
-            return false;
-        }
-        List<Iface> staIfaces = new ArrayList<>();
-        // Consider only STA ifaces.
-        staIfaces.addAll(mIfaceMgr.getAllfaceOfType(Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY));
-        staIfaces.addAll(mIfaceMgr.getAllfaceOfType(Iface.IFACE_TYPE_STA_FOR_SCAN));
-        if (staIfaces.isEmpty())
-            return false;
-        for (Iface iface : staIfaces) {
-            // Skip own mac check.
-            if (ifaceName != null && iface.name.equals(ifaceName))
-                continue;
-            if (macAddr.equals(MacAddress.fromString(getMacAddress(iface.name))))
-                return true;
-        }
-        return false;
-    }
-
     /** updates linked networks of the |networkId| in supplicant if it's the current network,
      * if the current configured network matches |networkId|.
      *
