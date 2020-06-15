@@ -87,8 +87,7 @@ import java.util.TreeSet;
 public class WifiAwareDataPathStateManager {
     private static final String TAG = "WifiAwareDataPathStMgr";
     private static final boolean VDBG = false; // STOPSHIP if true
-    /* package */ boolean mDbg = false;
-    private static boolean mVerboseLoggingEnabled = false;
+    private boolean mDbg = false;
 
     private static final String AWARE_INTERFACE_PREFIX = "aware_data";
     private static final String NETWORK_TAG = "WIFI_AWARE_FACTORY";
@@ -144,15 +143,6 @@ public class WifiAwareDataPathStateManager {
                 .build();
     }
 
-    public void enableVerboseLogging(int verbose)
-    {
-        if( verbose > 0 ) {
-            mVerboseLoggingEnabled = true;
-        } else {
-            mVerboseLoggingEnabled = false;
-        }
-    }
-
     /**
      * Initialize the Aware data-path state manager. Specifically register the network factory with
      * connectivity service.
@@ -160,7 +150,7 @@ public class WifiAwareDataPathStateManager {
     public void start(Context context, Looper looper, WifiAwareMetrics awareMetrics,
             WifiPermissionsUtil wifiPermissionsUtil, WifiPermissionsWrapper permissionsWrapper,
             NetdWrapper netdWrapper) {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "start");
+        if (mDbg) Log.v(TAG, "start");
 
         mContext = context;
         mAwareMetrics = awareMetrics;
@@ -174,6 +164,13 @@ public class WifiAwareDataPathStateManager {
         mNetworkFactory = new WifiAwareNetworkFactory(looper, context, sNetworkCapabilitiesFilter);
         mNetworkFactory.setScoreFilter(NETWORK_FACTORY_SCORE_AVAIL);
         mNetworkFactory.register();
+    }
+
+    /**
+     * Enable verbose logging.
+     */
+    public void enableVerboseLogging(boolean verbose) {
+        mDbg = verbose | VDBG;
     }
 
     private Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation>
@@ -190,10 +187,10 @@ public class WifiAwareDataPathStateManager {
 
     private Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation>
                 getNetworkRequestByCanonicalDescriptor(CanonicalConnectionInfo cci) {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "getNetworkRequestByCanonicalDescriptor: cci=" + cci);
+        if (mDbg) Log.v(TAG, "getNetworkRequestByCanonicalDescriptor: cci=" + cci);
         for (Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation> entry :
                 mNetworkRequestsCache.entrySet()) {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "getNetworkRequestByCanonicalDescriptor: entry=" + entry.getValue()
                         + " --> cci=" + entry.getValue().getCanonicalDescriptor());
             }
@@ -210,7 +207,7 @@ public class WifiAwareDataPathStateManager {
      * capabilities of the firmware.
      */
     public void createAllInterfaces() {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "createAllInterfaces");
+        if (mDbg) Log.v(TAG, "createAllInterfaces");
 
         if (mMgr.getCapabilities() == null) {
             Log.e(TAG, "createAllInterfaces: capabilities aren't initialized yet!");
@@ -236,7 +233,7 @@ public class WifiAwareDataPathStateManager {
      * Delete all Aware data-path interfaces which are currently up.
      */
     public void deleteAllInterfaces() {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "deleteAllInterfaces");
+        if (mDbg) Log.v(TAG, "deleteAllInterfaces");
         onAwareDownCleanupDataPaths();
 
         if (mMgr.getCapabilities() == null) {
@@ -255,7 +252,7 @@ public class WifiAwareDataPathStateManager {
      * Called when firmware indicates the an interface was created.
      */
     public void onInterfaceCreated(String interfaceName) {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onInterfaceCreated: interfaceName=" + interfaceName);
+        if (mDbg) Log.v(TAG, "onInterfaceCreated: interfaceName=" + interfaceName);
 
         if (mInterfaces.contains(interfaceName)) {
             Log.w(TAG, "onInterfaceCreated: already contains interface -- " + interfaceName);
@@ -268,7 +265,7 @@ public class WifiAwareDataPathStateManager {
      * Called when firmware indicates the an interface was deleted.
      */
     public void onInterfaceDeleted(String interfaceName) {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onInterfaceDeleted: interfaceName=" + interfaceName);
+        if (mDbg) Log.v(TAG, "onInterfaceDeleted: interfaceName=" + interfaceName);
 
         if (!mInterfaces.contains(interfaceName)) {
             Log.w(TAG, "onInterfaceDeleted: interface not on list -- " + interfaceName);
@@ -285,7 +282,7 @@ public class WifiAwareDataPathStateManager {
      * @param ndpId            The ID assigned to the data-path.
      */
     public void onDataPathInitiateSuccess(WifiAwareNetworkSpecifier networkSpecifier, int ndpId) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG,
                     "onDataPathInitiateSuccess: networkSpecifier=" + networkSpecifier + ", ndpId="
                             + ndpId);
@@ -319,7 +316,7 @@ public class WifiAwareDataPathStateManager {
      * @param reason           Failure reason.
      */
     public void onDataPathInitiateFail(WifiAwareNetworkSpecifier networkSpecifier, int reason) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG,
                     "onDataPathInitiateFail: networkSpecifier=" + networkSpecifier + ", reason="
                             + reason);
@@ -356,7 +353,7 @@ public class WifiAwareDataPathStateManager {
      */
     public WifiAwareNetworkSpecifier onDataPathRequest(int pubSubId, byte[] mac, int ndpId,
             byte[] message) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG,
                     "onDataPathRequest: pubSubId=" + pubSubId + ", mac=" + String.valueOf(
                             HexEncoding.encode(mac)) + ", ndpId=" + ndpId);
@@ -399,7 +396,7 @@ public class WifiAwareDataPathStateManager {
         Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation> nnriE =
                 getNetworkRequestByNdpId(ndpId);
         if (nnriE != null) {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG,
                         "onDataPathRequest: initiator-side indication for " + nnriE.getValue());
             }
@@ -426,7 +423,7 @@ public class WifiAwareDataPathStateManager {
         if (nnri == null) {
             Log.w(TAG, "onDataPathRequest: can't find a request with specified pubSubId=" + pubSubId
                     + ", mac=" + String.valueOf(HexEncoding.encode(mac)));
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "onDataPathRequest: network request cache = " + mNetworkRequestsCache);
             }
             mMgr.respondToDataPathRequest(false, ndpId, "", null, null, null, false);
@@ -466,7 +463,7 @@ public class WifiAwareDataPathStateManager {
      * @param success Whether or not the 'RespondToDataPathRequest' operation was a success.
      */
     public void onRespondToDataPathRequest(int ndpId, boolean success, int reasonOnFailure) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG, "onRespondToDataPathRequest: ndpId=" + ndpId + ", success=" + success);
         }
 
@@ -484,7 +481,7 @@ public class WifiAwareDataPathStateManager {
         if (nnri == null) {
             Log.w(TAG, "onRespondToDataPathRequest: can't find a request with specified ndpId="
                     + ndpId);
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "onRespondToDataPathRequest: network request cache = "
                         + mNetworkRequestsCache);
             }
@@ -535,7 +532,7 @@ public class WifiAwareDataPathStateManager {
      */
     public WifiAwareNetworkSpecifier onDataPathConfirm(int ndpId, byte[] mac, boolean accept,
             int reason, byte[] message, List<NanDataPathChannelInfo> channelInfo) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG, "onDataPathConfirm: ndpId=" + ndpId + ", mac=" + String.valueOf(
                     HexEncoding.encode(mac)) + ", accept=" + accept + ", reason=" + reason
                     + ", message.length=" + ((message == null) ? 0 : message.length)
@@ -571,12 +568,7 @@ public class WifiAwareDataPathStateManager {
             nnri.peerDataMac = mac;
             nnri.channelInfo = channelInfo;
 
-            final NetworkCapabilities.Builder ncBuilder = new NetworkCapabilities.Builder(
-                    sNetworkCapabilitiesFilter);
-            LinkProperties linkProperties = new LinkProperties();
-
-            boolean interfaceUsedByAnotherNdp = isInterfaceUpAndUsedByAnotherNdp(nnri);
-            if (!interfaceUsedByAnotherNdp) {
+            if (!isInterfaceUpAndUsedByAnotherNdp(nnri)) {
                 try {
                     mNetdWrapper.setInterfaceUp(nnri.interfaceName);
                     mNetdWrapper.enableIpv6(nnri.interfaceName);
@@ -588,7 +580,7 @@ public class WifiAwareDataPathStateManager {
                     return networkSpecifier;
                 }
             } else {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "onDataPathConfirm: interface already configured: "
                             + nnri.interfaceName);
                 }
@@ -612,61 +604,10 @@ public class WifiAwareDataPathStateManager {
                 }
             }
 
-            try {
-                if (nnri.peerIpv6Override == null) {
-                    nnri.peerIpv6 = Inet6Address.getByAddress(null,
-                            MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress(),
-                            NetworkInterface.getByName(nnri.interfaceName));
-                } else {
-                    byte[] addr = new byte[16];
-
-                    addr[0] = (byte) 0xfe;
-                    addr[1] = (byte) 0x80;
-                    addr[8] = nnri.peerIpv6Override[0];
-                    addr[9] = nnri.peerIpv6Override[1];
-                    addr[10] = nnri.peerIpv6Override[2];
-                    addr[11] = nnri.peerIpv6Override[3];
-                    addr[12] = nnri.peerIpv6Override[4];
-                    addr[13] = nnri.peerIpv6Override[5];
-                    addr[14] = nnri.peerIpv6Override[6];
-                    addr[15] = nnri.peerIpv6Override[7];
-
-                    nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
-                            NetworkInterface.getByName(nnri.interfaceName));
-                }
-            } catch (SocketException | UnknownHostException e) {
-                Log.e(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
-                nnri.peerIpv6 = null;
-            }
-
-            if (nnri.peerIpv6 != null) {
-                final WifiAwareNetworkInfo ni = new WifiAwareNetworkInfo(
-                        nnri.peerIpv6, nnri.peerPort, nnri.peerTransportProtocol);
-                ncBuilder.setTransportInfo(ni);
-                if (VDBG || mVerboseLoggingEnabled) {
-                    Log.v(TAG, "onDataPathConfirm: AwareNetworkInfo=" + ni);
-                }
-            }
-
-            if (!mNiWrapper.configureAgentProperties(nnri, nnri.equivalentRequests, ndpId,
-                    ncBuilder, linkProperties)) {
-                declareUnfullfillableAndEndDp(nnri, ndpId);
-                return networkSpecifier;
-            }
-
-            final NetworkAgentConfig naConfig = new NetworkAgentConfig.Builder()
-                    .setLegacyType(ConnectivityManager.TYPE_NONE)
-                    .setLegacyTypeName(NETWORK_TAG)
-                    .build();
-
-            nnri.networkAgent = new WifiAwareNetworkAgent(mLooper, mContext,
-                    AGENT_TAG_PREFIX + nnri.ndpId, ncBuilder.build(),
-                    linkProperties, NETWORK_FACTORY_SCORE_AVAIL,
-                    naConfig, mNetworkFactory.getProvider(), nnri);
             nnri.startValidationTimestamp = mClock.getElapsedSinceBootMillis();
-            handleAddressValidation(nnri, linkProperties, ndpId, networkSpecifier.isOutOfBand());
+            handleAddressValidation(nnri, ndpId, networkSpecifier.isOutOfBand(), mac);
         } else {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "onDataPathConfirm: data-path for networkSpecifier=" + networkSpecifier
                         + " rejected - reason=" + reason);
             }
@@ -679,29 +620,81 @@ public class WifiAwareDataPathStateManager {
         return networkSpecifier;
     }
 
-    private void handleAddressValidation(AwareNetworkRequestInformation nnri,
-            LinkProperties linkProperties, int ndpId, boolean isOutOfBand) {
-        if (mNiWrapper.isAddressUsable(linkProperties)) {
-            mNiWrapper.setConnected(nnri.networkAgent);
-
-            mAwareMetrics.recordNdpStatus(NanStatusType.SUCCESS, isOutOfBand, nnri.startTimestamp);
-            nnri.startTimestamp = mClock.getElapsedSinceBootMillis(); // update time-stamp
-            mAwareMetrics.recordNdpCreation(nnri.uid, nnri.packageName, mNetworkRequestsCache);
-        } else {
-            if (mClock.getElapsedSinceBootMillis() - nnri.startValidationTimestamp
-                    > ADDRESS_VALIDATION_TIMEOUT_MS) {
-                Log.e(TAG, "Timed-out while waiting for IPv6 address to be usable");
-
-                declareUnfullfillableAndEndDp(nnri, ndpId);
-                return;
+    private void getInet6Address(AwareNetworkRequestInformation nnri, byte[] mac) {
+        try {
+            byte[] addr;
+            if (nnri.peerIpv6Override == null) {
+                addr = MacAddress.fromBytes(mac).getLinkLocalIpv6FromEui48Mac().getAddress();
+            } else {
+                addr = new byte[16];
+                addr[0] = (byte) 0xfe;
+                addr[1] = (byte) 0x80;
+                addr[8] = nnri.peerIpv6Override[0];
+                addr[9] = nnri.peerIpv6Override[1];
+                addr[10] = nnri.peerIpv6Override[2];
+                addr[11] = nnri.peerIpv6Override[3];
+                addr[12] = nnri.peerIpv6Override[4];
+                addr[13] = nnri.peerIpv6Override[5];
+                addr[14] = nnri.peerIpv6Override[6];
+                addr[15] = nnri.peerIpv6Override[7];
             }
+            nnri.peerIpv6 = Inet6Address.getByAddress(null, addr,
+                    NetworkInterface.getByName(nnri.interfaceName));
+        } catch (SocketException | UnknownHostException e) {
             if (mDbg) {
+                Log.d(TAG, "onDataPathConfirm: error obtaining scoped IPv6 address -- " + e);
+            }
+            nnri.peerIpv6 = null;
+        }
+    }
+
+    private void handleAddressValidation(AwareNetworkRequestInformation nnri, int ndpId,
+            boolean isOutOfBand, byte[] mac) {
+        final NetworkCapabilities.Builder ncBuilder = new NetworkCapabilities.Builder(
+                sNetworkCapabilitiesFilter);
+        LinkProperties linkProperties = new LinkProperties();
+        getInet6Address(nnri, mac);
+        if (nnri.peerIpv6 != null) {
+            final WifiAwareNetworkInfo ni = new WifiAwareNetworkInfo(
+                    nnri.peerIpv6, nnri.peerPort, nnri.peerTransportProtocol);
+            ncBuilder.setTransportInfo(ni);
+            if (mDbg) {
+                Log.v(TAG, "onDataPathConfirm: AwareNetworkInfo=" + ni);
+            }
+        }
+        if (!(mNiWrapper.configureAgentProperties(nnri, nnri.equivalentRequests, ndpId,
+                ncBuilder, linkProperties) && mNiWrapper.isAddressUsable(linkProperties))) {
+            if (VDBG) {
                 Log.d(TAG, "Failed address validation");
             }
-            mHandler.postDelayed(() -> {
-                handleAddressValidation(nnri, linkProperties, ndpId, isOutOfBand);
-            }, ADDRESS_VALIDATION_RETRY_INTERVAL_MS);
+            if (!isAddressValidationExpired(nnri, ndpId)) {
+                mHandler.postDelayed(() -> {
+                    handleAddressValidation(nnri, ndpId, isOutOfBand, mac);
+                }, ADDRESS_VALIDATION_RETRY_INTERVAL_MS);
+            }
+            return;
         }
+        final NetworkAgentConfig naConfig = new NetworkAgentConfig.Builder()
+                .setLegacyType(ConnectivityManager.TYPE_NONE)
+                .setLegacyTypeName(NETWORK_TAG)
+                .build();
+        nnri.networkAgent = new WifiAwareNetworkAgent(mLooper, mContext,
+                AGENT_TAG_PREFIX + nnri.ndpId, ncBuilder.build(), linkProperties,
+                NETWORK_FACTORY_SCORE_AVAIL, naConfig, mNetworkFactory.getProvider(), nnri);
+        mNiWrapper.setConnected(nnri.networkAgent);
+        mAwareMetrics.recordNdpStatus(NanStatusType.SUCCESS, isOutOfBand, nnri.startTimestamp);
+        nnri.startTimestamp = mClock.getElapsedSinceBootMillis(); // update time-stamp
+        mAwareMetrics.recordNdpCreation(nnri.uid, nnri.packageName, mNetworkRequestsCache);
+    }
+
+    private boolean isAddressValidationExpired(AwareNetworkRequestInformation nnri, int ndpId) {
+        if (mClock.getElapsedSinceBootMillis() - nnri.startValidationTimestamp
+                > ADDRESS_VALIDATION_TIMEOUT_MS) {
+            Log.e(TAG, "Timed-out while waiting for IPv6 address to be usable");
+            declareUnfullfillableAndEndDp(nnri, ndpId);
+            return true;
+        }
+        return false;
     }
 
     private void declareUnfullfillableAndEndDp(AwareNetworkRequestInformation nnri, int ndpId) {
@@ -717,12 +710,12 @@ public class WifiAwareDataPathStateManager {
      * @param ndpId The ID of the terminated data-path.
      */
     public void onDataPathEnd(int ndpId) {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onDataPathEnd: ndpId=" + ndpId);
+        if (mDbg) Log.v(TAG, "onDataPathEnd: ndpId=" + ndpId);
 
         Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation> nnriE =
                 getNetworkRequestByNdpId(ndpId);
         if (nnriE == null) {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "onDataPathEnd: network request not found for ndpId=" + ndpId);
             }
             return;
@@ -744,7 +737,7 @@ public class WifiAwareDataPathStateManager {
      */
     public void onDataPathSchedUpdate(byte[] peerMac, List<Integer> ndpIds,
             List<NanDataPathChannelInfo> channelInfo) {
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG, "onDataPathSchedUpdate: peerMac=" + MacAddress.fromBytes(peerMac).toString()
                     + ", ndpIds=" + ndpIds + ", channelInfo=" + channelInfo);
         }
@@ -771,7 +764,7 @@ public class WifiAwareDataPathStateManager {
      * Called whenever Aware comes down. Clean up all pending and up network requests and agents.
      */
     public void onAwareDownCleanupDataPaths() {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onAwareDownCleanupDataPaths");
+        if (mDbg) Log.v(TAG, "onAwareDownCleanupDataPaths");
 
         Iterator<Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation>> it =
                 mNetworkRequestsCache.entrySet().iterator();
@@ -792,7 +785,7 @@ public class WifiAwareDataPathStateManager {
 
         AwareNetworkRequestInformation nnri = mNetworkRequestsCache.remove(networkSpecifier);
         if (nnri == null) {
-            if (mDbg) {
+            if (VDBG) {
                 Log.v(TAG,
                         "handleDataPathTimeout: network request not found for networkSpecifier="
                                 + networkSpecifier);
@@ -818,7 +811,7 @@ public class WifiAwareDataPathStateManager {
 
         public void tickleConnectivityIfWaiting() {
             if (mWaitingForTermination) {
-                if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "tickleConnectivityIfWaiting: was waiting!");
+                if (mDbg) Log.v(TAG, "tickleConnectivityIfWaiting: was waiting!");
                 mWaitingForTermination = false;
                 reevaluateAllRequests();
             }
@@ -826,13 +819,13 @@ public class WifiAwareDataPathStateManager {
 
         @Override
         public boolean acceptRequest(NetworkRequest request, int score) {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request + ", score="
                         + score);
             }
 
             if (!mMgr.isUsageEnabled()) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request
                             + " -- Aware disabled");
                 }
@@ -858,7 +851,7 @@ public class WifiAwareDataPathStateManager {
             // look up specifier - are we being called again?
             AwareNetworkRequestInformation nnri = mNetworkRequestsCache.get(networkSpecifier);
             if (nnri != null) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request
                             + " - already in cache with state=" + nnri.state);
                 }
@@ -887,7 +880,7 @@ public class WifiAwareDataPathStateManager {
             Map.Entry<WifiAwareNetworkSpecifier, AwareNetworkRequestInformation> primaryRequest =
                     getNetworkRequestByCanonicalDescriptor(nnri.getCanonicalDescriptor());
             if (primaryRequest != null) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "WifiAwareNetworkFactory.acceptRequest: request=" + request
                             + ", already has a primary request=" + primaryRequest.getKey()
                             + " with state=" + primaryRequest.getValue().state);
@@ -909,7 +902,7 @@ public class WifiAwareDataPathStateManager {
 
         @Override
         protected void needNetworkFor(NetworkRequest networkRequest, int score) {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "WifiAwareNetworkFactory.needNetworkFor: networkRequest="
                         + networkRequest + ", score=" + score);
             }
@@ -927,7 +920,7 @@ public class WifiAwareDataPathStateManager {
             }
 
             if (nnri.state != AwareNetworkRequestInformation.STATE_IDLE) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "WifiAwareNetworkFactory.needNetworkFor: networkRequest="
                             + networkRequest + " - already in progress");
                     // TODO: understand how/when can be called again/while in progress (seems
@@ -961,7 +954,7 @@ public class WifiAwareDataPathStateManager {
 
         @Override
         protected void releaseNetworkFor(NetworkRequest networkRequest) {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "WifiAwareNetworkFactory.releaseNetworkFor: networkRequest="
                         + networkRequest);
             }
@@ -980,7 +973,7 @@ public class WifiAwareDataPathStateManager {
             }
 
             if (nnri.networkAgent != null) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "WifiAwareNetworkFactory.releaseNetworkFor: networkRequest="
                             + networkRequest + ", nnri=" + nnri
                             + ": agent already created - deferring ending data-path to agent"
@@ -996,12 +989,12 @@ public class WifiAwareDataPathStateManager {
              */
             nnri.removeSupportForRequest(networkRequest);
             if (nnri.equivalentRequests.isEmpty()) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "releaseNetworkFor: there are no further requests, networkRequest="
                             + networkRequest);
                 }
                 if (nnri.ndpId != 0) { // 0 is never a valid ID!
-                    if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "releaseNetworkFor: in progress NDP being terminated");
+                    if (mDbg) Log.v(TAG, "releaseNetworkFor: in progress NDP being terminated");
                     mMgr.endDataPath(nnri.ndpId);
                     nnri.state = AwareNetworkRequestInformation.STATE_TERMINATING;
                 } else {
@@ -1011,7 +1004,7 @@ public class WifiAwareDataPathStateManager {
                     }
                 }
             } else {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "releaseNetworkFor: equivalent requests exist - not terminating "
                             + "networkRequest=" + networkRequest);
                 }
@@ -1043,7 +1036,7 @@ public class WifiAwareDataPathStateManager {
 
         @Override
         public void onNetworkUnwanted() {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "WifiAwareNetworkAgent.unwanted: request=" + mAwareNetworkRequestInfo);
             }
 
@@ -1055,7 +1048,7 @@ public class WifiAwareDataPathStateManager {
         }
 
         void reconfigureAgentAsDisconnected() {
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (mDbg) {
                 Log.v(TAG, "WifiAwareNetworkAgent.reconfigureAgentAsDisconnected: request="
                         + mAwareNetworkRequestInfo);
             }
@@ -1064,12 +1057,12 @@ public class WifiAwareDataPathStateManager {
     }
 
     private void tearDownInterfaceIfPossible(AwareNetworkRequestInformation nnri) {
-        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "tearDownInterfaceIfPossible: nnri=" + nnri);
+        if (mDbg) Log.v(TAG, "tearDownInterfaceIfPossible: nnri=" + nnri);
 
         if (!TextUtils.isEmpty(nnri.interfaceName)) {
             boolean interfaceUsedByAnotherNdp = isInterfaceUpAndUsedByAnotherNdp(nnri);
             if (interfaceUsedByAnotherNdp) {
-                if (VDBG || mVerboseLoggingEnabled) {
+                if (mDbg) {
                     Log.v(TAG, "tearDownInterfaceIfPossible: interfaceName=" + nnri.interfaceName
                             + ", still in use - not turning down");
                 }
@@ -1118,7 +1111,7 @@ public class WifiAwareDataPathStateManager {
         SortedSet<String> potential = new TreeSet<>(mInterfaces);
         Set<String> used = new HashSet<>();
 
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG, "selectInterfaceForRequest: req=" + req + ", mNetworkRequestsCache="
                     + mNetworkRequestsCache);
         }
@@ -1133,7 +1126,7 @@ public class WifiAwareDataPathStateManager {
             }
         }
 
-        if (VDBG || mVerboseLoggingEnabled) {
+        if (mDbg) {
             Log.v(TAG, "selectInterfaceForRequest: potential=" + potential + ", used=" + used);
         }
 
@@ -1199,7 +1192,7 @@ public class WifiAwareDataPathStateManager {
         public Set<NetworkRequest> equivalentRequests = new HashSet<>();
 
         void updateToSupportNewRequest(NetworkRequest ns) {
-            if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "updateToSupportNewRequest: ns=" + ns);
+            if (VDBG) Log.v(TAG, "updateToSupportNewRequest: ns=" + ns);
             if (equivalentRequests.add(ns) && state == STATE_CONFIRMED) {
                 if (networkAgent == null) {
                     Log.wtf(TAG, "updateToSupportNewRequest: null agent in CONFIRMED state!?");
@@ -1211,7 +1204,7 @@ public class WifiAwareDataPathStateManager {
         }
 
         void removeSupportForRequest(NetworkRequest ns) {
-            if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "removeSupportForRequest: ns=" + ns);
+            if (VDBG) Log.v(TAG, "removeSupportForRequest: ns=" + ns);
             equivalentRequests.remove(ns);
 
             // we will not update the agent:
@@ -1250,7 +1243,7 @@ public class WifiAwareDataPathStateManager {
             String packageName = null;
             byte[] peerMac = ns.peerMac;
 
-            if (VDBG || mVerboseLoggingEnabled) {
+            if (VDBG) {
                 Log.v(TAG, "processNetworkSpecifier: networkSpecifier=" + ns);
             }
 
@@ -1549,7 +1542,7 @@ public class WifiAwareDataPathStateManager {
                 testDatagramSocket = new DatagramSocket(0, address);
             } catch (SocketException e) {
                 if (mDbg) {
-                    Log.d(TAG, "Can't create socket on address " + address + " -- " + e);
+                    Log.v(TAG, "Can't create socket on address " + address + " -- " + e);
                 }
                 return false;
             } finally {

@@ -83,6 +83,7 @@
           <item type="bool" name="config_wifiSoftapHeSuBeamformeeSupported" />
           <item type="bool" name="config_wifiSoftapHeMuBeamformerSupported" />
           <item type="bool" name="config_wifiSoftapHeTwtSupported" />
+          <item type="bool" name="config_wifiLocalOnlyHotspot6ghz" />
           <item type="bool" name="config_wifi_local_only_hotspot_5ghz" />
           <item type="bool" name="config_wifi_connected_mac_randomization_supported" />
           <item type="bool" name="config_wifi_p2p_mac_randomization_supported" />
@@ -132,6 +133,10 @@
           <item type="bool" name="config_wifiSaeUpgradeOffloadEnabled" />
           <item type="integer" name="config_wifiMaxNativeFailureSelfRecoveryPerHour" />
           <item type="bool" name="config_wifiIgnoreOpenSavedNetworkWhenSecureSuggestionAvailable" />
+          <item type="bool" name="config_wifiSoftapAcsIncludeDfs" />
+          <item type="integer" name="config_wifiMovingPnoScanIntervalMillis" />
+          <item type="integer" name="config_wifiStationaryPnoScanIntervalMillis" />
+          <item type="integer" name="config_wifiDelayDisconnectOnImsLostMs" />
           <item type="bool" name="config_vendorWifi11axReadySupport" />
           <!-- Params from config.xml that can be overlayed -->
 

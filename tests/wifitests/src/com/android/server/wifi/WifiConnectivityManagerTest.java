@@ -109,7 +109,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
         when(mWifiNetworkSuggestionsManager.retrieveHiddenNetworkList())
                 .thenReturn(new ArrayList<>());
-        when(mWifiNetworkSuggestionsManager.getAllNetworkSuggestions())
+        when(mWifiNetworkSuggestionsManager.getAllApprovedNetworkSuggestions())
                 .thenReturn(new HashSet<>());
         when(mWifiInjector.getBssidBlocklistMonitor()).thenReturn(mBssidBlocklistMonitor);
         when(mWifiInjector.getWifiChannelUtilizationScan()).thenReturn(mWifiChannelUtilization);
@@ -160,6 +160,10 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
                 HIGH_MVMT_RSSI_DELTA);
         resources.setInteger(R.integer.config_wifiInitialPartialScanChannelCacheAgeMins,
                 CHANNEL_CACHE_AGE_MINS);
+        resources.setInteger(R.integer.config_wifiMovingPnoScanIntervalMillis,
+                MOVING_PNO_SCAN_INTERVAL_MILLIS);
+        resources.setInteger(R.integer.config_wifiStationaryPnoScanIntervalMillis,
+                STATIONARY_PNO_SCAN_INTERVAL_MILLIS);
     }
 
     /**
@@ -244,6 +248,8 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     private static final int TEMP_BSSID_BLOCK_DURATION_MS = 10 * 1000; // 10 seconds
     private static final int TEST_CONNECTED_NETWORK_ID = 55;
     private static final int CHANNEL_CACHE_AGE_MINS = 14400;
+    private static final int MOVING_PNO_SCAN_INTERVAL_MILLIS = 20_000;
+    private static final int STATIONARY_PNO_SCAN_INTERVAL_MILLIS = 60_000;
 
     Context mockContext() {
         Context context = mock(Context.class);
@@ -259,7 +265,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     ScanData mockScanData() {
         ScanData scanData = mock(ScanData.class);
 
-        when(scanData.getBandScanned()).thenReturn(WifiScanner.WIFI_BAND_BOTH_WITH_DFS);
+        when(scanData.getBandScanned()).thenReturn(WifiScanner.WIFI_BAND_ALL);
 
         return scanData;
     }
@@ -594,6 +600,50 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         mWifiConnectivityManager.handleConnectionStateChanged(
                 WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
         numAttempts++;
+
+        // Verify that all the connection attempts went through
+        verify(mClientModeImpl, times(numAttempts)).startConnectToNetwork(
+                CANDIDATE_NETWORK_ID, Process.WIFI_UID, CANDIDATE_BSSID);
+    }
+
+    /**
+     * Multiple back to back connection attempts after a force connectivity scan should not be rate
+     * limited.
+     *
+     * Expected behavior: WifiConnectivityManager calls ClientModeImpl.startConnectToNetwork()
+     * with the expected candidate network ID and BSSID for only the expected number of times within
+     * the given interval.
+     */
+    @Test
+    public void connectionAttemptNotRateLimitedWhenScreenOffForceConnectivityScan() {
+        int maxAttemptRate = WifiConnectivityManager.MAX_CONNECTION_ATTEMPTS_RATE;
+        int timeInterval = WifiConnectivityManager.MAX_CONNECTION_ATTEMPTS_TIME_INTERVAL_MS;
+        int numAttempts = 0;
+        int connectionAttemptIntervals = timeInterval / maxAttemptRate;
+
+        mWifiConnectivityManager.handleScreenStateChanged(false);
+
+        // First attempt the max rate number of connections within the rate interval.
+        long currentTimeStamp = 0;
+        for (int attempt = 0; attempt < maxAttemptRate; attempt++) {
+            currentTimeStamp += connectionAttemptIntervals;
+            when(mClock.getElapsedSinceBootMillis()).thenReturn(currentTimeStamp);
+            // Set WiFi to disconnected state to trigger PNO scan
+            mWifiConnectivityManager.handleConnectionStateChanged(
+                    WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
+            numAttempts++;
+        }
+
+        mWifiConnectivityManager.forceConnectivityScan(new WorkSource());
+
+        for (int attempt = 0; attempt < maxAttemptRate; attempt++) {
+            currentTimeStamp += connectionAttemptIntervals;
+            when(mClock.getElapsedSinceBootMillis()).thenReturn(currentTimeStamp);
+            // Set WiFi to disconnected state to trigger PNO scan
+            mWifiConnectivityManager.handleConnectionStateChanged(
+                    WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
+            numAttempts++;
+        }
 
         // Verify that all the connection attempts went through
         verify(mClientModeImpl, times(numAttempts)).startConnectToNetwork(
@@ -1497,7 +1547,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNetworkSuggestion.getWifiConfiguration()).thenReturn(mSuggestionConfig);
         Set<WifiNetworkSuggestion> suggestionNetworks = new HashSet<WifiNetworkSuggestion>();
         suggestionNetworks.add(mWifiNetworkSuggestion);
-        when(mWifiNetworkSuggestionsManager.getAllNetworkSuggestions())
+        when(mWifiNetworkSuggestionsManager.getAllApprovedNetworkSuggestions())
                 .thenReturn(suggestionNetworks);
 
         // Prepare for no saved networks
@@ -1548,7 +1598,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNetworkSuggestion.getWifiConfiguration()).thenReturn(mSuggestionConfig);
         Set<WifiNetworkSuggestion> suggestionNetworks = new HashSet<WifiNetworkSuggestion>();
         suggestionNetworks.add(mWifiNetworkSuggestion);
-        when(mWifiNetworkSuggestionsManager.getAllNetworkSuggestions())
+        when(mWifiNetworkSuggestionsManager.getAllApprovedNetworkSuggestions())
                 .thenReturn(suggestionNetworks);
 
         // Prepare for a single passpoint network
@@ -1791,7 +1841,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         doAnswer(new AnswerWithArguments() {
             public void answer(ScanSettings settings, ScanListener listener,
                     WorkSource workSource) throws Exception {
-                assertEquals(settings.band, WifiScanner.WIFI_BAND_BOTH_WITH_DFS);
+                assertEquals(settings.band, WifiScanner.WIFI_BAND_ALL);
                 assertNull(settings.channels);
             }}).when(mWifiScanner).startScan(anyObject(), anyObject(), anyObject());
 
@@ -1958,7 +2008,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         doAnswer(new AnswerWithArguments() {
             public void answer(ScanSettings settings, Executor executor, ScanListener listener,
                     WorkSource workSource) throws Exception {
-                assertEquals(settings.band, WifiScanner.WIFI_BAND_BOTH_WITH_DFS);
+                assertEquals(settings.band, WifiScanner.WIFI_BAND_ALL);
                 assertNull(settings.channels);
             }}).when(mWifiScanner).startScan(anyObject(), anyObject(), anyObject(), anyObject());
 
@@ -2110,7 +2160,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
                 CANDIDATE_NETWORK_ID, Process.WIFI_UID, CANDIDATE_BSSID);
 
         // Set up as full band scan results.
-        when(mScanData.getBandScanned()).thenReturn(WifiScanner.WIFI_BAND_BOTH_WITH_DFS);
+        when(mScanData.getBandScanned()).thenReturn(WifiScanner.WIFI_BAND_ALL);
 
         // Force a connectivity scan which enables WifiConnectivityManager
         // to wait for full band scan results.
@@ -2730,8 +2780,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
 
         inOrder.verify(mWifiScanner).startDisconnectedPnoScan(
                 scanSettingsCaptor.capture(), any(), any(), any());
-        assertEquals(scanSettingsCaptor.getValue().periodInMs,
-                WifiConnectivityManager.MOVING_PNO_SCAN_INTERVAL_MS);
+        assertEquals(scanSettingsCaptor.getValue().periodInMs, MOVING_PNO_SCAN_INTERVAL_MILLIS);
 
         // initial connectivity state uses moving PNO scan interval, now set it to stationary
         mWifiConnectivityManager.setDeviceMobilityState(
@@ -2740,11 +2789,10 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         inOrder.verify(mWifiScanner).stopPnoScan(any());
         inOrder.verify(mWifiScanner).startDisconnectedPnoScan(
                 scanSettingsCaptor.capture(), any(), any(), any());
-        assertEquals(scanSettingsCaptor.getValue().periodInMs,
-                WifiConnectivityManager.STATIONARY_PNO_SCAN_INTERVAL_MS);
-        verify(mScoringParams, times(2)).getEntryRssi(ScoringParams.BAND6);
-        verify(mScoringParams, times(2)).getEntryRssi(ScoringParams.BAND5);
-        verify(mScoringParams, times(2)).getEntryRssi(ScoringParams.BAND2);
+        assertEquals(scanSettingsCaptor.getValue().periodInMs, STATIONARY_PNO_SCAN_INTERVAL_MILLIS);
+        verify(mScoringParams, times(2)).getEntryRssi(ScanResult.BAND_6_GHZ_START_FREQ_MHZ);
+        verify(mScoringParams, times(2)).getEntryRssi(ScanResult.BAND_5_GHZ_START_FREQ_MHZ);
+        verify(mScoringParams, times(2)).getEntryRssi(ScanResult.BAND_24_GHZ_START_FREQ_MHZ);
     }
 
     /**
@@ -2766,8 +2814,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         inOrder.verify(mWifiScanner, never()).stopPnoScan(any());
         inOrder.verify(mWifiScanner).startDisconnectedPnoScan(
                 scanSettingsCaptor.capture(), any(), any(), any());
-        assertEquals(scanSettingsCaptor.getValue().periodInMs,
-                WifiConnectivityManager.MOVING_PNO_SCAN_INTERVAL_MS);
+        assertEquals(scanSettingsCaptor.getValue().periodInMs, MOVING_PNO_SCAN_INTERVAL_MILLIS);
 
         mWifiConnectivityManager.setDeviceMobilityState(
                 WifiManager.DEVICE_MOBILITY_STATE_LOW_MVMT);
@@ -2805,8 +2852,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
                 scanSettingsCaptor.capture(), any(), any(), any());
         // check that now the PNO scan uses the stationary interval, even though it was set before
         // the PNO scan started
-        assertEquals(scanSettingsCaptor.getValue().periodInMs,
-                WifiConnectivityManager.STATIONARY_PNO_SCAN_INTERVAL_MS);
+        assertEquals(scanSettingsCaptor.getValue().periodInMs, STATIONARY_PNO_SCAN_INTERVAL_MILLIS);
     }
 
     /**

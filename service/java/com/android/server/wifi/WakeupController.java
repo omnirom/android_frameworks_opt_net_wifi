@@ -74,10 +74,8 @@ public class WakeupController {
         @Override
         public void onResults(WifiScanner.ScanData[] results) {
             // We treat any full band scans (with DFS or not) as "full".
-            boolean isFullBandScanResults =
-                    results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
-                            || results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH;
-            if (results.length == 1 && isFullBandScanResults) {
+            if (results.length == 1
+                    && WifiScanner.isFullBandScan(results[0].getBandScanned(), true)) {
                 handleScanResults(filterDfsScanResults(Arrays.asList(results[0].getResults())));
             }
         }
@@ -242,6 +240,10 @@ public class WakeupController {
      */
     public void start() {
         Log.d(TAG, "start()");
+        if (getGoodSavedNetworksAndSuggestions().isEmpty()) {
+            Log.i(TAG, "Ignore wakeup start since there are no good networks.");
+            return;
+        }
         mWifiInjector.getWifiScanner().registerScanListener(
                 new HandlerExecutor(mHandler), mScanListener);
 
@@ -345,7 +347,7 @@ public class WakeupController {
         }
 
         Set<WifiNetworkSuggestion> networkSuggestions =
-                mWifiNetworkSuggestionsManager.getAllNetworkSuggestions();
+                mWifiNetworkSuggestionsManager.getAllApprovedNetworkSuggestions();
         for (WifiNetworkSuggestion suggestion : networkSuggestions) {
             // TODO(b/127799111): Do we need to filter the list similar to saved networks above?
             goodNetworks.add(

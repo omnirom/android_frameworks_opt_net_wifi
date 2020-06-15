@@ -62,7 +62,7 @@ java_library {
         // need pre-jarjar symbols so that wifi-service can reference the original class names at
         // compile time
         "framework-wifi-pre-jarjar",
-        "framework-statsd-stubs-module_libs_api",
+        "framework-statsd.stubs.module_lib",
         "unsupportedappusage",
     ],
 
@@ -109,7 +109,7 @@ java_library {
 
     // need to include `libs` so that Soong doesn't complain about missing classes after jarjaring
     libs: [
-        "framework-wifi",
+        "framework-wifi.impl",
     ],
 
     sdk_version: "system_server_current",

@@ -21,6 +21,8 @@ import android.net.wifi.WifiConfiguration;
 import android.os.UserHandle;
 import android.os.UserManager;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -41,6 +43,15 @@ public class ConfigurationMap {
         mUserManager = userManager;
     }
 
+    /** Dump internal state for debugging. */
+    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+        pw.println("mPerId=" + mPerID);
+        pw.println("mPerIDForCurrentUser=" + mPerIDForCurrentUser);
+        pw.println("mScanResultMatchInfoMapForCurrentUser="
+                + mScanResultMatchInfoMapForCurrentUser);
+        pw.println("mCurrentUserId=" + mCurrentUserId);
+    }
+
     // RW methods:
     public WifiConfiguration put(WifiConfiguration config) {
         final WifiConfiguration current = mPerID.put(config.networkId, config);
@@ -49,8 +60,12 @@ public class ConfigurationMap {
         if (config.shared || currentUser.equals(creatorUser)
                 || mUserManager.isSameProfileGroup(currentUser, creatorUser)) {
             mPerIDForCurrentUser.put(config.networkId, config);
-            mScanResultMatchInfoMapForCurrentUser.put(
-                    ScanResultMatchInfo.fromWifiConfiguration(config), config);
+            // TODO (b/142035508): Add a more generic fix. This cache should only hold saved
+            // networks.
+            if (!config.fromWifiNetworkSpecifier) {
+                mScanResultMatchInfoMapForCurrentUser.put(
+                        ScanResultMatchInfo.fromWifiConfiguration(config), config);
+            }
         }
         return current;
     }

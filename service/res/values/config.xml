@@ -101,7 +101,7 @@
     <!-- Integer specifying the percent bonus for current network. The percent is applied to
          the sum of rssi base score and throughput score-->
     <integer translatable="false" name="config_wifiFrameworkCurrentNetworkBonusPercent">20</integer>
-    <integer translatable="false" name="config_wifiFrameworkSecureNetworkBonus">10</integer>
+    <integer translatable="false" name="config_wifiFrameworkSecureNetworkBonus">40</integer>
 
     <!-- The duration in minutes to strongly favor the last-selected network over other options. -->
     <integer translatable="false" name="config_wifiFrameworkLastSelectionMinutes">480</integer>
@@ -223,8 +223,14 @@
     <!-- Wifi driver supports 6GHz band for softap -->
     <bool translatable="false" name="config_wifiSoftap6ghzSupported">false</bool>
 
-    <!-- Indicates that local-only hotspot should be brought up at 5GHz.  This option is
-         for automotive builds only (the one that have PackageManager#FEATURE_AUTOMOTIVE) -->
+    <!-- Indicates that local-only hotspot should be brought up at 6GHz if possible.
+         This option is for automotive builds only (the one that have
+         PackageManager#FEATURE_AUTOMOTIVE) -->
+    <bool translatable="false" name="config_wifiLocalOnlyHotspot6ghz">false</bool>
+
+    <!-- Indicates that local-only hotspot should be brought up at 5GHz if 6GHz is not enabled
+         or feasible.  This option is for automotive builds only (the one that have
+         PackageManager#FEATURE_AUTOMOTIVE) -->
     <bool translatable="false" name="config_wifi_local_only_hotspot_5ghz">false</bool>
 
     <!-- Indicates that connected MAC randomization is supported on this device -->
@@ -420,6 +426,25 @@
     <integer translatable="false" name="config_wifiMaxNativeFailureSelfRecoveryPerHour">2</integer>
     <!-- Ignore the open saved network if from carrier provisioning app, there is a same open suggestion and a secure suggestion from same carrier available -->
     <bool translatable="false" name="config_wifiIgnoreOpenSavedNetworkWhenSecureSuggestionAvailable">true</bool>
+
+    <!-- Wifi driver Automatic channel selection (ACS) for softap to include DFS channels -->
+    <bool translatable="false" name="config_wifiSoftapAcsIncludeDfs">false</bool>
+
+    <!-- Initial PNO scan interval, in milliseconds, when the device is moving (i.e.
+         WifiManager.DEVICE_MOBILITY_STATE_UNKNOWN, WifiManager.DEVICE_MOBILITY_STATE_HIGH_MVMT, or
+         WifiManager.DEVICE_MOBILITY_STATE_LOW_MVMT).
+         The scan interval backs off from this initial interval on subsequent scans.
+         This scan is performed when screen is off and disconnected. -->
+    <integer translatable="false" name="config_wifiMovingPnoScanIntervalMillis">20000</integer>
+
+    <!-- Initial PNO scan interval, in milliseconds, when the device is stationary (i.e.
+         WifiManager.DEVICE_MOBILITY_STATE_STATIONARY).
+         The scan interval backs off from this initial interval on subsequent scans.
+         This scan is performed when screen is off and disconnected. -->
+    <integer translatable="false" name="config_wifiStationaryPnoScanIntervalMillis">60000</integer>
+
+    <!-- integer indicating additional disconnect delay (in ms) after IMS onLost() indication is received -->
+    <integer translatable="false" name="config_wifiDelayDisconnectOnImsLostMs">0</integer>
 
     <!-- Do not translate. Default bridge interface name for Dual SAP tethering -->
     <string name="config_vendor_wifi_tether_bridge_interface_name" translatable="false">wifi_br0</string>

@@ -452,9 +452,8 @@ public class HostapdHal {
                     && !mForceApChannel;
             if (enableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
-                if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
-                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
-                }
+                ifaceParams.channelParams.acsShouldExcludeDfs = !mContext.getResources()
+                        .getBoolean(R.bool.config_wifiSoftapAcsIncludeDfs);
             }
             ifaceParams.channelParams.channel =
                     mForceApChannel ? mForcedApChannel : config.getChannel();
@@ -1216,9 +1215,8 @@ public class HostapdHal {
             }
             if (ApConfigUtil.isAcsSupported(mContext)) {
                 ifaceParams.channelParams.enableAcs = true;
-                if(!(mContext.getResources().getBoolean(R.bool.config_wifi_softap_acs_include_dfs))) {
-                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
-                }
+                ifaceParams.channelParams.acsShouldExcludeDfs = !mContext.getResources()
+                        .getBoolean(R.bool.config_wifiSoftapAcsIncludeDfs);
             } else {
                 ifaceParams.channelParams.enableAcs = false;
                 ifaceParams.channelParams.channel = config.getChannel();

@@ -19,6 +19,7 @@ package com.android.server.wifi;
 import static com.android.server.wifi.util.InformationElementUtil.BssLoad.CHANNEL_UTILIZATION_SCALE;
 
 import android.content.Context;
+import android.net.wifi.ScanResult;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager.DeviceMobilityState;
 import android.os.Handler;
@@ -40,9 +41,6 @@ public class WifiDataStall {
     private static final String TAG = "WifiDataStall";
     private boolean mVerboseLoggingEnabled = false;
     public static final int INVALID_THROUGHPUT = -1;
-    // At low traffic, link speed values below the following threshold
-    // are ignored because it could be due to low rate management frames
-    public static final int LINK_SPEED_LOW_THRESHOLD_MBPS = 9;
     // Maximum time gap between two WifiLinkLayerStats to trigger a data stall
     public static final int MAX_MS_DELTA_FOR_DATA_STALL = 60 * 1000; // 1 minute
     // Maximum time that a data stall start time stays valid.
@@ -305,7 +303,8 @@ public class WifiDataStall {
 
         if (txLinkSpeedMbps > 0) {
             // Exclude update with low rate management frames
-            if (isTxTrafficHigh || txLinkSpeedMbps > LINK_SPEED_LOW_THRESHOLD_MBPS) {
+            if (isTxTrafficHigh
+                    || txLinkSpeedMbps > mDeviceConfigFacade.getTxLinkSpeedLowThresholdMbps()) {
                 mTxTputKbps = (int) ((long) txLinkSpeedMbps * 1000 * (100 - txPer) / 100
                         * (CHANNEL_UTILIZATION_SCALE  - ccaLevel) / CHANNEL_UTILIZATION_SCALE);
             }
@@ -316,7 +315,8 @@ public class WifiDataStall {
 
         if (rxLinkSpeedMbps > 0) {
             // Exclude update with low rate management frames
-            if (isRxTrafficHigh || rxLinkSpeedMbps > LINK_SPEED_LOW_THRESHOLD_MBPS) {
+            if (isRxTrafficHigh
+                    || rxLinkSpeedMbps > mDeviceConfigFacade.getRxLinkSpeedLowThresholdMbps()) {
                 mRxTputKbps = (int) ((long) rxLinkSpeedMbps * 1000
                         * (CHANNEL_UTILIZATION_SCALE  - ccaLevel) / CHANNEL_UTILIZATION_SCALE);
             }
@@ -437,8 +437,8 @@ public class WifiDataStall {
         mLastTxBytes = txBytes;
         mLastRxBytes = rxBytes;
 
-        boolean isTxTputSufficient = isL2ThroughputSufficient(l2TxTputKbps, l3TxTputKbps);
-        boolean isRxTputSufficient = isL2ThroughputSufficient(l2RxTputKbps, l3RxTputKbps);
+        boolean isTxTputSufficient = isL2ThroughputSufficient(l2TxTputKbps, l3TxTputKbps, false);
+        boolean isRxTputSufficient = isL2ThroughputSufficient(l2RxTputKbps, l3RxTputKbps, true);
         isTxTputSufficient = detectAndOverrideFalseInSufficient(
                 isTxTputSufficient, isTxTrafficHigh, mIsThroughputSufficient);
         isRxTputSufficient = detectAndOverrideFalseInSufficient(
@@ -465,17 +465,20 @@ public class WifiDataStall {
      * 3) L3 tput is not low and L2 tput is above its high threshold
      * 4) L2 tput is invalid
      */
-    private boolean isL2ThroughputSufficient(int l2TputKbps, int l3TputKbps) {
+    private boolean isL2ThroughputSufficient(int l2TputKbps, int l3TputKbps, boolean isForRxTput) {
         if (l2TputKbps == INVALID_THROUGHPUT) return true;
+        int tputSufficientLowThrKbps = mDeviceConfigFacade.getTxTputSufficientLowThrKbps();
+        int tputSufficientHighThrKbps = mDeviceConfigFacade.getTxTputSufficientHighThrKbps();
+        if (isForRxTput) {
+            tputSufficientLowThrKbps = mDeviceConfigFacade.getRxTputSufficientLowThrKbps();
+            tputSufficientHighThrKbps = mDeviceConfigFacade.getRxTputSufficientHighThrKbps();
+        }
         boolean isL3TputLow = (l3TputKbps * mDeviceConfigFacade.getTputSufficientRatioThrDen())
-                < (mDeviceConfigFacade.getTputSufficientLowThrKbps()
-                * mDeviceConfigFacade.getTputSufficientRatioThrNum());
-        boolean isL2TputAboveLowThr =
-                l2TputKbps >= mDeviceConfigFacade.getTputSufficientLowThrKbps();
+                < (tputSufficientLowThrKbps * mDeviceConfigFacade.getTputSufficientRatioThrNum());
+        boolean isL2TputAboveLowThr = l2TputKbps >= tputSufficientLowThrKbps;
         if (isL3TputLow) return isL2TputAboveLowThr;
 
-        boolean isL2TputAboveHighThr =
-                l2TputKbps >= mDeviceConfigFacade.getTputSufficientHighThrKbps();
+        boolean isL2TputAboveHighThr = l2TputKbps >= tputSufficientHighThrKbps;
         boolean isL2L3TputRatioAboveThr =
                 (l2TputKbps * mDeviceConfigFacade.getTputSufficientRatioThrDen())
                 >= (l3TputKbps * mDeviceConfigFacade.getTputSufficientRatioThrNum());
@@ -501,18 +504,18 @@ public class WifiDataStall {
 
     private int getBand(int frequency) {
         int band;
-        if (frequency >= KnownBandsChannelHelper.BAND_24_GHZ_START_FREQ
-                && frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+        if (ScanResult.is24GHz(frequency)) {
             band = WifiStatsLog.WIFI_HEALTH_STAT_REPORTED__BAND__BAND_2G;
-        } else if (frequency >= KnownBandsChannelHelper.BAND_5_GHZ_START_FREQ
-                && frequency <= KnownBandsChannelHelper.BAND_6_GHZ_END_FREQ) {
+        } else if (ScanResult.is5GHz(frequency)) {
             if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_LOW_END_FREQ) {
                 band = WifiStatsLog.WIFI_HEALTH_STAT_REPORTED__BAND__BAND_5G_LOW;
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_MID_END_FREQ) {
                 band = WifiStatsLog.WIFI_HEALTH_STAT_REPORTED__BAND__BAND_5G_MIDDLE;
-            } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_END_FREQ) {
+            } else {
                 band = WifiStatsLog.WIFI_HEALTH_STAT_REPORTED__BAND__BAND_5G_HIGH;
-            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_LOW_END_FREQ) {
+            }
+        } else if (ScanResult.is6GHz(frequency)) {
+            if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_LOW_END_FREQ) {
                 band = WifiStatsLog.WIFI_HEALTH_STAT_REPORTED__BAND__BAND_6G_LOW;
             } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_MID_END_FREQ) {
                 band = WifiStatsLog.WIFI_HEALTH_STAT_REPORTED__BAND__BAND_6G_MIDDLE;
@@ -524,6 +527,7 @@ public class WifiDataStall {
         }
         return band;
     }
+
     private void logd(String string) {
         if (mVerboseLoggingEnabled) {
             Log.d(TAG, string);

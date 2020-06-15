@@ -36,9 +36,8 @@ import java.io.PrintWriter;
  */
 public class WifiAwareNativeManager {
     private static final String TAG = "WifiAwareNativeManager";
-    private static final boolean VDBG = false;
-    /* package */ boolean mDbg = false;
-    private boolean mVerboseLoggingEnabled = false;
+    private boolean mDbg = false;
+
     // to be used for synchronizing access to any of the WifiAwareNative objects
     private final Object mLock = new Object();
 
@@ -53,7 +52,6 @@ public class WifiAwareNativeManager {
     private int mReferenceCount = 0;
     private volatile boolean mAwareNativeAvailable = false;
 
-
     WifiAwareNativeManager(WifiAwareStateManager awareStateManager,
             HalDeviceManager halDeviceManager,
             WifiAwareNativeCallback wifiAwareNativeCallback) {
@@ -62,13 +60,11 @@ public class WifiAwareNativeManager {
         mWifiAwareNativeCallback = wifiAwareNativeCallback;
     }
 
-    public void enableVerboseLogging(int verbose)
-    {
-        if( verbose > 0) {
-            mVerboseLoggingEnabled = true;
-        } else {
-            mVerboseLoggingEnabled = false;
-        }
+    /**
+     * Enable verbose logging.
+     */
+    public void enableVerboseLogging(boolean verbose) {
+        mDbg = verbose;
     }
 
     /**
@@ -92,7 +88,7 @@ public class WifiAwareNativeManager {
                 new HalDeviceManager.ManagerStatusListener() {
                     @Override
                     public void onStatusChanged() {
-                        if (VDBG || mVerboseLoggingEnabled) Log.v(TAG, "onStatusChanged");
+                        if (mDbg) Log.v(TAG, "onStatusChanged");
                         // only care about isStarted (Wi-Fi started) not isReady - since if not
                         // ready then Wi-Fi will also be down.
                         if (mHalDeviceManager.isStarted()) {

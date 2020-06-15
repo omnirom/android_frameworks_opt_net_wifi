@@ -703,6 +703,36 @@ message WifiLog {
 
   // Does the user have wifi wake enabled.
   optional bool is_wifi_wake_enabled = 197;
+
+  // User reaction to the carrier or suggestion app approval UI.
+  optional UserReactionToApprovalUiEvent user_reaction_to_approval_ui_event = 198;
+
+  // Number of connection with different BSSID between framework and firmware selection.
+  optional int32 num_bssid_different_selection_between_framework_and_firmware = 199;
+
+  // Metrics about carrier wifi network.
+  optional CarrierWifiMetrics carrier_wifi_metrics = 200;
+
+  // Long version code of wifi mainline module, 0 means not available.
+  optional int64 mainline_module_version = 201;
+
+  // Histogram of Tx link speed at 6G low band
+  repeated Int32Count tx_link_speed_count_6g_low = 202;
+
+  // Histogram of Tx link speed at 6G middle band
+  repeated Int32Count tx_link_speed_count_6g_mid = 203;
+
+  // Histogram of Tx link speed at 6G high band
+  repeated Int32Count tx_link_speed_count_6g_high = 204;
+
+  // Histogram of Rx link speed at 6G low band
+  repeated Int32Count rx_link_speed_count_6g_low = 205;
+
+  // Histogram of Rx link speed at 6G middle band
+  repeated Int32Count rx_link_speed_count_6g_mid = 206;
+
+  // Histogram of Rx link speed at 6G high band
+  repeated Int32Count rx_link_speed_count_6g_high = 207;
 }
 
 // Information that gets logged for every WiFi connection.
@@ -1435,6 +1465,9 @@ message StaEvent {
 
   // Whether screen is on when the event happens
   optional bool screen_on = 24;
+
+  // Whether cellular data network is available
+  optional bool is_cellular_data_available = 25;
 }
 
 // Wi-Fi Aware metrics
@@ -1914,6 +1947,12 @@ message WifiRttLog {
 
   // RTT to Wi-Fi Aware peers metrics
   optional RttToPeerLog rtt_to_aware = 4;
+
+  // Histogram of how long a measurement with only AP take.
+  repeated HistogramBucket histogram_measurement_duration_ap_only = 5;
+
+  // Histogram of how long a measurement with aware peer included take.
+  repeated HistogramBucket histogram_measurement_duration_with_aware = 6;
 
   // Metrics for a RTT to Peer (peer = AP or Wi-Fi Aware)
   message RttToPeerLog {
@@ -2895,29 +2934,12 @@ message WifiNetworkSuggestionApiLog {
     // Suggestion app without special privilege.
     TYPE_NON_PRIVILEGED = 3;
   }
-  enum UserActionCode {
-    // UNKNOWN user action.
-    ACTION_UNKNOWN = 0;
-    // Action user allowed.
-    ACTION_ALLOWED = 1;
-    // Action user disallowed.
-    ACTION_DISALLOWED = 2;
-    // Action user dismiss.
-    ACTION_DISMISS = 3;
-  }
 
   message SuggestionAppCount {
     // Suggestion app type.
     optional SuggestionAppTypeCode app_type = 1;
     // Num of app in this type.
     optional int32 count = 2;
-  }
-
-  message UserReaction {
-    // User action to the UI.
-    optional UserActionCode user_action = 1;
-    // Is UI a dialog or notification.
-    optional bool is_dialog = 3;
   }
 
   // Number of modifications to their suggestions by apps.
@@ -2935,11 +2957,8 @@ message WifiNetworkSuggestionApiLog {
   // Count of app using suggestion API with different privilege.
   repeated SuggestionAppCount app_count_per_type = 5;
 
-  // Event of user reaction to the UI.
-  repeated UserReaction user_approval_app_ui_reaction = 6;
-
   // Number of user revoke app's permission from settings or disallowed from UI.
-  optional int32 user_revoke_app_suggestion_permission = 7;
+  optional int32 user_revoke_app_suggestion_permission = 6;
 }
 
 // WifiLock metrics
@@ -3273,4 +3292,38 @@ message InitPartialScanStats {
 
   // Histogram of number of channels used in a failed partial scan
   repeated HistogramBucketInt32 failed_scan_channel_count_histogram = 5;
+}
+
+// User reaction to the carrier IMSI protection exemption UI
+message UserReactionToApprovalUiEvent {
+  enum UserActionCode {
+    // UNKNOWN user action.
+    ACTION_UNKNOWN = 0;
+    // Action user allowed.
+    ACTION_ALLOWED = 1;
+    // Action user disallowed.
+    ACTION_DISALLOWED = 2;
+    // Action user dismiss.
+    ACTION_DISMISS = 3;
+  }
+  message UserReaction {
+    // User action to the UI.
+    optional UserActionCode user_action = 1;
+    // Is UI a dialog or notification.
+    optional bool is_dialog = 2;
+  }
+
+  // Event of user reaction to the app approval UI.
+  repeated UserReaction user_approval_app_ui_reaction = 1;
+
+  // Event of user reaction to the carrier approval UI.
+  repeated UserReaction user_approval_carrier_ui_reaction = 2;
+}
+
+message CarrierWifiMetrics {
+  // Number of successful network connection using Carrier ID
+  optional int32 num_connection_success = 1;
+  // Number of failed authentication from network connection using Carrier ID
+  optional int32 num_connection_auth_failure = 2;
+  optional int32 num_connection_non_auth_failure = 3;
 }

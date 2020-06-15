@@ -25,8 +25,6 @@ import static android.net.wifi.WifiInfo.sanitizeSsid;
 import static androidx.core.util.Preconditions.checkNotNull;
 
 import static com.android.wifitrackerlib.Utils.getAppLabel;
-import static com.android.wifitrackerlib.Utils.getAppLabelForSavedNetwork;
-import static com.android.wifitrackerlib.Utils.getAppLabelForWifiConfiguration;
 import static com.android.wifitrackerlib.Utils.getAutoConnectDescription;
 import static com.android.wifitrackerlib.Utils.getAverageSpeedFromScanResults;
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
@@ -166,14 +164,12 @@ public class StandardWifiEntry extends WifiEntry {
         // TODO: second argument (isSaved = false) is bogus in this context
         super(callbackHandler, wifiManager, scoreCache, forSavedNetworksPage);
 
-        if (!key.startsWith(KEY_PREFIX)) {
-            throw new IllegalArgumentException("Key does not start with correct prefix!");
-        }
         mContext = context;
         mKey = key;
         try {
+            final int prefixDelimiter = key.indexOf(":");
             final int securityDelimiter = key.lastIndexOf(",");
-            mSsid = key.substring(KEY_PREFIX.length(), securityDelimiter);
+            mSsid = key.substring(prefixDelimiter + 1, securityDelimiter);
             mSecurity = Integer.valueOf(key.substring(securityDelimiter + 1));
         } catch (StringIndexOutOfBoundsException | NumberFormatException e) {
             throw new IllegalArgumentException("Malformed key: " + key);
@@ -196,7 +192,7 @@ public class StandardWifiEntry extends WifiEntry {
         StringJoiner sj = new StringJoiner(mContext.getString(R.string.summary_separator));
 
         if (!concise && mForSavedNetworksPage && isSaved()) {
-            final CharSequence appLabel = getAppLabelForSavedNetwork(mContext, this);
+            final CharSequence appLabel = getAppLabel(mContext, mWifiConfig.creatorName);
             if (!TextUtils.isEmpty(appLabel)) {
                 sj.add(mContext.getString(R.string.saved_network, appLabel));
             }
@@ -212,9 +208,13 @@ public class StandardWifiEntry extends WifiEntry {
                     if (isSuggestion()) {
                         String carrierName = getCarrierNameForSubId(mContext,
                                 getSubIdForConfig(mContext, mWifiConfig));
+                        String suggestorName = getAppLabel(mContext, mWifiConfig.creatorName);
+                        if (TextUtils.isEmpty(suggestorName)) {
+                            // Fall-back to the package name in case the app label is missing
+                            suggestorName = mWifiConfig.creatorName;
+                        }
                         sj.add(mContext.getString(R.string.available_via_app, carrierName != null
-                                ? carrierName
-                                : getAppLabelForWifiConfiguration(mContext, mWifiConfig)));
+                                ? carrierName : suggestorName));
                     } else if (isSaved()) {
                         sj.add(mContext.getString(R.string.wifi_remembered));
                     }
@@ -256,6 +256,22 @@ public class StandardWifiEntry extends WifiEntry {
 
     private String getConnectStateDescription() {
         if (getConnectedState() == CONNECTED_STATE_CONNECTED) {
+            // For suggestion or specifier networks
+            final String suggestionOrSpecifierPackageName = mWifiInfo != null
+                    ? mWifiInfo.getRequestingPackageName() : null;
+            if (!TextUtils.isEmpty(suggestionOrSpecifierPackageName)) {
+                String carrierName = mWifiConfig != null
+                        ? getCarrierNameForSubId(mContext, getSubIdForConfig(mContext, mWifiConfig))
+                        : null;
+                String suggestorName = getAppLabel(mContext, suggestionOrSpecifierPackageName);
+                if (TextUtils.isEmpty(suggestorName)) {
+                    // Fall-back to the package name in case the app label is missing
+                    suggestorName = suggestionOrSpecifierPackageName;
+                }
+                return mContext.getString(R.string.connected_via_app, carrierName != null
+                        ? carrierName : suggestorName);
+            }
+
             if (!isSaved() && !isSuggestion()) {
                 // Special case for connected + ephemeral networks.
                 if (!TextUtils.isEmpty(mRecommendationServiceLabel)) {
@@ -263,18 +279,6 @@ public class StandardWifiEntry extends WifiEntry {
                             mRecommendationServiceLabel);
                 }
                 return mContext.getString(R.string.connected_via_network_scorer_default);
-            }
-
-            // For network suggestions
-            final String suggestionOrSpecifierPackageName = mWifiInfo != null
-                    ? mWifiInfo.getRequestingPackageName() : null;
-            if (!TextUtils.isEmpty(suggestionOrSpecifierPackageName)) {
-                String carrierName = mWifiConfig != null
-                        ? getCarrierNameForSubId(mContext, getSubIdForConfig(mContext, mWifiConfig))
-                        : null;
-                return mContext.getString(R.string.connected_via_app, carrierName != null
-                        ? carrierName
-                        : getAppLabel(mContext, suggestionOrSpecifierPackageName));
             }
 
             String networkCapabilitiesinformation =

@@ -440,6 +440,8 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_NETWORK_ABNORMAL_ASSOC_REJECTION = 2;
     private static final int NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY = 4;
     private static final int NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS = 5;
+    private static final int NUM_BSSID_SELECTION_DIFFERENT_BETWEEN_FRAMEWORK_FIRMWARE = 3;
+    private static final long WIFI_MAINLINE_MODULE_VERSION = 123456L;
 
     /** Number of notifications per "Connect to Network" notification type. */
     private static final int[] NUM_CONNECT_TO_NETWORK_NOTIFICATIONS = {0, 10, 20, 30, 40};
@@ -909,6 +911,9 @@ public class WifiMetricsTest extends WifiBaseTest {
         for (int i = 0; i < NUM_PNO_FOUND_NETWORK_EVENTS; i++) {
             mWifiMetrics.incrementPnoFoundNetworkEventCount();
         }
+        for (int i = 0; i < NUM_BSSID_SELECTION_DIFFERENT_BETWEEN_FRAMEWORK_FIRMWARE; i++) {
+            mWifiMetrics.incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware();
+        }
 
         // set and increment "connect to network" notification metrics
         for (int i = 0; i < NUM_CONNECT_TO_NETWORK_NOTIFICATIONS.length; i++) {
@@ -1006,6 +1011,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         metrics.numNetworkSufficientRecentStatsOnly = NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY;
         metrics.numNetworkSufficientRecentPrevStats = NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS;
         when(mWifiHealthMonitor.buildProto()).thenReturn(metrics);
+        when(mWifiHealthMonitor.getWifiStackVersion()).thenReturn(WIFI_MAINLINE_MODULE_VERSION);
     }
 
     private void addSoftApEventsToMetrics() {
@@ -1324,6 +1330,8 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numPasspointProviderWithSelfSignedRootCa);
         assertEquals(NUM_PASSPOINT_PROVIDERS_WITH_EXPIRATION_DATE,
                 mDecodedProto.numPasspointProviderWithSubscriptionExpiration);
+        assertEquals(NUM_BSSID_SELECTION_DIFFERENT_BETWEEN_FRAMEWORK_FIRMWARE,
+                mDecodedProto.numBssidDifferentSelectionBetweenFrameworkAndFirmware);
 
         assertEquals(NUM_RADIO_MODE_CHANGE_TO_MCC, mDecodedProto.numRadioModeChangeToMcc);
         assertEquals(NUM_RADIO_MODE_CHANGE_TO_SCC, mDecodedProto.numRadioModeChangeToScc);
@@ -1406,6 +1414,7 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numConnectRequestWithFilsAkm);
         assertEquals(NUM_L2_CONNECTION_THROUGH_FILS_AUTHENTICATION,
                 mDecodedProto.numL2ConnectionThroughFilsAuthentication);
+        assertEquals(WIFI_MAINLINE_MODULE_VERSION, mDecodedProto.mainlineModuleVersion);
 
     }
 
@@ -2285,6 +2294,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         }
         mTestLooper.dispatchAll();
         wifiMetrics.setScreenState(true);
+        when(mWifiDataStall.isCellularDataAvailable()).thenReturn(true);
         for (int i = 0; i < mTestStaLogInts.length; i++) {
             int[] lia = mTestStaLogInts[i];
             wifiMetrics.logStaEvent(lia[0], lia[1], lia[2] == 1 ? mTestWifiConfig : null);
@@ -2324,6 +2334,7 @@ public class WifiMetricsTest extends WifiBaseTest {
             assertConfigInfoEqualsWifiConfig(
                     evs[7] == 1 ? mTestWifiConfig : null, event.configInfo);
             assertEquals(true, event.screenOn);
+            assertEquals(true, event.isCellularDataAvailable);
             j++;
         }
         assertEquals(mExpectedValues.length, j);
@@ -4180,9 +4191,6 @@ public class WifiMetricsTest extends WifiBaseTest {
                 add(60);
             }});
 
-        mWifiMetrics.addNetworkSuggestionUserApprovalAppUiReaction(1,  true);
-        mWifiMetrics.addNetworkSuggestionUserApprovalAppUiReaction(2,  false);
-
         mWifiMetrics.incrementNetworkSuggestionUserRevokePermission();
         mWifiMetrics.incrementNetworkSuggestionUserRevokePermission();
 
@@ -4211,24 +4219,60 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertEquals(WifiMetricsProto.WifiNetworkSuggestionApiLog.TYPE_NON_PRIVILEGED,
                 mDecodedProto.wifiNetworkSuggestionApiLog.appCountPerType[2].appType);
         assertEquals(3, mDecodedProto.wifiNetworkSuggestionApiLog.appCountPerType[2].count);
+    }
+
+    /**
+     * Test the generation of 'UserReactionToApprovalUiEvent' message.
+     */
+    @Test
+    public void testUserReactionToApprovalUiEvent() throws Exception {
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(1,  true);
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(2,  false);
+
+        mWifiMetrics.addUserApprovalCarrierUiReaction(
+                WifiCarrierInfoManager.ACTION_USER_ALLOWED_CARRIER, true);
+        mWifiMetrics.addUserApprovalCarrierUiReaction(
+                WifiCarrierInfoManager.ACTION_USER_DISMISS, false);
+        mWifiMetrics.addUserApprovalCarrierUiReaction(
+                WifiCarrierInfoManager.ACTION_USER_DISALLOWED_CARRIER, false);
+
+        dumpProtoAndDeserialize();
 
         assertEquals(2,
-                mDecodedProto.wifiNetworkSuggestionApiLog.userApprovalAppUiReaction.length);
-        assertEquals(WifiMetricsProto.WifiNetworkSuggestionApiLog.ACTION_ALLOWED,
-                mDecodedProto.wifiNetworkSuggestionApiLog.userApprovalAppUiReaction[0]
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction.length);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_ALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[0]
                         .userAction);
         assertEquals(true,
-                mDecodedProto.wifiNetworkSuggestionApiLog.userApprovalAppUiReaction[0]
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[0]
                         .isDialog);
-        assertEquals(WifiMetricsProto.WifiNetworkSuggestionApiLog.ACTION_DISALLOWED,
-                mDecodedProto.wifiNetworkSuggestionApiLog.userApprovalAppUiReaction[1]
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_DISALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[1]
                         .userAction);
         assertEquals(false,
-                mDecodedProto.wifiNetworkSuggestionApiLog.userApprovalAppUiReaction[1]
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[1]
                         .isDialog);
 
-        assertEquals(2, mDecodedProto.wifiNetworkSuggestionApiLog
-                .userRevokeAppSuggestionPermission);
+        assertEquals(3,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction.length);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_ALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[0]
+                        .userAction);
+        assertEquals(true,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[0]
+                        .isDialog);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_DISMISS,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[1]
+                        .userAction);
+        assertEquals(false,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[1]
+                        .isDialog);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_DISALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[2]
+                        .userAction);
+        assertEquals(false,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[2]
+                        .isDialog);
     }
 
     private NetworkSelectionExperimentDecisions findUniqueNetworkSelectionExperimentDecisions(
@@ -4933,5 +4977,22 @@ public class WifiMetricsTest extends WifiBaseTest {
         // Connection event 3 doesn't overlap with 2
         assertEquals(0, mWifiMetrics.startConnectionEvent(mTestWifiConfig, "TestNetwork",
                 WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE));
+    }
+
+    @Test
+    public void testCarrierWifiConnectionEvent() throws Exception {
+        mWifiMetrics.incrementNumOfCarrierWifiConnectionSuccess();
+        for (int i = 0; i < 2; i++) {
+            mWifiMetrics.incrementNumOfCarrierWifiConnectionAuthFailure();
+        }
+        for (int i = 0; i < 3; i++) {
+            mWifiMetrics.incrementNumOfCarrierWifiConnectionNonAuthFailure();
+        }
+
+        dumpProtoAndDeserialize();
+
+        assertEquals(1, mDecodedProto.carrierWifiMetrics.numConnectionSuccess);
+        assertEquals(2, mDecodedProto.carrierWifiMetrics.numConnectionAuthFailure);
+        assertEquals(3, mDecodedProto.carrierWifiMetrics.numConnectionNonAuthFailure);
     }
 }

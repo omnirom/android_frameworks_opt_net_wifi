@@ -2385,6 +2385,9 @@ public class WifiConfigManager {
      * @param scanDetail ScanDetail instance  to use for looking up the network.
      * @return WifiConfiguration object representing the network corresponding to the scanDetail,
      * null if none exists.
+     *
+     * TODO (b/142035508): This should only return saved networks (and rename to
+     * getSavedNetworkForScanDetail()).
      */
     public WifiConfiguration getConfiguredNetworkForScanDetail(ScanDetail scanDetail) {
         ScanResult scanResult = scanDetail.getScanResult();
@@ -2403,16 +2406,6 @@ public class WifiConfigManager {
                 Log.v(TAG, "getSavedNetworkFromScanDetail Found " + config.getKey()
                         + " for " + scanResult.SSID + "[" + scanResult.capabilities + "]");
             }
-            if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X)) {
-                if (scanResult.capabilities.contains("FILS-SHA256"))
-                   config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA256);
-                else
-                   config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA256);
-                if (scanResult.capabilities.contains("FILS-SHA384"))
-                   config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.FILS_SHA384);
-                else
-                   config.allowedKeyManagement.clear(WifiConfiguration.KeyMgmt.FILS_SHA384);
-            }
         }
         return config;
     }
@@ -2422,6 +2415,8 @@ public class WifiConfigManager {
      * {@link #mScanDetailCaches} for the retrieved network.
      *
      * @param scanDetail input a scanDetail from the scan result
+     * TODO (b/142035508): This should only return saved networks (and rename to
+     * updateScanDetailCacheFromScanDetail()).
      */
     public void updateScanDetailCacheFromScanDetail(ScanDetail scanDetail) {
         WifiConfiguration network = getConfiguredNetworkForScanDetail(scanDetail);
@@ -2438,6 +2433,8 @@ public class WifiConfigManager {
      * @param scanDetail input a scanDetail from the scan result
      * @return WifiConfiguration object representing the network corresponding to the scanDetail,
      * null if none exists.
+     * TODO (b/142035508): This should only return saved networks (and rename to
+     * getSavedNetworkForScanDetailAndCache()).
      */
     public WifiConfiguration getConfiguredNetworkForScanDetailAndCache(ScanDetail scanDetail) {
         WifiConfiguration network = getConfiguredNetworkForScanDetail(scanDetail);
@@ -3253,6 +3250,9 @@ public class WifiConfigManager {
             pw.println(network);
         }
         pw.println("WifiConfigManager - Configured networks End ----");
+        pw.println("WifiConfigManager - ConfigurationMap Begin ----");
+        mConfiguredNetworks.dump(fd, pw, args);
+        pw.println("WifiConfigManager - ConfigurationMap End ----");
         pw.println("WifiConfigManager - Next network ID to be allocated " + mNextNetworkId);
         pw.println("WifiConfigManager - Last selected network ID " + mLastSelectedNetworkId);
         pw.println("WifiConfigManager - PNO scan frequency culling enabled = "

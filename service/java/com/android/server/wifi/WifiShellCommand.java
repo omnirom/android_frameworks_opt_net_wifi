@@ -281,7 +281,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                     + "- must be a positive integer");
                             return -1;
                         }
-                        int apChannel = ApConfigUtil.convertFrequencyToChannel(apChannelMHz);
+                        int apChannel = ScanResult.convertFrequencyMhzToChannel(apChannelMHz);
                         int band = ApConfigUtil.convertFrequencyToBand(apChannelMHz);
                         if (apChannel == -1 || band == -1 || !isApChannelMHzValid(apChannelMHz)) {
                             pw.println("Invalid argument to 'force-softap-channel enabled' "
@@ -372,10 +372,10 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     if (ApConfigUtil.isWpa3SaeSupported(mContext)) {
                         pw.println("wifi_softap_wpa3_sae_supported");
                     }
-                    break;
+                    return 0;
                 case "settings-reset":
                     mWifiService.factoryReset(SHELL_PACKAGE_NAME);
-                    break;
+                    return 0;
                 case "list-scan-results":
                     List<ScanResult> scanResults =
                             mWifiService.getScanResults(SHELL_PACKAGE_NAME, null);
@@ -385,10 +385,10 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                         ScanResultUtil.dumpScanResults(pw, scanResults,
                                 SystemClock.elapsedRealtime());
                     }
-                    break;
+                    return 0;
                 case "start-scan":
                     mWifiService.startScan(SHELL_PACKAGE_NAME, null);
-                    break;
+                    return 0;
                 case "list-networks":
                     ParceledListSlice<WifiConfiguration> networks =
                             mWifiService.getConfiguredNetworks(SHELL_PACKAGE_NAME, null);
@@ -414,7 +414,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                     securityType));
                         }
                     }
-                    break;
+                    return 0;
                 case "connect-network": {
                     CountDownLatch countDownLatch = new CountDownLatch(1);
                     IActionListener.Stub actionListener = new IActionListener.Stub() {
@@ -436,7 +436,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     // wait for status.
                     countDownLatch.await(500, TimeUnit.MILLISECONDS);
                     setAutoJoin(pw, config.SSID, config.allowAutojoin);
-                    break;
+                    return 0;
                 }
                 case "add-network": {
                     CountDownLatch countDownLatch = new CountDownLatch(1);
@@ -459,7 +459,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     // wait for status.
                     countDownLatch.await(500, TimeUnit.MILLISECONDS);
                     setAutoJoin(pw, config.SSID, config.allowAutojoin);
-                    break;
+                    return 0;
                 }
                 case "forget-network": {
                     String networkId = getNextArgRequired();
@@ -482,21 +482,21 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                             actionListener.hashCode());
                     // wait for status.
                     countDownLatch.await(500, TimeUnit.MILLISECONDS);
-                    break;
+                    return 0;
                 }
                 case "status":
                     printStatus(pw);
-                    break;
+                    return 0;
                 case "set-verbose-logging": {
                     boolean enabled = getNextArgRequiredTrueOrFalse("enabled", "disabled");
                     mWifiService.enableVerboseLogging(enabled ? 1 : 0);
-                    break;
+                    return 0;
                 }
                 case "add-suggestion": {
                     WifiNetworkSuggestion suggestion = buildSuggestion(pw);
                     mWifiService.addNetworkSuggestions(
                             Arrays.asList(suggestion), SHELL_PACKAGE_NAME, null);
-                    break;
+                    return 0;
                 }
                 case "remove-suggestion": {
                     String ssid = getNextArgRequired();
@@ -512,12 +512,12 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     }
                     mWifiService.removeNetworkSuggestions(
                             Arrays.asList(suggestion), SHELL_PACKAGE_NAME);
-                    break;
+                    return 0;
                 }
                 case "remove-all-suggestions":
                     mWifiService.removeNetworkSuggestions(
                             Collections.emptyList(), SHELL_PACKAGE_NAME);
-                    break;
+                    return 0;
                 case "list-suggestions": {
                     List<WifiNetworkSuggestion> suggestions =
                             mWifiService.getNetworkSuggestions(SHELL_PACKAGE_NAME);
@@ -548,7 +548,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                     securityType));
                         }
                     }
-                    break;
+                    return 0;
                 }
                 case "add-request": {
                     NetworkRequest networkRequest = buildNetworkRequest(pw);
@@ -558,7 +558,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     mConnectivityManager.requestNetwork(networkRequest, networkCallback);
                     String ssid = getAllArgs()[1];
                     sActiveRequests.put(ssid, Pair.create(networkRequest, networkCallback));
-                    break;
+                    return 0;
                 }
                 case "remove-request": {
                     String ssid = getNextArgRequired();
@@ -570,7 +570,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     }
                     pw.println("Removing request: " + nrAndNc.first);
                     mConnectivityManager.unregisterNetworkCallback(nrAndNc.second);
-                    break;
+                    return 0;
                 }
                 case "remove-all-requests":
                     if (sActiveRequests.isEmpty()) {
@@ -583,7 +583,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                         mConnectivityManager.unregisterNetworkCallback(nrAndNc.second);
                     }
                     sActiveRequests.clear();
-                    break;
+                    return 0;
                 case "list-requests":
                     if (sActiveRequests.isEmpty()) {
                         pw.println("No active requests");
@@ -596,7 +596,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                     entry.getKey(), entry.getValue().first));
                         }
                     }
-                    break;
+                    return 0;
                 case "network-requests-set-user-approved": {
                     String packageName = getNextArgRequired();
                     boolean approved = getNextArgRequiredTrueOrFalse("yes", "no");
@@ -667,11 +667,12 @@ public class WifiShellCommand extends BasicShellCommandHandler {
             }
         } catch (IllegalArgumentException e) {
             pw.println("Invalid args for " + cmd + ": " + e);
+            return -1;
         } catch (Exception e) {
             pw.println("Exception while executing WifiShellCommand: ");
             e.printStackTrace(pw);
+            return -1;
         }
-        return -1;
     }
 
     private boolean getNextArgRequiredTrueOrFalse(String trueString, String falseString)
@@ -711,6 +712,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 configuration.meteredOverride = METERED_OVERRIDE_METERED;
             } else if (option.equals("-d")) {
                 configuration.allowAutojoin = false;
+            } else if (option.equals("-b")) {
+                configuration.BSSID = getNextArgRequired();
             } else {
                 pw.println("Ignoring unknown option " + option);
             }
@@ -782,6 +785,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 suggestionBuilder.setCredentialSharedWithUser(true);
             } else if (option.equals("-d")) {
                 suggestionBuilder.setIsInitialAutojoinEnabled(false);
+            } else if (option.equals("-b")) {
+                suggestionBuilder.setBssid(MacAddress.fromString(getNextArgRequired()));
             } else {
                 pw.println("Ignoring unknown option " + option);
             }
@@ -807,19 +812,33 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         } else {
             throw new IllegalArgumentException("Unknown network type " + type);
         }
+        String bssid = null;
+        String option = getNextOption();
+        while (option != null) {
+            if (option.equals("-b")) {
+                bssid = getNextArgRequired();
+            } else {
+                pw.println("Ignoring unknown option " + option);
+            }
+            option = getNextOption();
+        }
+
         // Permission approval bypass is only available to requests with both ssid & bssid set.
         // So, find scan result with the best rssi level to set in the request.
-        ScanResult matchingScanResult =
-                mWifiService.getScanResults(SHELL_PACKAGE_NAME, null)
-                .stream()
-                .filter(s -> s.SSID.equals(ssid))
-                .max(Comparator.comparingInt(s -> s.level))
-                .orElse(null);
-        if (matchingScanResult != null) {
-            specifierBuilder.setBssid(MacAddress.fromString(matchingScanResult.BSSID));
-        } else {
-            pw.println("No matching bssid found, request will need UI approval");
+        if (bssid == null) {
+            ScanResult matchingScanResult =
+                    mWifiService.getScanResults(SHELL_PACKAGE_NAME, null)
+                            .stream()
+                            .filter(s -> s.SSID.equals(ssid))
+                            .max(Comparator.comparingInt(s -> s.level))
+                            .orElse(null);
+            if (matchingScanResult != null) {
+                bssid = matchingScanResult.BSSID;
+            } else {
+                pw.println("No matching bssid found, request will need UI approval");
+            }
         }
+        if (bssid != null) specifierBuilder.setBssid(MacAddress.fromString(bssid));
         return new NetworkRequest.Builder()
                 .addTransportType(TRANSPORT_WIFI)
                 .removeCapability(NET_CAPABILITY_INTERNET)
@@ -944,7 +963,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Start a new scan");
         pw.println("  list-networks");
         pw.println("    Lists the saved networks");
-        pw.println("  connect-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m] [-d]");
+        pw.println("  connect-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m] [-d] "
+                + "[-b <bssid>]");
         pw.println("    Connect to a network with provided params and add to saved networks list");
         pw.println("    <ssid> - SSID of the network");
         pw.println("    open|owe|wpa2|wpa3 - Security type of the network.");
@@ -956,7 +976,9 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("           - 'wpa3' - WPA-3 PSK networks");
         pw.println("    -m - Mark the network metered.");
         pw.println("    -d - Mark the network autojoin disabled.");
-        pw.println("  add-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m] [-d]");
+        pw.println("    -b <bssid> - Set specific BSSID.");
+        pw.println("  add-network <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-m] [-d] "
+                + "[-b <bssid>]");
         pw.println("    Add/update saved network with provided params");
         pw.println("    <ssid> - SSID of the network");
         pw.println("    open|owe|wpa2|wpa3 - Security type of the network.");
@@ -968,6 +990,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("           - 'wpa3' - WPA-3 PSK networks");
         pw.println("    -m - Mark the network metered.");
         pw.println("    -d - Mark the network autojoin disabled.");
+        pw.println("    -b <bssid> - Set specific BSSID.");
         pw.println("  forget-network <networkId>");
         pw.println("    Remove the network mentioned by <networkId>");
         pw.println("        - Use list-networks to retrieve <networkId> for the network");
@@ -975,7 +998,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Current wifi status");
         pw.println("  set-verbose-logging enabled|disabled ");
         pw.println("    Set the verbose logging enabled or disabled");
-        pw.println("  add-suggestion <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-u] [-m] [-s] [-d]");
+        pw.println("  add-suggestion <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-u] [-m] [-s] [-d]"
+                + "[-b <bssid>]");
         pw.println("    Add a network suggestion with provided params");
         pw.println("    Use 'network-suggestions-set-user-approved " + SHELL_PACKAGE_NAME + " yes'"
                 +  " to approve suggestions added via shell (Needs root access)");
@@ -991,6 +1015,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    -m - Mark the suggestion metered.");
         pw.println("    -s - Share the suggestion with user.");
         pw.println("    -d - Mark the suggestion autojoin disabled.");
+        pw.println("    -b <bssid> - Set specific BSSID.");
         pw.println("  remove-suggestion <ssid>");
         pw.println("    Remove a network suggestion with provided SSID of the network");
         pw.println("  remove-all-suggestions");
@@ -1072,7 +1097,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    and/or 'wifi_softap_wpa3_sae_supported', each on a separate line.");
         pw.println("  settings-reset");
         pw.println("    Initiates wifi settings reset");
-        pw.println("  add-request <ssid> open|owe|wpa2|wpa3 [<passphrase>]");
+        pw.println("  add-request <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-b <bssid>]");
         pw.println("    Add a network request with provided params");
         pw.println("    Use 'network-requests-set-user-approved android yes'"
                 +  " to pre-approve requests added via rooted shell (Not persisted)");
@@ -1084,6 +1109,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("        - Use 'wpa2' or 'wpa3' for networks with passphrase");
         pw.println("           - 'wpa2' - WPA-2 PSK networks (Most prevalent)");
         pw.println("           - 'wpa3' - WPA-3 PSK networks");
+        pw.println("    -b <bssid> - Set specific BSSID.");
         pw.println("  remove-request <ssid>");
         pw.println("    Remove a network request with provided SSID of the network");
         pw.println("  remove-all-requests");
