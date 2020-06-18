@@ -158,7 +158,7 @@ public class CellularLinkLayerStatsCollectorTest {
         } else if (networkType == NETWORK_TYPE_GSM) {
             mGsm = new CellSignalStrengthGsm(dBmVal, dummy, dummy);
         } else if (networkType == NETWORK_TYPE_NR) {
-            mNr = new CellSignalStrengthNr(dBmVal, dummy, dBVal, dummy, dummy, dummy);
+            mNr = new CellSignalStrengthNr(dummy, dummy, dBVal, dBmVal, dummy, dummy);
         } else {
             return null;
         }
