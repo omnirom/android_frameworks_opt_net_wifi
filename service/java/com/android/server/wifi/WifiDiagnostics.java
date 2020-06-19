@@ -482,10 +482,12 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         if (errorCode < DATA_STALL_OFFSET_REASON_CODE) {
             captureAlertData(errorCode, buffer);
             mWifiMetrics.logFirmwareAlert(errorCode);
+            mWifiInjector.getWifiScoreCard().noteFirmwareAlert(errorCode);
         } else {
             errorCode = errorCode - DATA_STALL_OFFSET_REASON_CODE;
             captureAlertData(errorCode, buffer);
             mWifiMetrics.logFirmwareAlert(errorCode);
+            mWifiInjector.getWifiScoreCard().noteFirmwareAlert(errorCode);
             Intent intent = new Intent(WifiManager.WIFI_DATA_STALL);
             intent.putExtra(WifiManager.EXTRA_WIFI_DATA_STALL_REASON, errorCode);
             mContext.sendBroadcastAsUser(intent, UserHandle.ALL);

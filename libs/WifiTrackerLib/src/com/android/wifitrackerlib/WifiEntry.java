@@ -313,12 +313,6 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     @Security
     public abstract int getSecurity();
 
-    /** Returns the string representation of the security of the WifiEntry. */
-    public String getSecurityString() {
-        // TODO (b/70983952) Implement this
-        return null;
-    }
-
     /** Returns the MAC address of the connection */
     public abstract String getMacAddress();
 
@@ -402,15 +396,8 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
     public abstract boolean canShare();
     /** Returns whether the user can use Easy Connect to onboard a device to the network */
     public abstract boolean canEasyConnect();
-    /** Returns the QR code string for the network */
-    public abstract String getQrCodeString();
 
     // Modifiable settings
-
-    /** Returns whether the entry should show a password input */
-    public abstract boolean canSetPassword();
-    /** Sets the user's password to a network */
-    public abstract void setPassword(@NonNull String password);
 
     /**
      *  Returns the user's choice whether to treat a network as metered,
@@ -779,7 +766,6 @@ public abstract class WifiEntry implements Comparable<WifiEntry> {
         }
     }
 
-    // TODO (b/70983952) Come up with a sorting scheme that does the right thing.
     @Override
     public int compareTo(@NonNull WifiEntry other) {
         if (getLevel() != WIFI_LEVEL_UNREACHABLE && other.getLevel() == WIFI_LEVEL_UNREACHABLE) {

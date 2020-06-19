@@ -6052,14 +6052,18 @@ public class ClientModeImpl extends StateMachine {
      */
     private void broadcastWifiCredentialChanged(int wifiCredentialEventType,
             WifiConfiguration config) {
-        if (config != null && config.preSharedKey != null) {
-            Intent intent = new Intent(WifiManager.WIFI_CREDENTIAL_CHANGED_ACTION);
+        Intent intent = new Intent(WifiManager.WIFI_CREDENTIAL_CHANGED_ACTION);
+        if (config != null && config.SSID != null && mWifiPermissionsUtil.isLocationModeEnabled()) {
             intent.putExtra(WifiManager.EXTRA_WIFI_CREDENTIAL_SSID, config.SSID);
-            intent.putExtra(WifiManager.EXTRA_WIFI_CREDENTIAL_EVENT_TYPE,
-                    wifiCredentialEventType);
-            mContext.sendBroadcastAsUser(intent, UserHandle.CURRENT,
-                    android.Manifest.permission.RECEIVE_WIFI_CREDENTIAL_CHANGE);
         }
+        intent.putExtra(WifiManager.EXTRA_WIFI_CREDENTIAL_EVENT_TYPE, wifiCredentialEventType);
+        mContext.createContextAsUser(UserHandle.CURRENT, 0)
+                .sendBroadcastWithMultiplePermissions(
+                        intent,
+                        new String[]{
+                                android.Manifest.permission.RECEIVE_WIFI_CREDENTIAL_CHANGE,
+                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        });
     }
 
     void handleGsmAuthRequest(SimAuthRequestData requestData) {
@@ -6067,6 +6071,9 @@ public class ClientModeImpl extends StateMachine {
                 && mTargetWifiConfiguration.networkId
                 == requestData.networkId) {
             logd("id matches targetWifiConfiguration");
+        } else if (mLastNetworkId != WifiConfiguration.INVALID_NETWORK_ID
+                && mLastNetworkId == requestData.networkId) {
+            logd("id matches currentWifiConfiguration");
         } else {
             logd("id does not match targetWifiConfiguration");
             return;
@@ -6649,13 +6656,14 @@ public class ClientModeImpl extends StateMachine {
             if (callback != null && binder != null) {
                 mProcessingActionListeners.add(binder, callback, callbackIdentifier);
             }
+            WifiConfiguration config = mWifiConfigManager.getConfiguredNetwork(netId);
             boolean success = mWifiConfigManager.removeNetwork(netId, callingUid, null);
             if (!success) {
                 loge("Failed to remove network");
                 sendActionListenerFailure(callbackIdentifier, WifiManager.ERROR);
             }
             sendActionListenerSuccess(callbackIdentifier);
-            broadcastWifiCredentialChanged(WifiManager.WIFI_CREDENTIAL_FORGOT, null);
+            broadcastWifiCredentialChanged(WifiManager.WIFI_CREDENTIAL_FORGOT, config);
         });
     }
 
