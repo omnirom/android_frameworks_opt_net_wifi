@@ -1590,7 +1590,7 @@ public class WifiMetrics {
                         connectivityFailureCode;
                 mCurrentConnectionEvent.mConnectionEvent.level2FailureReason = level2FailureReason;
 
-                // Write metrics to WestWorld
+                // Write metrics to statsd
                 int wwFailureCode = getConnectionResultFailureCode(level2FailureCode,
                         level2FailureReason);
                 if (wwFailureCode != -1) {
@@ -6412,6 +6412,15 @@ public class WifiMetrics {
     public void setDataStallCcaLevelThr(int ccaLevel) {
         synchronized (mLock) {
             mExperimentValues.dataStallCcaLevelThr = ccaLevel;
+        }
+    }
+
+    /**
+     * Sets health monitor RSSI poll valid time in ms
+     */
+    public void setHealthMonitorRssiPollValidTimeMs(int rssiPollValidTimeMs) {
+        synchronized (mLock) {
+            mExperimentValues.healthMonitorRssiPollValidTimeMs = rssiPollValidTimeMs;
         }
     }
 
