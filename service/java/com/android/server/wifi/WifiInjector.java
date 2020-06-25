@@ -956,4 +956,8 @@ public class WifiInjector {
     public AutoConnectNewNetworkResultNotifier makeAutoConnectNewNetworkResultNotifier() {
         return new AutoConnectNewNetworkResultNotifier(mContext, mFrameworkFacade);
     }
+
+    public Context getContext() {
+        return mContext;
+    }
 }
