@@ -200,7 +200,8 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
         WifiConfiguration candidate = null;
         StringBuffer scoreHistory = new StringBuffer();
 
-        if (connected && mStaId == WifiManager.STA_PRIMARY) {
+        if (connected && currentNetwork != null
+                && mStaId == WifiManager.STA_PRIMARY) {
             mWifiConfigManager.addOrUpdateLinkedEphemeralNetworks(currentNetwork.networkId, currentBssid, scanDetails);
         }
 
