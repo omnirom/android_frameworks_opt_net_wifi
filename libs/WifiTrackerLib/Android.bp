@@ -5,6 +5,9 @@ android_library {
         "androidx.preference_preference",
         "SettingsLibHelpUtils",
     ],
+    defaults: [
+        "framework-wifi-vendor-hide-access-defaults",
+    ],
 
     min_sdk_version: "21",
 }

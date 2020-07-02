@@ -82,7 +82,13 @@ public class WifiSettingsConfigStore {
     public static final Key<String> WIFI_P2P_DEVICE_NAME =
             new Key<>("wifi_p2p_device_name", null);
 
-    /******** Wifi shared pref keys ***************/
+    /**
+     * Extend Wifi Coverage
+     */
+    public static final Key<Boolean> WIFI_COVERAGE_EXTEND_FEATURE_ENABLED =
+            new Key<>("wifi_coverage_extend_feature_enabled", false);
+
+   /******** Wifi shared pref keys ***************/
 
     private final Context mContext;
     private final Handler mHandler;
