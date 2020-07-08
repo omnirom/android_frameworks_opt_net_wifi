@@ -15,7 +15,7 @@
 //
 java_defaults {
     name: "wifi-service-common",
-    min_sdk_version: "29",
+    defaults: ["wifi-module-sdk-version-defaults"],
     errorprone: {
         javacflags: ["-Xep:CheckReturnValue:ERROR"],
     },
@@ -63,6 +63,7 @@ java_library {
         // compile time
         "framework-wifi-pre-jarjar",
         "framework-statsd.stubs.module_lib",
+        "framework-tethering.stubs.module_lib",
         "unsupportedappusage",
     ],
 

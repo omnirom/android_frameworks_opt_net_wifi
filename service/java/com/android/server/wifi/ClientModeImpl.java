@@ -62,7 +62,6 @@ import android.net.Uri;
 import android.net.ip.IIpClient;
 import android.net.ip.IpClientCallbacks;
 import android.net.ip.IpClientManager;
-import android.net.shared.Inet4AddressUtils;
 import android.net.shared.Layer2Information;
 import android.net.shared.ProvisioningConfiguration;
 import android.net.shared.ProvisioningConfiguration.ScanResultInfo;
@@ -111,13 +110,13 @@ import android.util.Log;
 import android.util.Pair;
 import android.util.SparseArray;
 
-import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.MessageUtils;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
+import com.android.net.module.util.Inet4AddressUtils;
 import com.android.server.wifi.MboOceController.BtmFrameData;
 import com.android.server.wifi.WifiCarrierInfoManager.SimAuthRequestData;
 import com.android.server.wifi.WifiCarrierInfoManager.SimAuthResponseData;
@@ -458,9 +457,7 @@ public class ClientModeImpl extends StateMachine {
 
     private WifiNetworkFactory mNetworkFactory;
     private UntrustedWifiNetworkFactory mUntrustedNetworkFactory;
-    @GuardedBy("mNetworkAgentLock")
     private WifiNetworkAgent mNetworkAgent;
-    private final Object mNetworkAgentLock = new Object();
 
     private byte[] mRssiRanges;
 
@@ -667,6 +664,9 @@ public class ClientModeImpl extends StateMachine {
 
     /* Start connection to FILS AP*/
     static final int CMD_START_FILS_CONNECTION                          = BASE + 262;
+
+    private static final int CMD_GET_CURRENT_NETWORK                    = BASE + 263;
+
     // For message logging.
     private static final Class[] sMessageClasses = {
             AsyncChannel.class, ClientModeImpl.class };
@@ -1107,9 +1107,9 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void stopIpClient() {
-        if (mVerboseLoggingEnabled) {
-            log("stopIpClient IpClientWithPreConnection: " + mIpClientWithPreConnection);
-        }
+        // TODO(b/157943924): Adding more log to debug the issue.
+        Log.v(TAG, "stopIpClient IpClientWithPreConnection: " + mIpClientWithPreConnection,
+                new Throwable());
         if (mIpClient != null) {
             if (mIpClientWithPreConnection) {
                 mIpClient.notifyPreconnectionComplete(false);
@@ -1865,17 +1865,27 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
-     * Get Network object of current wifi network
+     * Should only be used internally.
+     * External callers should use {@link #syncGetCurrentNetwork(AsyncChannel)}.
+     */
+    private Network getCurrentNetwork() {
+        if (mNetworkAgent != null) {
+            return mNetworkAgent.getNetwork();
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Get Network object of currently connected wifi network, or null if not connected.
      * @return Network object of current wifi network
      */
-    public Network getCurrentNetwork() {
-        synchronized (mNetworkAgentLock) {
-            if (mNetworkAgent != null) {
-                return mNetworkAgent.getNetwork();
-            } else {
-                return null;
-            }
-        }
+    public Network syncGetCurrentNetwork(AsyncChannel channel) {
+        Message resultMsg = channel.sendMessageSynchronously(CMD_GET_CURRENT_NETWORK);
+        if (messageIsNull(resultMsg)) return null;
+        Network network = (Network) resultMsg.obj;
+        resultMsg.recycle();
+        return network;
     }
 
     /**
@@ -2875,11 +2885,9 @@ public class ClientModeImpl extends StateMachine {
         mIsAutoRoaming = false;
 
         sendNetworkChangeBroadcast(DetailedState.DISCONNECTED);
-        synchronized (mNetworkAgentLock) {
-            if (mNetworkAgent != null) {
-                mNetworkAgent.unregister();
-                mNetworkAgent = null;
-            }
+        if (mNetworkAgent != null) {
+            mNetworkAgent.unregister();
+            mNetworkAgent = null;
         }
 
         /* Clear network properties */
@@ -3618,7 +3626,8 @@ public class ClientModeImpl extends StateMachine {
                     replyToMessage(message, message.what, Long.valueOf(featureSet));
                     break;
                 case CMD_GET_LINK_LAYER_STATS:
-                    // Not supported hence reply with error message
+                case CMD_GET_CURRENT_NETWORK:
+                    // Not supported hence reply with null message.obj
                     replyToMessage(message, message.what, null);
                     break;
                 case WifiP2pServiceImpl.P2P_CONNECTION_CHANGED:
@@ -4961,16 +4970,14 @@ public class ClientModeImpl extends StateMachine {
                     .setPartialConnectivityAcceptable(config.noInternetAccessExpected)
                     .build();
             final NetworkCapabilities nc = getCapabilities(getCurrentWifiConfiguration());
-            synchronized (mNetworkAgentLock) {
-                // This should never happen.
-                if (mNetworkAgent != null) {
-                    Log.wtf(TAG, "mNetworkAgent is not null: " + mNetworkAgent);
-                    mNetworkAgent.unregister();
-                }
-                mNetworkAgent = new WifiNetworkAgent(mContext, getHandler().getLooper(),
-                        "WifiNetworkAgent", nc, mLinkProperties, 60, naConfig,
-                        mNetworkFactory.getProvider());
+            // This should never happen.
+            if (mNetworkAgent != null) {
+                Log.wtf(TAG, "mNetworkAgent is not null: " + mNetworkAgent);
+                mNetworkAgent.unregister();
             }
+            mNetworkAgent = new WifiNetworkAgent(mContext, getHandler().getLooper(),
+                    "WifiNetworkAgent", nc, mLinkProperties, 60, naConfig,
+                    mNetworkFactory.getProvider());
             mWifiScoreReport.setNetworkAgent(mNetworkAgent);
 
             // We must clear the config BSSID, as the wifi chipset may decide to roam
@@ -5543,6 +5550,9 @@ public class ClientModeImpl extends StateMachine {
                         transitionTo(mDisconnectedState);
                     }
                     break;
+                case CMD_GET_CURRENT_NETWORK:
+                    replyToMessage(message, message.what, getCurrentNetwork());
+                    break;
                 default:
                     handleStatus = NOT_HANDLED;
                     break;
@@ -5770,6 +5780,9 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_IP_CONFIGURATION_LOST:
                     mWifiMetrics.incrementIpRenewalFailure();
                     handleStatus = NOT_HANDLED;
+                    break;
+                case CMD_GET_CURRENT_NETWORK:
+                    replyToMessage(message, message.what, getCurrentNetwork());
                     break;
                 case CMD_START_IP_PACKET_OFFLOAD: {
                     int slot = message.arg1;
@@ -6039,14 +6052,18 @@ public class ClientModeImpl extends StateMachine {
      */
     private void broadcastWifiCredentialChanged(int wifiCredentialEventType,
             WifiConfiguration config) {
-        if (config != null && config.preSharedKey != null) {
-            Intent intent = new Intent(WifiManager.WIFI_CREDENTIAL_CHANGED_ACTION);
+        Intent intent = new Intent(WifiManager.WIFI_CREDENTIAL_CHANGED_ACTION);
+        if (config != null && config.SSID != null && mWifiPermissionsUtil.isLocationModeEnabled()) {
             intent.putExtra(WifiManager.EXTRA_WIFI_CREDENTIAL_SSID, config.SSID);
-            intent.putExtra(WifiManager.EXTRA_WIFI_CREDENTIAL_EVENT_TYPE,
-                    wifiCredentialEventType);
-            mContext.sendBroadcastAsUser(intent, UserHandle.CURRENT,
-                    android.Manifest.permission.RECEIVE_WIFI_CREDENTIAL_CHANGE);
         }
+        intent.putExtra(WifiManager.EXTRA_WIFI_CREDENTIAL_EVENT_TYPE, wifiCredentialEventType);
+        mContext.createContextAsUser(UserHandle.CURRENT, 0)
+                .sendBroadcastWithMultiplePermissions(
+                        intent,
+                        new String[]{
+                                android.Manifest.permission.RECEIVE_WIFI_CREDENTIAL_CHANGE,
+                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        });
     }
 
     void handleGsmAuthRequest(SimAuthRequestData requestData) {
@@ -6054,6 +6071,9 @@ public class ClientModeImpl extends StateMachine {
                 && mTargetWifiConfiguration.networkId
                 == requestData.networkId) {
             logd("id matches targetWifiConfiguration");
+        } else if (mLastNetworkId != WifiConfiguration.INVALID_NETWORK_ID
+                && mLastNetworkId == requestData.networkId) {
+            logd("id matches currentWifiConfiguration");
         } else {
             logd("id does not match targetWifiConfiguration");
             return;
@@ -6636,13 +6656,14 @@ public class ClientModeImpl extends StateMachine {
             if (callback != null && binder != null) {
                 mProcessingActionListeners.add(binder, callback, callbackIdentifier);
             }
+            WifiConfiguration config = mWifiConfigManager.getConfiguredNetwork(netId);
             boolean success = mWifiConfigManager.removeNetwork(netId, callingUid, null);
             if (!success) {
                 loge("Failed to remove network");
                 sendActionListenerFailure(callbackIdentifier, WifiManager.ERROR);
             }
             sendActionListenerSuccess(callbackIdentifier);
-            broadcastWifiCredentialChanged(WifiManager.WIFI_CREDENTIAL_FORGOT, null);
+            broadcastWifiCredentialChanged(WifiManager.WIFI_CREDENTIAL_FORGOT, config);
         });
     }
 

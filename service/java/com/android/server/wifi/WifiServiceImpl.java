@@ -51,7 +51,6 @@ import android.net.Network;
 import android.net.NetworkStack;
 import android.net.Uri;
 import android.net.ip.IpClientUtil;
-import android.net.shared.Inet4AddressUtils;
 import android.net.wifi.IActionListener;
 import android.net.wifi.IDppCallback;
 import android.net.wifi.ILocalOnlyHotspotCallback;
@@ -112,6 +111,7 @@ import android.util.MutableBoolean;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.AsyncChannel;
+import com.android.net.module.util.Inet4AddressUtils;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
@@ -3588,7 +3588,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (mVerboseLoggingEnabled) {
             mLog.info("getCurrentNetwork uid=%").c(Binder.getCallingUid()).flush();
         }
-        return mClientModeImpl.getCurrentNetwork();
+        return mClientModeImpl.syncGetCurrentNetwork(mClientModeImplChannel);
     }
 
     public static String toHexString(String s) {
