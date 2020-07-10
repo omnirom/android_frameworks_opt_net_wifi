@@ -91,8 +91,10 @@ ifeq ($(BOARD_WLAN_DEVICE), bcmdhd)
   LIB_WIFI_HAL := libwifi-hal-bcm
   VENDOR_LOCAL_SHARED_LIBRARIES := libcrypto
 else ifeq ($(BOARD_WLAN_DEVICE), qcwcn)
+ifneq ($(TARGET_DEVICE),qssi)
   LIB_WIFI_HAL := libwifi-hal-qcom
   VENDOR_LOCAL_SHARED_LIBRARIES := libcld80211
+endif #End of Check for qssi target
 else ifeq ($(BOARD_WLAN_DEVICE), mrvl)
   # this is commented because none of the nexus devices
   # that sport Marvell's wifi have support for HAL
