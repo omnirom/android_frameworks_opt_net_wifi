@@ -3070,27 +3070,7 @@ public class SupplicantStaIfaceHal {
         @Override
         public void onVendorStateChanged(int newState, byte[/* 6 */] bssid, int id,
                                    ArrayList<Byte> ssid, boolean filsHlpSent) {
-            synchronized (mLock) {
-                logCallback("onVendorStateChanged");
-                SupplicantState newSupplicantState =
-                    SupplicantStaIfaceCallbackImpl.supplicantHidlStateToFrameworkState(newState);
-                WifiSsid wifiSsid = // wifigbk++
-                        WifiGbk.createWifiSsidFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
-                String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
-                mSupplicantStaIfacecallback.updateStateIsFourway(
-                        (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE));
-                if (newSupplicantState == SupplicantState.COMPLETED) {
-                    if (filsHlpSent == false) {
-                        mWifiMonitor.broadcastNetworkConnectionEvent(
-                                mIfaceName, getCurrentNetworkId(mIfaceName), bssidStr);
-                    } else {
-                        mWifiMonitor.broadcastFilsNetworkConnectionEvent(
-                                mIfaceName, getCurrentNetworkId(mIfaceName), bssidStr);
-                    }
-                }
-                mWifiMonitor.broadcastSupplicantStateChangeEvent(
-                        mIfaceName, getCurrentNetworkId(mIfaceName), wifiSsid, bssidStr, newSupplicantState);
-            }
+            Log.i(TAG, "Deprecated onVendorStateChanged called...");
         }
 
         /* DPP Callbacks Start */
