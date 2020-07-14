@@ -3001,8 +3001,7 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("is5GHzBandSupported uid=%").c(Binder.getCallingUid()).flush();
         }
 
-        return (is5GhzBandSupportedInternal()
-                   && mClientModeImpl.is5GhzBandSupported());
+        return is5GhzBandSupportedInternal();
     }
 
     private boolean is5GhzBandSupportedInternal() {
