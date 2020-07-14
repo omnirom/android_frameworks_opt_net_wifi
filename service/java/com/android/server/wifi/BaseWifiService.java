@@ -695,6 +695,36 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
+    public boolean isSoftApOcvFeatureEnabled() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSoftApOcvFeatureSupported() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void enableSoftApOcvFeature(boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSoftApBeaconProtFeatureEnabled() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSoftApBeaconProtFeatureSupported() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void enableSoftApBeaconProtFeature(boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public String getCapabilities(String capaType) {
         throw new UnsupportedOperationException();
     }

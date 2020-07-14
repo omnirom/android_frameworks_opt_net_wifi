@@ -27,6 +27,8 @@ import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_FAILED;
 
+import static com.android.server.wifi.WifiSettingsConfigStore.SOFTAP_BEACON_PROTECTION_ENABLED;
+import static com.android.server.wifi.WifiSettingsConfigStore.SOFTAP_OCV_ENABLED;
 import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_VERBOSE_LOGGING_ENABLED;
 import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_COVERAGE_EXTEND_FEATURE_ENABLED;
 import android.annotation.CheckResult;
@@ -391,6 +393,10 @@ public class WifiServiceImpl extends BaseWifiService {
             }
             // config store is read, check if verbose logging is enabled.
             enableVerboseLoggingInternal(getVerboseLoggingLevel());
+            enableSoftApOcvFeatureInternal(mContext.getResources().getBoolean(
+                    R.bool.config_vendor_softap_ocv_supported));
+            enableSoftApBeaconProtFeatureInternal(mContext.getResources().getBoolean(
+                    R.bool.config_vendor_softap_beacon_protection_supported));
             // Check if wi-fi needs to be enabled
             boolean wifiEnabled = mSettingsStore.isWifiToggleEnabled();
             Log.i(TAG,
@@ -4317,6 +4323,61 @@ public class WifiServiceImpl extends BaseWifiService {
                 .c(Binder.getCallingUid())
                 .c(enable).flush();
          mWifiInjector.getSettingsConfigStore().put(WIFI_COVERAGE_EXTEND_FEATURE_ENABLED, enable);
+    }
+
+    @Override
+    public boolean isSoftApOcvFeatureEnabled() {
+        enforceAccessPermission();
+        return mWifiInjector.getSettingsConfigStore().get(SOFTAP_OCV_ENABLED);
+    }
+
+    @Override
+    public boolean isSoftApOcvFeatureSupported() {
+        enforceAccessPermission();
+        return mContext.getResources().getBoolean(
+                R.bool.config_vendor_softap_ocv_supported);
+    }
+
+    @Override
+    public void enableSoftApOcvFeature(boolean enable) {
+        enforceAccessPermission();
+        enforceNetworkSettingsPermission();
+        mLog.info("enableSoftApOcvFeature uid=% enable=%")
+                .c(Binder.getCallingUid())
+                .c(enable).flush();
+        enableSoftApOcvFeatureInternal(enable);
+    }
+
+    private void enableSoftApOcvFeatureInternal(boolean enable) {
+        mWifiInjector.getSettingsConfigStore().put(SOFTAP_OCV_ENABLED, enable);
+        mClientModeImpl.enableSoftApOcvFeature(enable);
+    }
+
+    @Override
+    public boolean isSoftApBeaconProtFeatureEnabled() {
+        enforceAccessPermission();
+        return mWifiInjector.getSettingsConfigStore().get(SOFTAP_BEACON_PROTECTION_ENABLED);
+    }
+
+    @Override
+    public boolean isSoftApBeaconProtFeatureSupported() {
+        return mContext.getResources().getBoolean(
+                R.bool.config_vendor_softap_beacon_protection_supported);
+    }
+
+    @Override
+    public void enableSoftApBeaconProtFeature(boolean enable) {
+        enforceAccessPermission();
+        enforceNetworkSettingsPermission();
+        mLog.info("enableSoftApBeaconProtFeature uid=% enable=%")
+                .c(Binder.getCallingUid())
+                .c(enable).flush();
+        enableSoftApBeaconProtFeatureInternal(enable);
+    }
+
+    private void enableSoftApBeaconProtFeatureInternal(boolean enable) {
+        mWifiInjector.getSettingsConfigStore().put(SOFTAP_BEACON_PROTECTION_ENABLED, enable);
+        mClientModeImpl.enableSoftApBeaconProtFeature(enable);
     }
 
     /**

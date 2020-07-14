@@ -122,6 +122,14 @@ public class WifiNative {
         mHostapdHal.enableVerboseLogging(mVerboseLoggingEnabled);
     }
 
+    public void enableSoftApOcvFeature(boolean enable) {
+        mHostapdHal.enableSoftApOcvFeature(enable);
+    }
+
+    public void enableSoftApBeaconProtFeature(boolean enable) {
+        mHostapdHal.enableSoftApBeaconProtFeature(enable);
+    }
+
     public static class WifiGenerationStatus {
 
         public int generation;

@@ -216,6 +216,12 @@
     <!-- Wifi driver supports WPA3 Simultaneous Authentication of Equals (WPA3-OWE) for softap -->
     <bool translatable="false" name="config_vendor_wifi_softap_owe_supported">false</bool>
 
+    <!-- Wifi driver supports Beacon Protection for SoftAp -->
+    <bool translatable="false" name="config_vendor_softap_beacon_protection_supported">false</bool>
+
+    <!-- Wifi driver supports Ocv for SoftAp -->
+    <bool translatable="false" name="config_vendor_softap_ocv_supported">false</bool>
+
     <!-- Wifi driver supports IEEE80211AC for softap -->
     <bool translatable="false" name="config_wifi_softap_ieee80211ac_supported">false</bool>
 
