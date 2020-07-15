@@ -94,7 +94,6 @@ public class SoftApManager implements ActiveModeManager {
     private boolean mTimeoutEnabled = false;
     private String[] mdualApInterfaces;
     private boolean mDualSapIfacesDestroyed = false;
-    private String mSoftApStartFailureDesc;
 
     private final SarManager mSarManager;
 
@@ -252,9 +251,6 @@ public class SoftApManager implements ActiveModeManager {
         if (newState == WifiManager.WIFI_AP_STATE_FAILED) {
             //only set reason number when softAP start failed
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_REASON, reason);
-            if (mSoftApStartFailureDesc != null) {
-                intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_DESCRIPTION, mSoftApStartFailureDesc);
-            }
         }
 
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mDataInterfaceName);
@@ -291,15 +287,6 @@ public class SoftApManager implements ActiveModeManager {
                 return ERROR_GENERIC;
             }
             // Failure to set country code is not fatal for 2Ghz & Any band options.
-        }
-
-        if (config.apBand == WifiConfiguration.AP_BAND_5GHZ
-                && !mWifiNative.is5GhzBandSupported()) {
-            mSoftApStartFailureDesc = WifiManager.WIFI_AP_FAILURE_DESC_NO_5GHZ_SUPPORT;
-            Log.e(TAG, "Failed to start soft AP as 5Ghz band not supported");
-            return ERROR_NO_CHANNEL;
-        } else {
-            mSoftApStartFailureDesc = "";
         }
 
         // Make a copy of configuration for updating AP band and channel.
