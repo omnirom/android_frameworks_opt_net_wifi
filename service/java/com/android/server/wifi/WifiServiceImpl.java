@@ -28,7 +28,7 @@ import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_FAILED;
 
 import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_VERBOSE_LOGGING_ENABLED;
-
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_COVERAGE_EXTEND_FEATURE_ENABLED;
 import android.annotation.CheckResult;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -4308,7 +4308,7 @@ public class WifiServiceImpl extends BaseWifiService {
 
     public boolean isWifiCoverageExtendFeatureEnabled() {
         enforceAccessPermission();
-        return mFacade.getIntegerSetting(mContext, Settings.Global.WIFI_COVERAGE_EXTEND_FEATURE_ENABLED, 0) > 0 ;
+        return mWifiInjector.getSettingsConfigStore().get(WIFI_COVERAGE_EXTEND_FEATURE_ENABLED);
     }
 
     public void enableWifiCoverageExtendFeature(boolean enable) {
@@ -4317,7 +4317,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("enableWifiCoverageExtendFeature uid=% enable=%")
                 .c(Binder.getCallingUid())
                 .c(enable).flush();
-        mFacade.setIntegerSetting(mContext, Settings.Global.WIFI_COVERAGE_EXTEND_FEATURE_ENABLED, (enable ? 1 : 0));
+         mWifiInjector.getSettingsConfigStore().put(WIFI_COVERAGE_EXTEND_FEATURE_ENABLED, enable);
     }
 
     /**
