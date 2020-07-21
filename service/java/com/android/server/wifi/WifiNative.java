@@ -91,8 +91,6 @@ public class WifiNative {
     private final WifiInjector mWifiInjector;
     private NetdWrapper mNetdWrapper;
     private boolean mVerboseLoggingEnabled = false;
-    private boolean mIs5GhzBandSupportedInitialized = false;
-    private boolean mIs5GhzBandSupported = true;
 
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
@@ -2197,28 +2195,6 @@ public class WifiNative {
      */
      public String getCapabilities(@NonNull String ifaceName, String capaType) {
          return mSupplicantStaIfaceHal.getCapabilities(ifaceName, capaType);
-    }
-
-    /**
-     * Get 5Ghz band supported info from driver
-     *
-     * @return true if 5Ghz band supported, otherwise false.
-     */
-     public boolean is5GhzBandSupported() {
-         if (mIs5GhzBandSupportedInitialized)
-             return mIs5GhzBandSupported;
-
-         int[] ChannelsFor5GhzBand = getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
-
-         // Channels list is null means failed to fetch channel info.
-         // Continue with default assumtion i.e. 5Ghz supported.
-         if (ChannelsFor5GhzBand == null)
-             return true;
-
-         // set initialized flag to true as channel info is fetched successfully.
-         mIs5GhzBandSupportedInitialized = true;
-         mIs5GhzBandSupported = (ChannelsFor5GhzBand.length != 0);
-         return mIs5GhzBandSupported;
     }
 
     /**
