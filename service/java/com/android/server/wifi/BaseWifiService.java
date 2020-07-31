@@ -758,4 +758,8 @@ public class BaseWifiService extends IWifiManager.Stub {
     public boolean isVht8ssCapableDevice() {
         throw new UnsupportedOperationException();
     }
+    @Override
+    public String doDriverCmd(String command) {
+        throw new UnsupportedOperationException();
+    }
 }
