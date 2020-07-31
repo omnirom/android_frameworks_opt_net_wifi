@@ -789,6 +789,7 @@ public class BaseWifiService extends IWifiManager.Stub {
     public boolean isVht8ssCapableDevice() {
         throw new UnsupportedOperationException();
     }
+
     @Override
     public String doDriverCmd(String command) {
         throw new UnsupportedOperationException();
@@ -823,6 +824,26 @@ public class BaseWifiService extends IWifiManager.Stub {
 
     @Override
     public void unregisterForWifiNotification(int staId, int callbackIdentifier) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isWhitelistNetworkRoamingEnabled() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void enableWhitelistNetworkRoaming(boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isNewNetworkAutoConnectionEnabled() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void enableNewNetworkAutoConnection(boolean enable) {
         throw new UnsupportedOperationException();
     }
 }
