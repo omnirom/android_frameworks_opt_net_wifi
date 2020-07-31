@@ -4647,4 +4647,10 @@ public class WifiServiceImpl extends BaseWifiService {
         enforceAccessPermission();
         return mContext.getResources().getBoolean(R.bool.config_vendorWifi11axReadySupport);
     }
+
+    @Override
+    public String doDriverCmd(String command)
+    {
+        return mClientModeImpl.doDriverCmd(mClientModeImplChannel, command);
+    }
 }
