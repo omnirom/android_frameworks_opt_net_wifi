@@ -17,6 +17,7 @@
 package com.android.server.wifi;
 
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLE_REASON_INFOS;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_WHITELIST_ROAMING_ENABLED;
 
 import android.Manifest;
 import android.annotation.NonNull;
@@ -2362,9 +2363,14 @@ public class WifiConfigManager {
         // Add the scan detail to this network's scan detail cache.
         scanDetailCache.put(scanDetail);
 
-        // Since we added a scan result to this configuration, re-attempt linking.
-        // TODO: Do we really need to do this after every scan result?
-        attemptNetworkLinking(config);
+        // Disable linking networks here when whitelist roaming feature enabled to make
+        // sure whitelist networks will be linked only when STA is in connected and
+        // internet access validated state.
+        if (!mWifiInjector.getSettingsConfigStore().get(WIFI_WHITELIST_ROAMING_ENABLED)) {
+            // Since we added a scan result to this configuration, re-attempt linking.
+            // TODO: Do we really need to do this after every scan result?
+            attemptNetworkLinking(config);
+        }
     }
 
     /**
@@ -2532,7 +2538,9 @@ public class WifiConfigManager {
                 }
                 return true;
             }
-        } else {
+            // Don't link based on BSSID partial match when whitelist roaming feature enabled
+            // to make sure networks with different default gateways won't be linked.
+        } else if (!mWifiInjector.getSettingsConfigStore().get(WIFI_WHITELIST_ROAMING_ENABLED)) {
             // We do not know BOTH default gateways hence we will try to link
             // hoping that WifiConfigurations are indeed behind the same gateway.
             // once both WifiConfiguration have been tried and thus once both default gateways
@@ -2629,6 +2637,9 @@ public class WifiConfigManager {
                 continue;
             }
             if (linkConfig.ephemeral) {
+                continue;
+            }
+            if (!linkConfig.getNetworkSelectionStatus().isNetworkEnabled()) {
                 continue;
             }
             // Network Selector will be allowed to dynamically jump from a linked configuration
@@ -3338,5 +3349,48 @@ public class WifiConfigManager {
 
     public Comparator<WifiConfiguration> getScanListComparator() {
         return mScanListComparator;
+    }
+
+
+    /**
+     * Retrieves the configured network corresponding to the provided configKey
+     * without any masking.
+     *
+     * WARNING: Don't use this to pass network configurations except in the wifi stack, when
+     * there is a need for passwords and randomized MAC address.
+     *
+     * @param configKey configKey of the requested network.
+     * @return Copy of WifiConfiguration object if found, null otherwise.
+     */
+    public WifiConfiguration getConfiguredNetworkWithoutMasking(String configKey) {
+        WifiConfiguration config = getInternalConfiguredNetwork(configKey);
+        if (config == null) {
+            return null;
+        }
+        return new WifiConfiguration(config);
+    }
+
+    /**
+     * This method runs through all the saved networks and checks if the provided network can be
+     * linked with any of them.
+     *
+     * @param networkId networkId corresponding to the network that needs to be
+     *               checked for potential links.
+     */
+    public HashMap<String, Integer> updateAndGetLinkedConfiguration(int networkId) {
+        if (networkId == WifiConfiguration.INVALID_NETWORK_ID) {
+            return null;
+        }
+
+        WifiConfiguration internalConfig = mConfiguredNetworks.getForCurrentUser(networkId);
+        if (internalConfig == null) {
+            Log.e(TAG, "Cannot find network with networkId " + networkId);
+            return null;
+        }
+
+        internalConfig.linkedConfigurations = new HashMap<>();
+        attemptNetworkLinking(internalConfig);
+
+        return new HashMap<String, Integer>(internalConfig.linkedConfigurations);
     }
 }
