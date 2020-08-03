@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLE_REASON_INFOS;
 import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_WHITELIST_ROAMING_ENABLED;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED;
 
 import android.Manifest;
 import android.annotation.NonNull;
@@ -57,6 +58,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.MissingCounterTimerLockList;
+import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 import com.android.wifi.resources.R;
@@ -1081,6 +1083,9 @@ public class WifiConfigManager {
         if (externalConfig.dppCsign != null) {
             internalConfig.dppCsign = externalConfig.dppCsign;
         }
+
+        // Copy auto connection enabled flag
+        internalConfig.isAutoConnectionEnabled = externalConfig.isAutoConnectionEnabled;
     }
 
     /**
@@ -3351,7 +3356,6 @@ public class WifiConfigManager {
         return mScanListComparator;
     }
 
-
     /**
      * Retrieves the configured network corresponding to the provided configKey
      * without any masking.
@@ -3392,5 +3396,169 @@ public class WifiConfigManager {
         attemptNetworkLinking(internalConfig);
 
         return new HashMap<String, Integer>(internalConfig.linkedConfigurations);
+    }
+
+    private String getLowerCaseSsidPrefix(String ssid, String suffix) {
+         if (ssid == null || suffix == null) {
+             return null;
+         }
+
+         String ssidLower = ssid.toLowerCase();
+         String suffixLower = suffix.toLowerCase();
+         int suffixIndex = ssidLower.indexOf(suffixLower);
+         if (suffixIndex < 1) {
+             return null;
+         }
+
+         return ssidLower.substring(0, suffixIndex);
+    }
+
+    private boolean isQualifiedForNetworkLinking(WifiConfiguration config, String currentBssid) {
+        if (config == null || config.ephemeral)
+            return false;
+
+        // config AKM should be PSK
+        if (!WifiConfigurationUtil.isConfigForPskNetwork(config))
+            return false;
+
+
+        // SSID should contain "2g"/"2G" with valid prefix
+        if (getLowerCaseSsidPrefix(config.getPrintableSsid(), "2g") == null) {
+            return false;
+        }
+
+        // no.of bssids of the SSID in scan cache should be less than configured limit
+        ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(config.networkId);
+        if (scanDetailCache == null || scanDetailCache.size() == 0 ||
+            scanDetailCache.size() > LINK_CONFIGURATION_MAX_SCAN_CACHE_ENTRIES) {
+            return false;
+        }
+
+        // current BSSID shouldn't be 5G network
+        if (currentBssid != null) {
+            ScanDetail scanDetail = scanDetailCache.getScanDetail(currentBssid);
+            if (scanDetail != null) {
+                ScanResult result = scanDetail.getScanResult();
+                if (result.is5GHz())
+                    return false;
+            }
+        }
+
+        // no 5Ghz bssid should present in scan cache
+        for (ScanDetail scanDetail : scanDetailCache.values()) {
+            ScanResult result = scanDetail.getScanResult();
+            if (result.is5GHz())
+                return false;
+        }
+
+        return true;
+    }
+
+    public void addOrUpdateAutoConnectNetworks(int networkId, String currentBssid,
+                    List<ScanDetail> scanDetails) {
+        if (!mWifiInjector.getSettingsConfigStore().get(WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED)) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "Auto connecting new networks disabled");
+            }
+            return;
+        }
+
+        // clear auto connection enabled flag for all netwroks
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+            config.isAutoConnectionEnabled = false;
+        }
+
+        WifiConfiguration currentConfig = getInternalConfiguredNetwork(networkId);
+        if (currentConfig == null || currentBssid == null || scanDetails == null
+            || !isQualifiedForNetworkLinking(currentConfig, currentBssid)) {
+            return;
+        }
+
+        String ssid2gPrefix = getLowerCaseSsidPrefix(currentConfig.getPrintableSsid(), "2g");
+        Log.i(TAG, "ssid2gPrefix = " + ssid2gPrefix);
+
+        for (ScanDetail scanDetail : scanDetails) {
+            ScanResult scanResult = scanDetail.getScanResult();
+            if (scanResult.is24GHz() || !ScanResultUtil.isScanResultForPskNetwork(scanResult))
+                continue;
+
+            if (!currentBssid.regionMatches(true, 0, scanResult.BSSID, 0,
+                     LINK_CONFIGURATION_BSSID_MATCH_LENGTH))
+                continue;
+
+             // SSID should contain "5g"/"5G" with valid prefix
+            String ssid5gPrefix = getLowerCaseSsidPrefix(scanResult.SSID, "5g");
+            Log.i(TAG, "ssid5gPrefix: " + ssid5gPrefix);
+            if(ssid5gPrefix == null || !ssid5gPrefix.equals(ssid2gPrefix)) {
+                continue;
+            }
+
+            WifiConfiguration config = getConfiguredNetworkForScanDetail(scanDetail);
+            if (config != null) {
+                if (config.ephemeral && config.getNetworkSelectionStatus().isNetworkEnabled()) {
+                    config.isAutoConnectionEnabled = true;
+                }
+                continue;
+            }
+
+            WifiConfiguration ephemeralConfig =
+                     ScanResultUtil.createNetworkFromScanResult(scanResult);
+
+            ephemeralConfig.staId = currentConfig.staId;
+            ephemeralConfig.ephemeral = true;
+            ephemeralConfig.isAutoConnectionEnabled = true;
+            ephemeralConfig.creatorUid = currentConfig.creatorUid;
+            ephemeralConfig.creatorName = currentConfig.creatorName;
+            ephemeralConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+            ephemeralConfig.requirePmf = false;
+            ephemeralConfig.preSharedKey = currentConfig.preSharedKey;
+            ephemeralConfig.noInternetAccessExpected = currentConfig.noInternetAccessExpected;
+            ephemeralConfig.setIpConfiguration(new IpConfiguration(currentConfig.getIpConfiguration()));
+            NetworkUpdateResult result = addOrUpdateNetwork(ephemeralConfig, currentConfig.creatorUid);
+            if (!result.isSuccess()) {
+                Log.e(TAG, "Failed to add ephemeral network" + ephemeralConfig.getKey());
+                continue;
+            }
+            if (!updateNetworkSelectionStatus(result.getNetworkId(),
+                WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED)) {
+                Log.e(TAG, "Failed to make ephemeral network "
+                                + ephemeralConfig.getKey() + " selectable");
+                continue;
+            }
+
+            WifiConfiguration internalConfig = getInternalConfiguredNetwork(result.getNetworkId());
+
+            if (internalConfig == null) {
+                Log.e(TAG, "Failed to fetch configured ephemeral network "
+                                + ephemeralConfig.getKey());
+                continue;
+            }
+
+            Log.i(TAG, "added ephemeral network " + internalConfig.getKey()
+                        + " to attempt auto connection with credentials of " + currentConfig.getKey());
+        }
+    }
+
+    public boolean saveAutoConnectedNewNetwork(int networkId) {
+         WifiConfiguration internalConfig = getInternalConfiguredNetwork(networkId);
+        if (internalConfig == null || !internalConfig.ephemeral
+                    || !internalConfig.isAutoConnectionEnabled) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "Auto connect network not found!");
+            }
+            return false;
+        }
+
+        internalConfig.ephemeral = false;
+        internalConfig.isAutoConnectionEnabled = false;
+
+        saveToStore(true);
+        sendConfiguredNetworkChangedBroadcast(WifiManager.CHANGE_REASON_ADDED);
+        for (OnNetworkUpdateListener listener : mListeners) {
+            listener.onNetworkAdded(
+                    createExternalWifiConfiguration(internalConfig, true, Process.WIFI_UID));
+        }
+
+        return true;
     }
 }

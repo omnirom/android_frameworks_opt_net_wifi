@@ -948,4 +948,12 @@ public class WifiInjector {
     public int getVerboseLogging() {
         return mVerboseLoggingEnabled;
     }
+
+    /**
+     * Construct a new instance of AutoConnectNewNetworkResultNotifier .
+     * @return the created instance
+     */
+    public AutoConnectNewNetworkResultNotifier makeAutoConnectNewNetworkResultNotifier() {
+        return new AutoConnectNewNetworkResultNotifier(mContext, mFrameworkFacade);
+    }
 }

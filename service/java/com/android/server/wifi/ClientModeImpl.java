@@ -785,6 +785,7 @@ public class ClientModeImpl extends StateMachine {
     private final EapFailureNotifier mEapFailureNotifier;
     private final SimRequiredNotifier mSimRequiredNotifier;
     private final ConnectionFailureNotifier mConnectionFailureNotifier;
+    private final AutoConnectNewNetworkResultNotifier mAutoConnectNewNetworkResultNotifier;
     private WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
     // Maximum duration to continue to log Wifi usability stats after a data stall is triggered.
     @VisibleForTesting
@@ -847,6 +848,9 @@ public class ClientModeImpl extends StateMachine {
         mBssidBlocklistMonitor = mWifiInjector.getBssidBlocklistMonitor();
         mConnectionFailureNotifier = mWifiInjector.makeConnectionFailureNotifier(
                 mWifiConnectivityManager);
+
+        mAutoConnectNewNetworkResultNotifier =
+                mWifiInjector.makeAutoConnectNewNetworkResultNotifier();
 
         mLinkProperties = new LinkProperties();
         mMcastLockManagerFilterController = new McastLockManagerFilterController();
@@ -4104,8 +4108,13 @@ public class ClientModeImpl extends StateMachine {
                         disableReason = WifiConfiguration.NetworkSelectionStatus
                                 .DISABLED_BY_WRONG_PASSWORD;
                         if (targetedNetwork != null) {
-                            mWrongPasswordNotifier.onWrongPasswordError(
-                                    targetedNetwork.SSID);
+                            if (targetedNetwork.isEphemeral() && targetedNetwork.isAutoConnectionEnabled) {
+                                Log.e(TAG, "Auto connection attempt on new network "
+                                                   + targetedNetwork.getPrintableSsid() + " failed");
+                            } else {
+                                mWrongPasswordNotifier.onWrongPasswordError(
+                                        targetedNetwork.SSID);
+                            }
                         }
                     } else if (reasonCode == WifiManager.ERROR_AUTH_FAILURE_EAP_FAILURE) {
                         int errorCode = message.arg2;
@@ -4429,6 +4438,10 @@ public class ClientModeImpl extends StateMachine {
                     // network.
                     config = getCurrentWifiConfiguration();
                     if (config != null) {
+                        if (mWifiConfigManager.saveAutoConnectedNewNetwork(config.networkId)) {
+                            Log.i(TAG, "Successfully connected to new network " + config.getPrintableSsid());
+                            mAutoConnectNewNetworkResultNotifier.onConnectionAttemptSuccess(config.SSID);
+                        }
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
                         mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
