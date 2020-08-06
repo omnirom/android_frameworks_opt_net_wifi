@@ -149,6 +149,50 @@ public class ApConfigUtil {
     }
 
     /**
+     * Return a channel number for AP setup based on the frequency band.
+     * @param apBand one of the value of WifiConfiguration.AP_BAND_*.
+     * @param allowed2GChannels list of allowed 2GHz channels
+     * @param allowed5GFreqList list of allowed 5GHz frequencies
+     * @return a valid channel number on success, -1 on failure.
+     */
+    public static int chooseApChannel(int apBand,
+                                      ArrayList<Integer> allowed2GChannels,
+                                      int[] allowed5GFreqList) {
+        if (apBand != WifiConfiguration.AP_BAND_2GHZ
+                && apBand != WifiConfiguration.AP_BAND_5GHZ
+                       && apBand != WifiConfiguration.AP_BAND_ANY) {
+            Log.e(TAG, "Invalid band: " + apBand);
+            return -1;
+        }
+
+        // TODO(b/72120668): Create channel selection logic for AP_BAND_ANY.
+        if (apBand == WifiConfiguration.AP_BAND_2GHZ
+                || apBand == WifiConfiguration.AP_BAND_ANY)  {
+            /* Select a channel from 2GHz band. */
+            if (allowed2GChannels == null || allowed2GChannels.size() == 0) {
+                Log.d(TAG, "2GHz allowed channel list not specified");
+                /* Use default channel. */
+                return DEFAULT_AP_CHANNEL;
+            }
+
+            /* Pick a random channel. */
+            int index = sRandom.nextInt(allowed2GChannels.size());
+            return allowed2GChannels.get(index).intValue();
+        }
+
+        /* 5G without DFS. */
+        else if (allowed5GFreqList != null && allowed5GFreqList.length > 0 &&
+                  apBand == WifiConfiguration.AP_BAND_5GHZ) {
+            /* Pick a random channel from the list of supported channels. */
+            return convertFrequencyToChannel(
+                    allowed5GFreqList[sRandom.nextInt(allowed5GFreqList.length)]);
+        }
+
+            Log.e(TAG, "No available channels on 5GHz/6GHz band");
+            return -1;
+    }
+
+    /**
      * Update AP band, channel and operating class based on the provided country code and band.
      * This will also set
      * @param wifiNative reference to WifiNative
