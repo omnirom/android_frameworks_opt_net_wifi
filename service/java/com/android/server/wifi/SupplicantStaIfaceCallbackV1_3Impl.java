@@ -368,8 +368,8 @@ abstract class SupplicantStaIfaceCallbackV1_3Impl extends
         mStaIfaceHal.logCallback("onStateChanged_1_3");
         SupplicantState newSupplicantState =
                 supplicantHidlStateToFrameworkState(newState);
-        WifiSsid wifiSsid =
-                WifiSsid.createFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
+        WifiSsid wifiSsid = // wifigbk++
+                WifiGbk.createWifiSsidFromByteArray(NativeUtil.byteArrayFromArrayList(ssid));
         String bssidStr = NativeUtil.macAddressFromByteArray(bssid);
         mStateIsFourwayV13 =
                 (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE);

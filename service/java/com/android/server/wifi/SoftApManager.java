@@ -113,7 +113,6 @@ public class SoftApManager implements ActiveModeManager {
     private boolean mTimeoutEnabled = false;
     private String[] mdualApInterfaces;
     private boolean mDualSapIfacesDestroyed = false;
-    private String mSoftApStartFailureDesc;
 
     private final SarManager mSarManager;
 
@@ -328,9 +327,6 @@ public class SoftApManager implements ActiveModeManager {
         if (newState == WifiManager.WIFI_AP_STATE_FAILED) {
             //only set reason number when softAP start failed
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_REASON, reason);
-            if (mSoftApStartFailureDesc != null) {
-                intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_DESCRIPTION, mSoftApStartFailureDesc);
-            }
         }
 
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mDataInterfaceName);
@@ -367,9 +363,9 @@ public class SoftApManager implements ActiveModeManager {
     private int setCountryCode() {
         int band = mApConfig.getSoftApConfiguration().getBand();
         if (TextUtils.isEmpty(mCountryCode)) {
-            if (band == SoftApConfiguration.BAND_5GHZ) {
+            if (band == SoftApConfiguration.BAND_5GHZ || band == SoftApConfiguration.BAND_6GHZ) {
                 // Country code is mandatory for 5GHz band.
-                Log.e(TAG, "Invalid country code, required for setting up soft ap in 5GHz");
+                Log.e(TAG, "Invalid country code, required for setting up soft ap in 5GHz/6GHz");
                 return ERROR_GENERIC;
             }
             // Absence of country code is not fatal for 2Ghz & Any band options.
@@ -378,10 +374,10 @@ public class SoftApManager implements ActiveModeManager {
 
         if (!mWifiNative.setCountryCodeHal(
                 mApInterfaceName, mCountryCode.toUpperCase(Locale.ROOT))) {
-            if (band == SoftApConfiguration.BAND_5GHZ) {
+            if (band == SoftApConfiguration.BAND_5GHZ || band == SoftApConfiguration.BAND_6GHZ) {
                 // Return an error if failed to set country code when AP is configured for
                 // 5GHz band.
-                Log.e(TAG, "Failed to set country code, required for setting up soft ap in 5GHz");
+                Log.e(TAG, "Failed to set country code, required for setting up soft ap in 5GHz/6GHz");
                 return ERROR_GENERIC;
             }
             // Failure to set country code is not fatal for other band options.
@@ -412,15 +408,6 @@ public class SoftApManager implements ActiveModeManager {
         result = setCountryCode();
         if (result != SUCCESS) {
             return result;
-        }
-
-        if (config.getBand() == SoftApConfiguration.BAND_5GHZ
-                && !mWifiNative.is5GhzBandSupported()) {
-            mSoftApStartFailureDesc = WifiManager.WIFI_AP_FAILURE_DESC_NO_5GHZ_SUPPORT;
-            Log.e(TAG, "Failed to start soft AP as 5Ghz band not supported");
-            return ERROR_NO_CHANNEL;
-        } else {
-            mSoftApStartFailureDesc = "";
         }
 
         // Make a copy of configuration for updating AP band and channel.
