@@ -95,6 +95,7 @@ public class WifiAwareNativeManager {
                         // only care about isStarted (Wi-Fi started) not isReady - since if not
                         // ready then Wi-Fi will also be down.
                         if (mHalDeviceManager.isStarted()) {
+                            mWifiAwareStateManager.tryToGetAwareCapability();
                             // 1. no problem registering duplicates - only one will be called
                             // 2. will be called immediately if available
                             mHalDeviceManager.registerInterfaceAvailableForRequestListener(
@@ -105,6 +106,7 @@ public class WifiAwareNativeManager {
                     }
                 }, mHandler);
         if (mHalDeviceManager.isStarted()) {
+            mWifiAwareStateManager.tryToGetAwareCapability();
             mHalDeviceManager.registerInterfaceAvailableForRequestListener(
                     IfaceType.NAN, mInterfaceAvailableForRequestListener, mHandler);
         }
