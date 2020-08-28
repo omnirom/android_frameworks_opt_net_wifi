@@ -980,7 +980,7 @@ public class HostapdHal {
             vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.VendorNetworkParams vNetworkParams = new vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor.VendorNetworkParams();
             vNetworkParams.V1_0.ssid.addAll(NativeUtil.stringToByteArrayList(config.SSID));
             vNetworkParams.V1_0.isHidden = config.hiddenSSID;
-            vNetworkParams.vendorEncryptionType = getEncryptionType(config);
+            vNetworkParams.vendorEncryptionType = getVendorEncryptionType(config);
             vNetworkParams.V1_0.pskPassphrase = (config.preSharedKey != null) ? config.preSharedKey : "";
 
             if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
