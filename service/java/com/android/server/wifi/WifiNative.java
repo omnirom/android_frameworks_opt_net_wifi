@@ -1621,9 +1621,13 @@ public class WifiNative {
         List<byte[]> hiddenNetworkSsidsArrays = new ArrayList<>();
         for (String hiddenNetworkSsid : hiddenNetworkSSIDs) {
             try {
-                hiddenNetworkSsidsArrays.add(
-                        NativeUtil.byteArrayFromArrayList(
-                                NativeUtil.decodeSsid(hiddenNetworkSsid)));
+                byte[] hiddenSsidBytes = WifiGbk.getRandUtfOrGbkBytes(hiddenNetworkSsid);
+                if (hiddenSsidBytes.length > WifiGbk.MAX_SSID_LENGTH) {
+                    Log.e(TAG, "SSID is too long after conversion, skipping this ssid! SSID =" +
+                               hiddenNetworkSsid + " , SSID size = " + hiddenSsidBytes.length);
+                    continue;
+                }
+                hiddenNetworkSsidsArrays.add(hiddenSsidBytes);
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Illegal argument " + hiddenNetworkSsid, e);
                 continue;
