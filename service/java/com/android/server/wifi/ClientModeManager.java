@@ -320,13 +320,17 @@ public class ClientModeManager implements ActiveModeManager {
 
         ImsMmTelManager imsMmTelManager = ImsMmTelManager.createForSubscriptionId(subId);
         // If no wifi calling, no delay
-        if (!imsMmTelManager.isAvailable(
+        try {
+            if (!imsMmTelManager.isAvailable(
                     MmTelFeature.MmTelCapabilities.CAPABILITY_TYPE_VOICE,
                     ImsRegistrationImplBase.REGISTRATION_TECH_IWLAN)) {
-            Log.d(TAG, "IMS not registered over IWLAN for subId: " + subId);
+                Log.d(TAG, "IMS not registered over IWLAN for subId: " + subId);
+                return 0;
+            }
+        } catch (RuntimeException e) {
+            Log.e(TAG, "IMS Manager is not available.", e);
             return 0;
         }
-
         CarrierConfigManager configManager =
                 (CarrierConfigManager) mContext.getSystemService(Context.CARRIER_CONFIG_SERVICE);
         PersistableBundle config = configManager.getConfigForSubId(subId);
