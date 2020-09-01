@@ -81,6 +81,8 @@
           <item type="bool" name="config_wifi_softap_acs_include_dfs" />
           <item type="bool" name="config_wifi_softap_sae_supported" />
           <item type="bool" name="config_vendor_wifi_softap_owe_supported" />
+          <item type="bool" name="config_vendor_softap_beacon_protection_supported" />
+          <item type="bool" name="config_vendor_softap_ocv_supported" />
           <item type="bool" name="config_wifi_softap_ieee80211ac_supported" />
           <item type="bool" name="config_wifiSoftapIeee80211axSupported" />
           <item type="bool" name="config_wifiSoftap6ghzSupported" />

@@ -1258,6 +1258,24 @@ public class ClientModeImpl extends StateMachine {
         mWifiConnectivityManager.enableVerboseLogging(mVerboseLoggingEnabled);
     }
 
+    /**
+     * Enable/Disable SoftAp Ocv Feature
+     *
+     * @param enable true-enable; false-disable
+     */
+    public void enableSoftApOcvFeature(boolean enable) {
+        mWifiNative.enableSoftApOcvFeature(enable);
+    }
+
+    /**
+     * Enable/Disable SoftAp Beacon Protection
+     *
+     * @param enable true-enable; false-disable
+     */
+    public void enableSoftApBeaconProtFeature(boolean enable) {
+        mWifiNative.enableSoftApBeaconProtFeature(enable);
+    }
+
     private void updateDataInterface() {
         String dataInterfaceName = mWifiNative.getFstDataInterfaceName();
         if (TextUtils.isEmpty(dataInterfaceName)) {
