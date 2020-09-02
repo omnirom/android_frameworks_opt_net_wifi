@@ -69,6 +69,7 @@ import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.BitSet;
 
 /**
  * Native calls for bring up/shut down of the supplicant daemon and for
@@ -108,6 +109,9 @@ public class WifiNative {
         mHandler = handler;
         mRandom = random;
         mWifiInjector = wifiInjector;
+        qtiConnectedbands = new BitSet();
+        qtiConnectedbands.set(ConnectedBand.BAND_NONE);
+        mIfaceBands = new HashMap<>();
     }
 
     /**
@@ -364,6 +368,17 @@ public class WifiNative {
                 }
             }
             return removedIface;
+        }
+
+        /** Gets all ifaces of the given type. */
+        private List<Iface> getAllfaceOfType(@Iface.IfaceType int type) {
+            List<Iface> mReqIfaces = new ArrayList<>();
+            for (Iface iface : mIfaces.values()) {
+                if (iface.type == type) {
+                    mReqIfaces.add(iface);
+                }
+            }
+            return mReqIfaces;
         }
     }
 
@@ -3142,6 +3157,15 @@ public class WifiNative {
     }
 
     /**
+     * Returns whether Dual STA is supported or not.
+     */
+    public boolean isDualStaSupported() {
+        synchronized (mLock) {
+            return mWifiVendorHal.isDualStaSupported();
+        }
+    }
+
+    /**
      * Get the supported features
      *
      * @param ifaceName Name of the interface.
@@ -3998,5 +4022,45 @@ public class WifiNative {
     String doDriverCmd(String ifaceName, String command)
     {
         return mSupplicantStaIfaceHal.doDriverCmd(ifaceName, command);
+    }
+
+    public BitSet qtiConnectedbands;
+    private HashMap<Integer, Integer> mIfaceBands;
+
+    public static class ConnectedBand {
+        private ConnectedBand() {}
+
+        /* no band is in connected state */
+        public static final int BAND_NONE = 0;
+
+        /* one of band is connected in 2.4 GHz */
+        public static final int BAND_2G = 1;
+
+        /* one of band is connected in 5 GHz */
+        public static final int BAND_5G = 2;
+    }
+
+    public void qtiUpdateConnectedBand(boolean set, int wifiId, int band) {
+        if (band < 0 || band > ConnectedBand.BAND_5G) {
+            Log.e(TAG, "Unknown band option: " + band);
+            return;
+        }
+
+        if (set)
+            mIfaceBands.put(wifiId, band);
+        else
+            mIfaceBands.remove(wifiId);
+
+        synchronized (mLock) {
+            qtiConnectedbands.clear();
+            for (int b : mIfaceBands.values()) {
+                qtiConnectedbands.set(b);
+            }
+            if (qtiConnectedbands.isEmpty())
+                qtiConnectedbands.set(ConnectedBand.BAND_NONE);
+
+            if (mVerboseLoggingEnabled)
+                Log.d(TAG, "ConnectedBand bitset="+qtiConnectedbands);
+        }
     }
 }

@@ -313,7 +313,7 @@ public class WifiConfigManager {
      * This is keeping track of the next network ID to be assigned. Any new networks will be
      * assigned |mNextNetworkId| as network ID.
      */
-    private int mNextNetworkId = 0;
+    private static int mNextNetworkId = 0;
     /**
      * This is used to remember which network was selected successfully last by an app. This is set
      * when an app invokes {@link #enableNetwork(int, boolean, int)} with |disableOthers| flag set.
@@ -1139,7 +1139,7 @@ public class WifiConfigManager {
 
         // First allocate a new network ID for the configuration.
         newInternalConfig.networkId = mNextNetworkId++;
-
+        newInternalConfig.staId = mWifiConfigStore.getStaId();
         // First set defaults in the new configuration created.
         setDefaultsInWifiConfiguration(newInternalConfig);
 
@@ -2973,6 +2973,7 @@ public class WifiConfigManager {
             Map<String, String> macAddressMapping) {
         for (WifiConfiguration configuration : configurations) {
             configuration.networkId = mNextNetworkId++;
+            configuration.staId = mWifiConfigStore.getStaId();
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Adding network from shared store " + configuration.getKey());
             }
@@ -2994,6 +2995,7 @@ public class WifiConfigManager {
     private void loadInternalDataFromUserStore(List<WifiConfiguration> configurations) {
         for (WifiConfiguration configuration : configurations) {
             configuration.networkId = mNextNetworkId++;
+            configuration.staId = mWifiConfigStore.getStaId();
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Adding network from user store " + configuration.getKey());
             }
@@ -3087,7 +3089,7 @@ public class WifiConfigManager {
             Log.i(TAG, "Handling user unlock before loading from store.");
             List<WifiConfigStore.StoreFile> userStoreFiles =
                     WifiConfigStore.createUserFiles(
-                            mCurrentUserId, mFrameworkFacade.isNiapModeOn(mContext));
+                            mCurrentUserId, mFrameworkFacade.isNiapModeOn(mContext),mWifiConfigStore.getStaId());
             if (userStoreFiles == null) {
                 Log.wtf(TAG, "Failed to create user store files");
                 return false;
