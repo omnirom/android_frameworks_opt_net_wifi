@@ -18,7 +18,8 @@ package com.android.server.wifi;
 
 import static android.net.wifi.WifiManager.IFACE_IP_MODE_LOCAL_ONLY;
 import static android.net.wifi.WifiManager.IFACE_IP_MODE_TETHERED;
-
+import static android.net.wifi.WifiManager.STA_PRIMARY;
+import static android.net.wifi.WifiManager.STA_SECONDARY;
 import android.annotation.NonNull;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -28,6 +29,8 @@ import android.location.LocationManager;
 import android.net.wifi.SoftApCapability;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiManager;
+import android.net.LinkProperties;
+import android.net.NetworkInfo;
 import android.os.BatteryStatsManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -44,6 +47,7 @@ import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
 import com.android.server.wifi.util.WifiPermissionsUtil;
+import com.android.internal.util.AsyncChannel;
 import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
@@ -78,6 +82,7 @@ public class ActiveModeWarden {
 
     private WifiManager.SoftApCallback mSoftApCallback;
     private WifiManager.SoftApCallback mLohsCallback;
+    private QtiClientModeManager.Listener mQtiClientModeCallback;
 
     private boolean mCanRequestMoreClientModeManagers = false;
     private boolean mCanRequestMoreSoftApManagers = false;
@@ -96,6 +101,13 @@ public class ActiveModeWarden {
      */
     public void registerLohsCallback(@NonNull WifiManager.SoftApCallback callback) {
         mLohsCallback = callback;
+    }
+
+    /**
+     * Called from WifiServiceImpl to register a callback for notification from QtiClientModeManager
+     */
+    public void registerQtiClientModeCallback(@NonNull QtiClientModeManager.Listener callback) {
+       mQtiClientModeCallback = callback;
     }
 
     ActiveModeWarden(WifiInjector wifiInjector,
@@ -182,6 +194,13 @@ public class ActiveModeWarden {
         return mWifiNative.isStaApConcurrencySupported();
     }
 
+    /**
+     * @return Returns whether the device can support two client mode managers
+     */
+    public boolean isDualStaSupported() {
+        return mWifiNative.isDualStaSupported();
+    }
+
     /** Begin listening to broadcasts and start the internal state machine. */
     public void start() {
         mWifiController.start();
@@ -201,9 +220,14 @@ public class ActiveModeWarden {
     }
 
     /** Wifi has been toggled. */
+    public void qtiWifiToggled(int staId, boolean enable) {
+        mWifiController.sendMessage(WifiController.CMD_ADD_WIFI_SET, staId, enable ? 1 : 0);
+    }
+
     public void wifiToggled() {
         mWifiController.sendMessage(WifiController.CMD_WIFI_TOGGLED);
-    }
+	}
+
 
     /** Airplane Mode has been toggled. */
     public void airplaneModeToggled() {
@@ -401,6 +425,7 @@ public class ActiveModeWarden {
      */
     private void stopAllClientModeManagers() {
         Log.d(TAG, "Shutting down all client mode managers");
+        disableStation(0);
         for (ActiveModeManager manager : mActiveModeManagers) {
             if (!(manager instanceof ClientModeManager)) continue;
             ClientModeManager clientModeManager = (ClientModeManager) manager;
@@ -446,6 +471,7 @@ public class ActiveModeWarden {
      */
     private void shutdownWifi() {
         Log.d(TAG, "Shutting down all mode managers");
+        disableStation(0);
         for (ActiveModeManager manager : mActiveModeManagers) {
             manager.stop();
         }
@@ -624,6 +650,7 @@ public class ActiveModeWarden {
         static final int CMD_AP_START_FAILURE                       = BASE + 23;
         static final int CMD_UPDATE_AP_CAPABILITY                   = BASE + 24;
         static final int CMD_UPDATE_AP_CONFIG                       = BASE + 25;
+        static final int CMD_ADD_WIFI_SET                           = BASE + 31;
 
         private final EnabledState mEnabledState = new EnabledState();
         private final DisabledState mDisabledState = new DisabledState();
@@ -771,6 +798,7 @@ public class ActiveModeWarden {
                     case CMD_RECOVERY_RESTART_WIFI:
                     case CMD_RECOVERY_RESTART_WIFI_CONTINUE:
                     case CMD_DEFERRED_RECOVERY_RESTART_WIFI:
+                    case CMD_ADD_WIFI_SET:
                         break;
                     case CMD_RECOVERY_DISABLE_WIFI:
                         log("Recovery has been throttled, disable wifi");
@@ -910,6 +938,14 @@ public class ActiveModeWarden {
                             stopAllClientModeManagers();
                         }
                         break;
+                    case CMD_ADD_WIFI_SET:
+                        int staId = msg.arg1;
+                        int enable = msg.arg2;
+                        if (enable == 1)
+                            enableStation(staId);
+                        else
+                            disableStation(staId);
+                        break;
                     case CMD_SET_AP:
                         // note: CMD_SET_AP is handled/dropped in ECM mode - will not start here
                         // If request is to start dual sap, turn off sta.
@@ -992,6 +1028,128 @@ public class ActiveModeWarden {
                 }
                 return HANDLED;
             }
+        }
+    }
+    private class WifiCallback extends ModeCallback implements QtiClientModeManager.Listener {
+        @Override
+        public void onStateChanged(int staId, int newState) {
+            if (newState == WifiManager.WIFI_STATE_UNKNOWN
+                || newState == WifiManager.WIFI_STATE_DISABLED) {
+                mActiveModeManagers.remove(getActiveModeManager());
+            }
+            if (mQtiClientModeCallback != null) {
+                mQtiClientModeCallback.onStateChanged(staId, newState);
+            } else {
+                Log.d(TAG, "QtiClientModeCallback is null. Dropping onStateChanged event.");
+            }
+        }
+
+        @Override
+        public void onRssiChanged(int staId, int rssi) {
+            if (mQtiClientModeCallback != null) {
+                mQtiClientModeCallback.onRssiChanged(staId, rssi);
+            } else {
+                Log.d(TAG, "QtiClientModeCallback is null. Dropping onRssiChanged event.");
+            }
+        }
+
+        @Override
+        public void onLinkConfigurationChanged(int staId, LinkProperties lp) {
+            if (mQtiClientModeCallback != null) {
+                mQtiClientModeCallback.onLinkConfigurationChanged(staId, lp);
+            } else {
+                Log.d(TAG, "QtiClientModeCallback is null. Dropping onLinkConfigurationChanged event.");
+            }
+        }
+
+        @Override
+        public void onNetworkStateChanged(int staId, NetworkInfo netInfo) {
+            if (mQtiClientModeCallback != null) {
+                mQtiClientModeCallback.onNetworkStateChanged(staId, netInfo);
+            } else {
+                Log.d(TAG, "QtiClientModeCallback is null. Dropping onNetworkStateChanged event.");
+            }
+        }
+    }
+
+    private QtiClientModeManager getQtiClientModeManager(int staId) {
+        for (ActiveModeManager manager : mActiveModeManagers) {
+            if (!(manager instanceof QtiClientModeManager)) {
+                continue;
+            }
+            QtiClientModeManager qtiClientManager = (QtiClientModeManager) manager;
+            if (qtiClientManager != null) {
+                return qtiClientManager;
+            }
+        }
+        return null;
+    }
+
+    public void enableStation(int staId) {
+        mHandler.post(() -> {
+            Log.d(TAG, "[wifi" + staId +  "] Starting Wi-fi");
+            if (getQtiClientModeManager(staId) == null) {
+                WifiCallback callback = new WifiCallback();
+                ActiveModeManager manager =
+                    mWifiInjector.makeQtiClientModeManager(callback);
+                callback.setActiveModeManager(manager);
+                manager.start();
+                manager.setRole(ActiveModeManager.ROLE_CLIENT_SECONDARY);
+                mActiveModeManagers.add(manager);
+            } else {
+                Log.i(TAG, "[wifi" + staId +  "] is already started.");
+            }
+        });
+    }
+
+    public void disableStation(int staId) {
+        mHandler.post(() -> {
+            Log.d(TAG, "[wifi" + staId +  "] Disable Wi-fi");
+            if (staId == 0 /* disable all */) {
+                for (ActiveModeManager manager : mActiveModeManagers) {
+                    if (!(manager instanceof QtiClientModeManager)) {
+                        continue;
+                    }
+                    if (manager != null) {
+                        manager.stop();
+                        mActiveModeManagers.remove(manager);
+                    }
+                }
+            } else {
+                QtiClientModeManager manager = getQtiClientModeManager(staId);
+                if (manager != null) {
+                    manager.stop();
+                    mActiveModeManagers.remove(manager);
+                } else {
+                    Log.i(TAG, "[wifi" + staId +  "] is already stopped.");
+                }
+            }
+        });
+    }
+
+    public QtiClientModeImpl getQtiClientModeImpl(int staId) {
+        QtiClientModeManager manager = getQtiClientModeManager(staId);
+        if (manager != null) {
+            return manager.getClientModeImpl();
+        }
+        return null;
+    }
+
+    public AsyncChannel getQtiClientImplChannel(int staId) {
+        QtiClientModeManager manager = getQtiClientModeManager(staId);
+        if (manager != null) {
+            return manager.getClientImplChannel();
+        }
+        return null;
+    }
+
+    public void enableVerboseLogging(int verbose) {
+        for (ActiveModeManager manager : mActiveModeManagers) {
+            if (!(manager instanceof QtiClientModeManager)) {
+                continue;
+            }
+            QtiClientModeManager qtiClientManager = (QtiClientModeManager) manager;
+            qtiClientManager.getClientModeImpl().enableVerboseLogging(verbose);
         }
     }
 }

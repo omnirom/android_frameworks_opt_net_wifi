@@ -407,5 +407,12 @@ public class WifiSettingsConfigStore {
             // Shared general store.
             return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
         }
+
+        @Override
+        public @WifiConfigStore.StoreFileId int getStoreFileId(int staId) {
+            // Shared general store. 
+            // Return is independent of staId as Settings is not used for secondary.
+            return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
+        }
     }
 }
