@@ -7115,7 +7115,7 @@ public class ClientModeImpl extends StateMachine {
             if (mWifiInfo.is24GHz() &&
                     mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_5G))
                 filter5G = true;
-            else if (mWifiInfo.is5GHz() &&
+            else if ((mWifiInfo.is5GHz() || mWifiInfo.is6GHz()) &&
                         mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_2G))
                 filter2G = true;
         }
@@ -7161,7 +7161,7 @@ public class ClientModeImpl extends StateMachine {
 
         if (isConnected()
             && ((mWifiInfo.is24GHz() && mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_5G))
-            || (mWifiInfo.is5GHz() && mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_2G))))
+            || ((mWifiInfo.is5GHz() || mWifiInfo.is6GHz()) && mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_2G))))
             return true;
 
         return false;
