@@ -3628,7 +3628,6 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_ROAM_WATCHDOG_TIMER:
                 case WifiMonitor.DPP_EVENT:
                 case CMD_IP_REACHABILITY_SESSION_END:
-                case CMD_DO_DRIVER_CMD:
                     mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
@@ -3746,6 +3745,7 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_DPP_GET_URI:
                 case CMD_DPP_CONFIGURATOR_GET_KEY:
+                case CMD_DO_DRIVER_CMD:
                     replyToMessage(message, message.what, "Supplicant Not Started!!");
                     break;
                 case CMD_DPP_LISTEN_STOP:
