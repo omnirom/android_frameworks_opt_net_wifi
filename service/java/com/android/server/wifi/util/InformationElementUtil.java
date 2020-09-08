@@ -1324,9 +1324,9 @@ public class InformationElementUtil {
                 case ScanResult.KEY_MGMT_DPP:
                     return "DPP";
                 case ScanResult.KEY_MGMT_FILS_SHA256:
-                    return "FILS-SHA256";
+                    return "EAP-FILS-SHA256";
                 case ScanResult.KEY_MGMT_FILS_SHA384:
-                    return "FILS-SHA384";
+                    return "EAP-FILS-SHA384";
                 default:
                     return "?";
             }
