@@ -808,13 +808,19 @@ public class WifiNetworkSelector {
                         WifiCandidates.Key key = wifiCandidates.keyFromScanDetailAndConfig(
                                 scanDetail, config);
                         if (key != null) {
+                            double lastSelectionWeight;
                             boolean metered = isEverMetered(config, wifiInfo, scanDetail);
                             // TODO(b/151981920) Saved passpoint candidates are marked ephemeral
+                            if (currentNetwork != null && config.isAutoConnectionEnabled) {
+                                lastSelectionWeight = calculateLastSelectionWeight(currentNetwork.networkId);
+                            } else {
+                                lastSelectionWeight = calculateLastSelectionWeight(config.networkId);
+                            }
                             boolean added = wifiCandidates.add(key, config,
                                     registeredNominator.getId(),
                                     scanDetail.getScanResult().level,
                                     scanDetail.getScanResult().frequency,
-                                    calculateLastSelectionWeight(config.networkId),
+                                    lastSelectionWeight,
                                     metered,
                                     isFromCarrierOrPrivilegedApp(config),
                                     predictThroughput(scanDetail));
@@ -1072,6 +1078,11 @@ public class WifiNetworkSelector {
                 && !config.fromWifiNetworkSpecifier
                 && !config.fromWifiNetworkSuggestion) {
             // From ScoredNetworkNominator
+            return true;
+        }
+        if (config.isEphemeral()
+                && config.isAutoConnectionEnabled) {
+            // From Auto connection WNS
             return true;
         }
         return false;
