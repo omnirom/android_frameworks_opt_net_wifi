@@ -30,6 +30,7 @@ import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ISuggestionConnectionStatusListener;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ITxPacketCountListener;
+import android.net.wifi.IWifiNotificationCallback;
 import android.net.wifi.IWifiConnectedNetworkScorer;
 import android.net.wifi.IWifiManager;
 import android.net.wifi.ScanResult;
@@ -695,6 +696,36 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
+    public boolean isSoftApOcvFeatureEnabled() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSoftApOcvFeatureSupported() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void enableSoftApOcvFeature(boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSoftApBeaconProtFeatureEnabled() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSoftApBeaconProtFeatureSupported() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void enableSoftApBeaconProtFeature(boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public String getCapabilities(String capaType) {
         throw new UnsupportedOperationException();
     }
@@ -760,6 +791,38 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
     @Override
     public String doDriverCmd(String command) {
+        throw new UnsupportedOperationException();
+    }
+
+    /* QTI Vendor Dual STA support APIs */
+
+    @Override
+    public boolean setWifiEnabled2(String packageName, int staId, boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean disconnect2(int staId, String packageName) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public WifiInfo getConnectionInfo2(int staId, String callingPackage, String callingFeatureId) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ParceledListSlice getConfiguredNetworks2(int staId, String packageName, String callingFeatureId) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void registerForWifiNotification(int staId, IBinder binder, IWifiNotificationCallback callback, int callbackIdentifier) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void unregisterForWifiNotification(int staId, int callbackIdentifier) {
         throw new UnsupportedOperationException();
     }
 }

@@ -70,6 +70,8 @@ public class HostapdHal {
 
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
+    private boolean mSoftApOcvFeatureEnabled = false;
+    private boolean mSoftApBeaconProtFeatureEnabled = false;
     private final Context mContext;
     private final Handler mEventHandler;
     private String mCountryCode = null;
@@ -152,6 +154,28 @@ public class HostapdHal {
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mHostapdDeathRecipient = new HostapdDeathRecipient();
         mHostapdVendorDeathRecipient = new HostapdVendorDeathRecipient();
+    }
+
+    /**
+     * Enable/Disable SoftAp OCV Feature.
+     *
+     * @param enable true to enable, false to disable.
+     */
+    void enableSoftApOcvFeature(boolean enable) {
+        synchronized (mLock) {
+            mSoftApOcvFeatureEnabled = enable;
+        }
+    }
+
+    /**
+     * Enable/Disable SoftAp Beacon Protection Feature.
+     *
+     * @param enable true to enable, false to disable.
+     */
+    void enableSoftApBeaconProtFeature(boolean enable) {
+        synchronized (mLock) {
+            mSoftApBeaconProtFeatureEnabled = enable;
+        }
     }
 
     /**
@@ -1338,6 +1362,8 @@ public class HostapdHal {
                         vendorNetworkParams1_2.V1_0 = nwParamsV1_2.V1_0;
                         vendorNetworkParams1_2.passphrase = nwParamsV1_2.passphrase;
                         vendorNetworkParams1_2.vendorEncryptionType = getVendorEncryptionType(config);
+                        vendorNetworkParams1_2.enableOCV = mSoftApOcvFeatureEnabled;
+                        vendorNetworkParams1_2.enableBeaconProtection = mSoftApBeaconProtFeatureEnabled;
 
                         vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor iHostapdVendorV1_2 =
                             getHostapdVendorMockableV1_2();
