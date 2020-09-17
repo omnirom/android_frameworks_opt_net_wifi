@@ -184,6 +184,11 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
+    public void allowConnectOnPartialScanResults(boolean enable) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void allowAutojoin(int netId, boolean choice) {
         throw new UnsupportedOperationException();
     }
