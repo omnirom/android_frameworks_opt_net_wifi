@@ -2883,10 +2883,6 @@ public class ClientModeImpl extends StateMachine {
      * using the interface, stopping DHCP & disabling interface
      */
     private void handleNetworkDisconnect() {
-        handleNetworkDisconnect(false);
-    }
-
-    private void handleNetworkDisconnect(boolean connectionInProgress) {
         if (mVerboseLoggingEnabled) {
             log("handleNetworkDisconnect:"
                     + " stack:" + Thread.currentThread().getStackTrace()[2].getMethodName()
@@ -4502,24 +4498,9 @@ public class ClientModeImpl extends StateMachine {
                     // idempotent commands are executed twice (stopping Dhcp, enabling the SPS mode
                     // at the chip etc...
                     if (mVerboseLoggingEnabled) log("ConnectModeState: Network connection lost ");
-                    mLastNetworkId = message.arg1;
-                    mWifiConfigManager.clearRecentFailureReason(mLastNetworkId);
-                    mLastBssid = (String) message.obj;
-                    // TODO: This check should not be needed after WifiStateMachinePrime refactor.
-                    // Currently, the last connected network configuration is left in
-                    // wpa_supplicant, this may result in wpa_supplicant initiating connection
-                    // to it after a config store reload. Hence the old network Id lookups may not
-                    // work, so disconnect the network and let network selector reselect a new
-                    // network.
-
-                    ScanResult scanResult = getScanResultForBssid(mLastBssid);
-                    boolean mConnectionInProgress =
-                        (mTargetWifiConfiguration != null) && (scanResult != null) &&
-                        !mTargetWifiConfiguration.SSID.equals("\""+scanResult.SSID+"\"");
                     clearNetworkCachedDataIfNeeded(getTargetWifiConfiguration(), message.arg2);
-                    handleNetworkDisconnect(mConnectionInProgress);
-                    if (!mConnectionInProgress)
-                        transitionTo(mDisconnectedState);
+                    handleNetworkDisconnect();
+                    transitionTo(mDisconnectedState);
                     break;
                 case CMD_QUERY_OSU_ICON:
                     mPasspointManager.queryPasspointIcon(
