@@ -106,13 +106,13 @@ public class WifiSettingsConfigStore {
      * Enable/disbale Wi-Fi whitelist network roaming
      */
     public static final Key<Boolean> WIFI_WHITELIST_ROAMING_ENABLED =
-            new Key<>("wifi_whitelist_roaming_enabled", false);
+            new Key<>("wifi_whitelist_roaming_enabled", true);
 
     /**
      * Enable/disble Wi=Fi new network auto connection attempts
      */
     public static final Key<Boolean> WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED =
-            new Key<>("wifi_new_network_auto_connection_enabled", false);
+            new Key<>("wifi_new_network_auto_connection_enabled", true);
 
    /******** Wifi shared pref keys ***************/
 
