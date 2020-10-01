@@ -194,14 +194,14 @@ public class WifiCandidates {
             this.mFrequency = frequency;
             this.mPerBssid = perBssid;
             this.mLastSelectionWeight = lastSelectionWeight;
-            this.mIsCurrentNetwork = isCurrentNetwork;
+            this.mIsCurrentNetwork = isCurrentNetwork || config.isAutoConnectionEnabled;
             this.mIsCurrentBssid = isCurrentBssid;
             this.mIsMetered = isMetered;
             this.mHasNoInternetAccess = config.hasNoInternetAccess();
             this.mIsNoInternetAccessExpected = config.isNoInternetAccessExpected();
             this.mIsOpenNetwork = WifiConfigurationUtil.isConfigForOpenNetwork(config);
             this.mPasspoint = config.isPasspoint();
-            this.mEphemeral = config.isEphemeral();
+            this.mEphemeral = config.isEphemeral() && !config.isAutoConnectionEnabled;
             this.mTrusted = config.trusted;
             this.mCarrierOrPrivileged = isCarrierOrPrivileged;
             this.mPredictedThroughputMbps = predictedThroughputMbps;

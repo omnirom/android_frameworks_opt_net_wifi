@@ -28,6 +28,8 @@ import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.util.List;
 
+import static android.net.wifi.WifiManager.STA_PRIMARY;
+
 /**
  * This class is the WifiNetworkSelector.NetworkNominator implementation for
  * saved networks.
@@ -89,6 +91,10 @@ public class SavedNetworkNominator implements WifiNetworkSelector.NetworkNominat
                     WifiConfiguration currentNetwork, String currentBssid, boolean connected,
                     boolean untrustedNetworkAllowed,
                     @NonNull OnConnectableListener onConnectableListener) {
+	if (currentNetwork != null && currentNetwork.staId == STA_PRIMARY) {
+            mWifiConfigManager.addOrUpdateAutoConnectNetworks(currentNetwork.networkId,
+                                                              currentBssid, scanDetails);
+	}
         findMatchedSavedNetworks(scanDetails, onConnectableListener);
         findMatchedPasspointNetworks(scanDetails, onConnectableListener);
     }
@@ -113,7 +119,8 @@ public class SavedNetworkNominator implements WifiNetworkSelector.NetworkNominat
              * {@link PasspointNetworkNominator} and {@link ScoredNetworkNominator}
              * respectively.
              */
-            if (network.isPasspoint() || network.isEphemeral()) {
+            if (network.isPasspoint()
+                   || (network.isEphemeral() && !network.isAutoConnectionEnabled)) {
                 continue;
             }
 
