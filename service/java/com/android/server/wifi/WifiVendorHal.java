@@ -1332,6 +1332,28 @@ public class WifiVendorHal {
     }
 
     /**
+     * Returns true if Hal version supports setMacAddress, otherwise false.
+     *
+     * @param ifaceName Name of the interface
+     */
+    public boolean isSetMacAddressSupported(@NonNull String ifaceName) {
+        synchronized (sLock) {
+            android.hardware.wifi.V1_2.IWifiStaIface sta12 =
+                    getWifiStaIfaceForV1_2Mockable(ifaceName);
+            if (sta12 != null) {
+                return true;
+            }
+
+            android.hardware.wifi.V1_4.IWifiApIface ap14 =
+                    getWifiApIfaceForV1_4Mockable(ifaceName);
+            if (ap14 != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Get factory MAC address of the given interface
      *
      * @param ifaceName Name of the interface
@@ -2627,6 +2649,16 @@ public class WifiVendorHal {
         }
     }
 
+    /**
+     * Returns whether Dual STA is supported or not.
+     */
+    public boolean isDualStaSupported() {
+        synchronized (sLock) {
+            return mHalDeviceManager.canSupportIfaceCombo(new SparseArray<Integer>() {{
+                    put(IfaceType.STA, 2);
+                }});
+        }
+    }
     // This creates a blob of IE elements from the array received.
     // TODO: This ugly conversion can be removed if we put IE elements in ScanResult.
     private static byte[] hidlIeArrayToFrameworkIeBlob(ArrayList<WifiInformationElement> ies) {

@@ -151,6 +151,12 @@ public class NetworkSuggestionStoreData implements WifiConfigStore.StoreData {
         return WifiConfigStore.STORE_FILE_USER_NETWORK_SUGGESTIONS;
     }
 
+    @Override
+    public @WifiConfigStore.StoreFileId int getStoreFileId(int staId) {
+        //Network Suggestion is not applicable for secodary.
+        return WifiConfigStore.STORE_FILE_USER_NETWORK_SUGGESTIONS;
+    }
+
     /**
      * Serialize the map of package name to network suggestions to an output stream in XML format.
      *

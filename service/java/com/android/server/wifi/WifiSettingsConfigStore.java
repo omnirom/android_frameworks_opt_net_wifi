@@ -50,12 +50,26 @@ public class WifiSettingsConfigStore {
     // List of all allowed keys.
     private static final ArrayList<Key> sKeys = new ArrayList<>();
 
+    /**
+     * Setting to enable Beacon Protection in SAP; disabled by default, and setting to 1
+     * will enable it. In the future, additional values may be supported.
+     */
+    public static final Key<Boolean> SOFTAP_BEACON_PROTECTION_ENABLED =
+            new Key<>("softap_beacon_protection_enabled", false);
+
     /******** Wifi shared pref keys ***************/
     /**
      * Indicate whether factory reset request is pending.
      */
     public static final Key<Boolean> WIFI_P2P_PENDING_FACTORY_RESET =
             new Key<>("wifi_p2p_pending_factory_reset", false);
+
+    /**
+     * Setting to enable OCV in SAP; disabled by default, and setting to 1
+     * will enable it. In the future, additional values may be supported.
+     */
+    public static final Key<Boolean> SOFTAP_OCV_ENABLED =
+            new Key<>("softap_ocv_enabled", false);
 
     /**
      * Allow scans to be enabled even wifi is turned off.
@@ -391,6 +405,13 @@ public class WifiSettingsConfigStore {
         @Override
         public @WifiConfigStore.StoreFileId int getStoreFileId() {
             // Shared general store.
+            return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
+        }
+
+        @Override
+        public @WifiConfigStore.StoreFileId int getStoreFileId(int staId) {
+            // Shared general store. 
+            // Return is independent of staId as Settings is not used for secondary.
             return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
         }
     }
