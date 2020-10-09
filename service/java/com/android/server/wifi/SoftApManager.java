@@ -457,7 +457,7 @@ public class SoftApManager implements ActiveModeManager {
      * This is usually done just before stopSoftAp().
      */
     private void disconnectAllClients() {
-        for (WifiClient client : mConnectedClients) {
+/*        for (WifiClient client : mConnectedClients) {
             if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
                 if (! mWifiNative.forceClientDisconnect(mdualApInterfaces[0], client.getMacAddress(),
                             SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED))
@@ -467,6 +467,19 @@ public class SoftApManager implements ActiveModeManager {
                 mWifiNative.forceClientDisconnect(mApInterfaceName, client.getMacAddress(),
                         SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
             }
+        }
+*/
+        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+            mWifiNative.forceClientDisconnect(mdualApInterfaces[0],
+                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            mWifiNative.forceClientDisconnect(mdualApInterfaces[1],
+                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+        } else {
+            mWifiNative.forceClientDisconnect(mApInterfaceName,
+                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
         }
     }
 
