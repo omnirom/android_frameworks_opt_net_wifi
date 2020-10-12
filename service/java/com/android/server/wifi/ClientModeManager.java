@@ -141,6 +141,8 @@ public class ClientModeManager implements ActiveModeManager {
         private long mDeferringStartTimeMillis = 0;
         private NetworkRequest mImsRequest = null;
         private ConnectivityManager mConnectivityManager = null;
+        private boolean mIsImsNetworkLost = false;
+        private boolean mIsImsNetworkUnregistered = false;
 
         private RegistrationManager.RegistrationCallback mImsRegistrationCallback =
                 new RegistrationManager.RegistrationCallback() {
@@ -157,7 +159,8 @@ public class ClientModeManager implements ActiveModeManager {
                     @Override
                     public void onUnregistered(ImsReasonInfo imsReasonInfo) {
                         Log.d(TAG, "on IMS unregistered");
-                        // Wait for onLost in NetworkCallback
+                        mIsImsNetworkUnregistered = true;
+                        checkAndContinueToStopWifi();
                     }
                 };
 
@@ -184,7 +187,8 @@ public class ClientModeManager implements ActiveModeManager {
                         int delay = mContext.getResources()
                                 .getInteger(R.integer.config_wifiDelayDisconnectOnImsLostMs);
                         if (delay == 0 || !postDelayed(mRunnable, delay)) {
-                            continueToStopWifi();
+                            mIsImsNetworkLost = true;
+                            checkAndContinueToStopWifi();
                         }
                     }
                 }
@@ -239,6 +243,11 @@ public class ClientModeManager implements ActiveModeManager {
                                                          new Handler(mLooper));
         }
 
+        private void checkAndContinueToStopWifi() {
+            if (mIsImsNetworkLost && mIsImsNetworkUnregistered)
+                continueToStopWifi();
+        }
+
         private void continueToStopWifi() {
             Log.d(TAG, "The target role " + mTargetRole);
 
@@ -280,6 +289,8 @@ public class ClientModeManager implements ActiveModeManager {
             }
 
             mIsDeferring = false;
+            mIsImsNetworkLost = false;
+            mIsImsNetworkUnregistered = false;
         }
     }
 
