@@ -4036,7 +4036,7 @@ public class WifiNative {
         /* one of band is connected in 2.4 GHz */
         public static final int BAND_2G = 1;
 
-        /* one of band is connected in 5 GHz */
+        /* one of band is connected in 5 GHz or 6 GHz */
         public static final int BAND_5G = 2;
     }
 
