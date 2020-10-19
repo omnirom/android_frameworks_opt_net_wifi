@@ -431,6 +431,10 @@ public class WifiVendorHal {
         }
     }
 
+    private Handler getHandlerForStaSapConcurrency() {
+        return (isStaApConcurrencySupported()) ? mHalEventHandler : null;
+    }
+
     /**
      * Create a STA iface using {@link HalDeviceManager}.
      *
@@ -440,7 +444,8 @@ public class WifiVendorHal {
     public String createStaIface(InterfaceDestroyedListener destroyedListener) {
         synchronized (sLock) {
             IWifiStaIface iface = mHalDeviceManager.createStaIface(
-                    new StaInterfaceDestroyedListenerInternal(destroyedListener), null);
+                    new StaInterfaceDestroyedListenerInternal(destroyedListener),
+                    getHandlerForStaSapConcurrency());
             if (iface == null) {
                 mLog.err("Failed to create STA iface").flush();
                 return stringResult(null);
@@ -518,7 +523,8 @@ public class WifiVendorHal {
     public String createApIface(InterfaceDestroyedListener destroyedListener) {
         synchronized (sLock) {
             IWifiApIface iface = mHalDeviceManager.createApIface(
-                    new ApInterfaceDestroyedListenerInternal(destroyedListener), null);
+                    new ApInterfaceDestroyedListenerInternal(destroyedListener),
+                    getHandlerForStaSapConcurrency());
             if (iface == null) {
                 mLog.err("Failed to create AP iface").flush();
                 return stringResult(null);
