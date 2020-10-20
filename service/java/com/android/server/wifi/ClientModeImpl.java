@@ -3779,6 +3779,10 @@ public class ClientModeImpl extends StateMachine {
         }
     }
 
+    public void registerModeListener(ClientModeManager.Listener clientModeImplListener) {
+        mClientModeCallback = clientModeImplListener;
+    }
+
     /**
      * Helper method to start other services and get state ready for client mode
      */
@@ -3998,6 +4002,10 @@ public class ClientModeImpl extends StateMachine {
             mWifiScoreCard.noteSupplicantStateChanged(mWifiInfo);
             mWifiHealthMonitor.setWifiEnabled(true);
             mWifiDataStall.init();
+
+            if (mClientModeCallback != null) {
+                 mClientModeCallback.onStarted();
+            }
         }
 
         @Override

@@ -416,10 +416,25 @@ public class ClientModeManager implements ActiveModeManager {
         public static final int CMD_INTERFACE_DESTROYED = 4;
         public static final int CMD_INTERFACE_DOWN = 5;
         public static final int CMD_SWITCH_TO_SCAN_ONLY_MODE_CONTINUE = 6;
+        public static final int CMD_CONNECT_MODE_READY = 10;
+
         private final State mIdleState = new IdleState();
         private final State mStartedState = new StartedState();
         private final State mScanOnlyModeState = new ScanOnlyModeState();
         private final State mConnectModeState = new ConnectModeState();
+
+        private final Listener mClientModeImplListener = new Listener() {
+            @Override
+            public void onStarted() {
+                sendMessage(CMD_CONNECT_MODE_READY);
+            }
+
+            @Override
+            public void onStopped() {}
+
+            @Override
+            public void onStartFailure() {};
+        };
 
         private final InterfaceCallback mWifiNativeInterfaceCallback = new InterfaceCallback() {
             @Override
@@ -625,19 +640,23 @@ public class ClientModeManager implements ActiveModeManager {
             @Override
             public void enter() {
                 Log.d(TAG, "entering ConnectModeState");
+                mClientModeImpl.registerModeListener(mClientModeImplListener);
                 mClientModeImpl.setOperationalMode(ClientModeImpl.CONNECT_MODE,
                         mClientInterfaceName);
-                mModeListener.onStarted();
-                updateConnectModeState(WifiManager.WIFI_STATE_ENABLED,
-                        WifiManager.WIFI_STATE_ENABLING);
-
-                // Inform sar manager that wifi is Enabled
-                mSarManager.setClientWifiState(WifiManager.WIFI_STATE_ENABLED);
             }
 
             @Override
             public boolean processMessage(Message message) {
                 switch (message.what) {
+                    case CMD_CONNECT_MODE_READY:
+                        Log.d(TAG, "ConnectMode is ready");
+                        mModeListener.onStarted();
+                        updateConnectModeState(WifiManager.WIFI_STATE_ENABLED,
+                                WifiManager.WIFI_STATE_ENABLING);
+
+                        // Inform sar manager that wifi is Enabled
+                        mSarManager.setClientWifiState(WifiManager.WIFI_STATE_ENABLED);
+                        break;
                     case CMD_SWITCH_TO_CONNECT_MODE:
                         int newRole = message.arg1;
                         // Already in connect mode, only switching the connectivity roles.
