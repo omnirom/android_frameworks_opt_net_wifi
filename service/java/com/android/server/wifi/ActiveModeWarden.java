@@ -742,8 +742,7 @@ public class ActiveModeWarden {
 
             private void exitEmergencyMode() {
                 if (shouldEnableSta()) {
-                    startClientModeManager();
-                    transitionTo(mEnabledState);
+                    sendMessage(obtainMessage(CMD_WIFI_TOGGLED));
                 } else {
                     transitionTo(mDisabledState);
                 }
