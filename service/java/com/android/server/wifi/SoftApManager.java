@@ -448,29 +448,23 @@ public class SoftApManager implements ActiveModeManager {
      * This is usually done just before stopSoftAp().
      */
     private void disconnectAllClients() {
-/*        for (WifiClient client : mConnectedClients) {
-            if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
-                if (! mWifiNative.forceClientDisconnect(mdualApInterfaces[0], client.getMacAddress(),
-                            SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED))
-                    mWifiNative.forceClientDisconnect(mdualApInterfaces[1], client.getMacAddress(),
-                            SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
-            } else {
-                mWifiNative.forceClientDisconnect(mApInterfaceName, client.getMacAddress(),
+        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+            if(!TextUtils.isEmpty(mdualApInterfaces[0])) {
+                mWifiNative.forceClientDisconnect(mdualApInterfaces[0],
+                        MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
                         SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
             }
-        }
-*/
-        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
-            mWifiNative.forceClientDisconnect(mdualApInterfaces[0],
-                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
-                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
-            mWifiNative.forceClientDisconnect(mdualApInterfaces[1],
-                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
-                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            if(!TextUtils.isEmpty(mdualApInterfaces[1])) {
+                mWifiNative.forceClientDisconnect(mdualApInterfaces[1],
+                        MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                        SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            }
         } else {
-            mWifiNative.forceClientDisconnect(mApInterfaceName,
-                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
-                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            if(!TextUtils.isEmpty(mApInterfaceName)) {
+                mWifiNative.forceClientDisconnect(mApInterfaceName,
+                        MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                        SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            }
         }
     }
 
