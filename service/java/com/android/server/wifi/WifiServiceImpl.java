@@ -1079,9 +1079,10 @@ public class WifiServiceImpl extends BaseWifiService {
         SoftApConfiguration softApConfig = apConfig.getSoftApConfiguration();
 
         if (softApConfig == null && TextUtils.isEmpty(mCountryCode.getCountryCode())) {
-            Log.d(TAG, "Starting softap without country code. Fallback to 2G band");
+            Log.d(TAG, "Starting softap without country code. Fallback to 2G band!");
             softApConfig = new SoftApConfiguration.Builder(mWifiApConfigStore.getApConfiguration())
                 .setBand(SoftApConfiguration.BAND_2GHZ).build();
+            mWifiApConfigStore.setApConfiguration(softApConfig);
         }
 
         setDualSapMode(softApConfig);
