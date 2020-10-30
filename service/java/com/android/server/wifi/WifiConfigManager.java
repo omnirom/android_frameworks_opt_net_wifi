@@ -17,6 +17,8 @@
 package com.android.server.wifi;
 
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLE_REASON_INFOS;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_WHITELIST_ROAMING_ENABLED;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED;
 
 import android.Manifest;
 import android.annotation.NonNull;
@@ -56,6 +58,7 @@ import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.MissingCounterTimerLockList;
+import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 import com.android.wifi.resources.R;
@@ -1080,6 +1083,9 @@ public class WifiConfigManager {
         if (externalConfig.dppCsign != null) {
             internalConfig.dppCsign = externalConfig.dppCsign;
         }
+
+        // Copy auto connection enabled flag
+        internalConfig.isAutoConnectionEnabled = externalConfig.isAutoConnectionEnabled;
     }
 
     /**
@@ -2362,9 +2368,14 @@ public class WifiConfigManager {
         // Add the scan detail to this network's scan detail cache.
         scanDetailCache.put(scanDetail);
 
-        // Since we added a scan result to this configuration, re-attempt linking.
-        // TODO: Do we really need to do this after every scan result?
-        attemptNetworkLinking(config);
+        // Disable linking networks here when whitelist roaming feature enabled to make
+        // sure whitelist networks will be linked only when STA is in connected and
+        // internet access validated state.
+        if (!mWifiInjector.getSettingsConfigStore().get(WIFI_WHITELIST_ROAMING_ENABLED)) {
+            // Since we added a scan result to this configuration, re-attempt linking.
+            // TODO: Do we really need to do this after every scan result?
+            attemptNetworkLinking(config);
+        }
     }
 
     /**
@@ -2532,7 +2543,9 @@ public class WifiConfigManager {
                 }
                 return true;
             }
-        } else {
+            // Don't link based on BSSID partial match when whitelist roaming feature enabled
+            // to make sure networks with different default gateways won't be linked.
+        } else if (!mWifiInjector.getSettingsConfigStore().get(WIFI_WHITELIST_ROAMING_ENABLED)) {
             // We do not know BOTH default gateways hence we will try to link
             // hoping that WifiConfigurations are indeed behind the same gateway.
             // once both WifiConfiguration have been tried and thus once both default gateways
@@ -2629,6 +2642,9 @@ public class WifiConfigManager {
                 continue;
             }
             if (linkConfig.ephemeral) {
+                continue;
+            }
+            if (!linkConfig.getNetworkSelectionStatus().isNetworkEnabled()) {
                 continue;
             }
             // Network Selector will be allowed to dynamically jump from a linked configuration
@@ -3338,5 +3354,211 @@ public class WifiConfigManager {
 
     public Comparator<WifiConfiguration> getScanListComparator() {
         return mScanListComparator;
+    }
+
+    /**
+     * Retrieves the configured network corresponding to the provided configKey
+     * without any masking.
+     *
+     * WARNING: Don't use this to pass network configurations except in the wifi stack, when
+     * there is a need for passwords and randomized MAC address.
+     *
+     * @param configKey configKey of the requested network.
+     * @return Copy of WifiConfiguration object if found, null otherwise.
+     */
+    public WifiConfiguration getConfiguredNetworkWithoutMasking(String configKey) {
+        WifiConfiguration config = getInternalConfiguredNetwork(configKey);
+        if (config == null) {
+            return null;
+        }
+        return new WifiConfiguration(config);
+    }
+
+    /**
+     * This method runs through all the saved networks and checks if the provided network can be
+     * linked with any of them.
+     *
+     * @param networkId networkId corresponding to the network that needs to be
+     *               checked for potential links.
+     */
+    public HashMap<String, Integer> updateAndGetLinkedConfiguration(int networkId) {
+        if (networkId == WifiConfiguration.INVALID_NETWORK_ID) {
+            return null;
+        }
+
+        WifiConfiguration internalConfig = mConfiguredNetworks.getForCurrentUser(networkId);
+        if (internalConfig == null) {
+            Log.e(TAG, "Cannot find network with networkId " + networkId);
+            return null;
+        }
+
+        internalConfig.linkedConfigurations = new HashMap<>();
+        attemptNetworkLinking(internalConfig);
+
+        return new HashMap<String, Integer>(internalConfig.linkedConfigurations);
+    }
+
+    private String getLowerCaseSsidPrefix(String ssid, String suffix) {
+         if (ssid == null || suffix == null) {
+             return null;
+         }
+
+         String ssidLower = ssid.toLowerCase();
+         String suffixLower = suffix.toLowerCase();
+         int suffixIndex = ssidLower.indexOf(suffixLower);
+         if (suffixIndex < 1) {
+             return null;
+         }
+
+         return ssidLower.substring(0, suffixIndex);
+    }
+
+    private boolean isQualifiedForNetworkLinking(WifiConfiguration config, String currentBssid) {
+        if (config == null || config.ephemeral)
+            return false;
+
+        // config AKM should be PSK
+        if (!WifiConfigurationUtil.isConfigForPskNetwork(config))
+            return false;
+
+
+        // SSID should contain "2g"/"2G" with valid prefix
+        if (getLowerCaseSsidPrefix(config.getPrintableSsid(), "2g") == null) {
+            return false;
+        }
+
+        // no.of bssids of the SSID in scan cache should be less than configured limit
+        ScanDetailCache scanDetailCache = getScanDetailCacheForNetwork(config.networkId);
+        if (scanDetailCache == null || scanDetailCache.size() == 0 ||
+            scanDetailCache.size() > LINK_CONFIGURATION_MAX_SCAN_CACHE_ENTRIES) {
+            return false;
+        }
+
+        // current BSSID shouldn't be 5G network
+        if (currentBssid != null) {
+            ScanDetail scanDetail = scanDetailCache.getScanDetail(currentBssid);
+            if (scanDetail != null) {
+                ScanResult result = scanDetail.getScanResult();
+                if (result.is5GHz())
+                    return false;
+            }
+        }
+
+        // no 5Ghz bssid should present in scan cache
+        for (ScanDetail scanDetail : scanDetailCache.values()) {
+            ScanResult result = scanDetail.getScanResult();
+            if (result.is5GHz())
+                return false;
+        }
+
+        return true;
+    }
+
+    public void addOrUpdateAutoConnectNetworks(int networkId, String currentBssid,
+                    List<ScanDetail> scanDetails) {
+        if (!mWifiInjector.getSettingsConfigStore().get(WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED)) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "Auto connecting new networks disabled");
+            }
+            return;
+        }
+
+        // clear auto connection enabled flag for all netwroks
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+            config.isAutoConnectionEnabled = false;
+        }
+
+        WifiConfiguration currentConfig = getInternalConfiguredNetwork(networkId);
+        if (currentConfig == null || currentBssid == null || scanDetails == null
+            || !isQualifiedForNetworkLinking(currentConfig, currentBssid)) {
+            return;
+        }
+
+        String ssid2gPrefix = getLowerCaseSsidPrefix(currentConfig.getPrintableSsid(), "2g");
+        Log.i(TAG, "ssid2gPrefix = " + ssid2gPrefix);
+
+        for (ScanDetail scanDetail : scanDetails) {
+            ScanResult scanResult = scanDetail.getScanResult();
+            if (scanResult.is24GHz() || !ScanResultUtil.isScanResultForPskNetwork(scanResult))
+                continue;
+
+            if (!currentBssid.regionMatches(true, 0, scanResult.BSSID, 0,
+                     LINK_CONFIGURATION_BSSID_MATCH_LENGTH))
+                continue;
+
+             // SSID should contain "5g"/"5G" with valid prefix
+            String ssid5gPrefix = getLowerCaseSsidPrefix(scanResult.SSID, "5g");
+            Log.i(TAG, "ssid5gPrefix: " + ssid5gPrefix);
+            if(ssid5gPrefix == null || !ssid5gPrefix.equals(ssid2gPrefix)) {
+                continue;
+            }
+
+            WifiConfiguration config = getConfiguredNetworkForScanDetail(scanDetail);
+            if (config != null) {
+                if (config.ephemeral && config.getNetworkSelectionStatus().isNetworkEnabled()) {
+                    config.isAutoConnectionEnabled = true;
+                }
+                continue;
+            }
+
+            WifiConfiguration ephemeralConfig =
+                     ScanResultUtil.createNetworkFromScanResult(scanResult);
+
+            ephemeralConfig.staId = currentConfig.staId;
+            ephemeralConfig.ephemeral = true;
+            ephemeralConfig.isAutoConnectionEnabled = true;
+            ephemeralConfig.creatorUid = currentConfig.creatorUid;
+            ephemeralConfig.creatorName = currentConfig.creatorName;
+            ephemeralConfig.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
+            ephemeralConfig.requirePmf = false;
+            ephemeralConfig.preSharedKey = currentConfig.preSharedKey;
+            ephemeralConfig.noInternetAccessExpected = currentConfig.noInternetAccessExpected;
+            ephemeralConfig.setIpConfiguration(new IpConfiguration(currentConfig.getIpConfiguration()));
+            NetworkUpdateResult result = addOrUpdateNetwork(ephemeralConfig, currentConfig.creatorUid);
+            if (!result.isSuccess()) {
+                Log.e(TAG, "Failed to add ephemeral network" + ephemeralConfig.getKey());
+                continue;
+            }
+            if (!updateNetworkSelectionStatus(result.getNetworkId(),
+                WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLED)) {
+                Log.e(TAG, "Failed to make ephemeral network "
+                                + ephemeralConfig.getKey() + " selectable");
+                continue;
+            }
+
+            WifiConfiguration internalConfig = getInternalConfiguredNetwork(result.getNetworkId());
+
+            if (internalConfig == null) {
+                Log.e(TAG, "Failed to fetch configured ephemeral network "
+                                + ephemeralConfig.getKey());
+                continue;
+            }
+
+            Log.i(TAG, "added ephemeral network " + internalConfig.getKey()
+                        + " to attempt auto connection with credentials of " + currentConfig.getKey());
+        }
+    }
+
+    public boolean saveAutoConnectedNewNetwork(int networkId) {
+         WifiConfiguration internalConfig = getInternalConfiguredNetwork(networkId);
+        if (internalConfig == null || !internalConfig.ephemeral
+                    || !internalConfig.isAutoConnectionEnabled) {
+            if (mVerboseLoggingEnabled) {
+                Log.v(TAG, "Auto connect network not found!");
+            }
+            return false;
+        }
+
+        internalConfig.ephemeral = false;
+        internalConfig.isAutoConnectionEnabled = false;
+
+        saveToStore(true);
+        sendConfiguredNetworkChangedBroadcast(WifiManager.CHANGE_REASON_ADDED);
+        for (OnNetworkUpdateListener listener : mListeners) {
+            listener.onNetworkAdded(
+                    createExternalWifiConfiguration(internalConfig, true, Process.WIFI_UID));
+        }
+
+        return true;
     }
 }

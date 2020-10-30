@@ -630,4 +630,58 @@ public class BssidBlocklistMonitor {
             return sb.toString();
         }
     }
+
+    /**
+     * Sends the Blocklisted BSSIDs and Whitelisted SSIDs belonging to the input SSID
+     * down to the firmware
+     * to those BSSIDs.
+     * @param ssid
+     * @param ssidWhitelist
+     */
+    public void updateFirmwareRoamingConfiguration(@NonNull String ssid, @NonNull ArrayList<String> ssidWhitelist) {
+        if (!mConnectivityHelper.isFirmwareRoamingSupported()) {
+            return;
+        }
+        ArrayList<String> bssidBlocklist = updateAndGetBssidBlocklistInternal()
+                .filter(entry -> ssid.equals(entry.ssid))
+                .sorted((o1, o2) -> (int) (o2.blocklistEndTimeMs - o1.blocklistEndTimeMs))
+                .map(entry -> entry.bssid)
+                .collect(Collectors.toCollection(ArrayList::new));
+        int fwMaxBlocklistSize = mConnectivityHelper.getMaxNumBlacklistBssid();
+        if (fwMaxBlocklistSize <= 0) {
+            Log.e(TAG, "Invalid max BSSID blocklist size:  " + fwMaxBlocklistSize);
+            return;
+        }
+        // Having the blocklist size exceeding firmware max limit is unlikely because we have
+        // already flitered based on SSID. But just in case this happens, we are prioritizing
+        // sending down BSSIDs blocked for the longest time.
+        if (bssidBlocklist.size() > fwMaxBlocklistSize) {
+            bssidBlocklist = new ArrayList<String>(bssidBlocklist.subList(0,
+                    fwMaxBlocklistSize));
+        }
+
+        int maxWhitelistSize = mConnectivityHelper.getMaxNumWhitelistSsid();
+        if (maxWhitelistSize <= 0) {
+            Log.wtf(TAG, "Invalid max SSID whitelist size:  " + maxWhitelistSize);
+            return;
+        }
+
+        int whitelistSize = ssidWhitelist.size();
+
+        if (whitelistSize > maxWhitelistSize) {
+            Log.wtf(TAG, "Attempt to write " + whitelistSize + " whitelisted SSIDs, max size is "
+                    + maxWhitelistSize);
+
+            ssidWhitelist = new ArrayList<String>(ssidWhitelist.subList(0,
+                    maxWhitelistSize));
+            localLog("Trim down SSID whitelist size from " + whitelistSize + " to "
+                    + ssidWhitelist.size());
+        }
+
+        // plumb down to HAL
+        if (!mConnectivityHelper.setFirmwareRoamingConfiguration(bssidBlocklist,
+                ssidWhitelist)) {  // TODO(b/36488259): SSID whitelist management.
+        }
+    }
+
 }

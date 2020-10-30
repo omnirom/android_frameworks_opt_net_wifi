@@ -2294,7 +2294,15 @@ public class WifiVendorHal {
                         if (ssid.length > 32) {
                             throw new IllegalArgumentException("configureRoaming: ssid too long");
                         }
-                        roamingConfig.ssidWhitelist.add(ssid);
+
+                        // StaRoamingConfig.ssidWhitelist is a list of byte arrays with fixed length(32)
+                        // Due to this HAL code doesn't accept byte arrays of length less than 32
+                        // Thus convert all ssids to byte arrays of 32 length
+                        byte[] ssid_32 = new byte[32];
+                        for (int i = 0; i < ssid.length; i++) {
+                            ssid_32[i] = ssid[i];
+                        }
+                        roamingConfig.ssidWhitelist.add(ssid_32);
                     }
                 }
 

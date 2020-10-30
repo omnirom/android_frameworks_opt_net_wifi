@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static com.android.internal.util.Preconditions.checkNotNull;
 import static com.android.server.wifi.ClientModeImpl.WIFI_WORK_SOURCE;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_WHITELIST_ROAMING_ENABLED;
 
 import android.annotation.NonNull;
 import android.app.AlarmManager;
@@ -923,7 +924,8 @@ public class WifiConnectivityManager {
         if (currentConnectedNetwork != null
                 && (currentConnectedNetwork.networkId == candidate.networkId
                 //TODO(b/36788683): re-enable linked configuration check
-                /* || currentConnectedNetwork.isLinked(candidate) */)) {
+                 || (mWifiInjector.getSettingsConfigStore().get(WIFI_WHITELIST_ROAMING_ENABLED)
+                      && currentConnectedNetwork.isLinked(candidate)))) {
             // Framework initiates roaming only if firmware doesn't support
             // {@link android.net.wifi.WifiManager#WIFI_FEATURE_CONTROL_ROAMING}.
             if (mConnectivityHelper.isFirmwareRoamingSupported()) {

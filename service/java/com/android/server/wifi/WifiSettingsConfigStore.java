@@ -102,6 +102,18 @@ public class WifiSettingsConfigStore {
     public static final Key<Boolean> WIFI_COVERAGE_EXTEND_FEATURE_ENABLED =
             new Key<>("wifi_coverage_extend_feature_enabled", false);
 
+    /**
+     * Enable/disbale Wi-Fi whitelist network roaming
+     */
+    public static final Key<Boolean> WIFI_WHITELIST_ROAMING_ENABLED =
+            new Key<>("wifi_whitelist_roaming_enabled", true);
+
+    /**
+     * Enable/disble Wi=Fi new network auto connection attempts
+     */
+    public static final Key<Boolean> WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED =
+            new Key<>("wifi_new_network_auto_connection_enabled", true);
+
    /******** Wifi shared pref keys ***************/
 
     private final Context mContext;
