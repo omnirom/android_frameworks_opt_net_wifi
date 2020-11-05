@@ -118,6 +118,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     private final Context mContext;
     private final ConnectivityManager mConnectivityManager;
     private final WifiCarrierInfoManager mWifiCarrierInfoManager;
+    private final WifiSecShellCmd mSecCmd;
 
     WifiShellCommand(WifiInjector wifiInjector, WifiServiceImpl wifiService, Context context) {
         mClientModeImpl = wifiInjector.getClientModeImpl();
@@ -132,6 +133,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         mContext = context;
         mConnectivityManager = context.getSystemService(ConnectivityManager.class);
         mWifiCarrierInfoManager = wifiInjector.getWifiCarrierInfoManager();
+        mSecCmd = new WifiSecShellCmd(wifiInjector);
     }
 
     @Override
@@ -662,6 +664,9 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     mWifiService.clearWifiConnectedNetworkScorer(); // clear any previous scorer
                     return 0;
                 }
+                case "sec": {
+                    return execSecondaryCommand(pw);
+                }
                 default:
                     return handleDefaultCommands(cmd);
             }
@@ -673,6 +678,134 @@ public class WifiShellCommand extends BasicShellCommandHandler {
             e.printStackTrace(pw);
             return -1;
         }
+    }
+
+    private int execSecondaryCommand(PrintWriter pw) throws InterruptedException {
+        String subCmd = getNextArgRequired();
+        switch(subCmd != null ? subCmd : "") {
+            case "enable": {
+                pw.println("Enabling Secondary station");
+                mSecCmd.enable();
+                break;
+            }
+            case "disable": {
+                pw.println("Disabling Secondary station");
+                mSecCmd.disable();
+                break;
+            }
+            case "add-network": {
+                String ssid = getNextArgRequired();
+                String password = getNextArg();
+                pw.println("Add network on Secondary station. ssid="+ssid+ " password="+password);
+                int id = mSecCmd.addNetwork(ssid, password);
+                pw.println(" network id=" + id);
+                break;
+            }
+            case "remove-network": {
+                int netId = Integer.parseInt(getNextArgRequired());
+                pw.println("Remove network on Secondary station id=" + netId);
+                mSecCmd.removeNetwork(netId);
+                break;
+            }
+            case "connect": {
+                String ssid = getNextArgRequired();
+                String password = getNextArg();
+                pw.println("connect on Secondary station ssid=" + ssid);
+                mSecCmd.connectNetwork(ssid, password);
+                break;
+            }
+            case "connect-netId": {
+                int netId = Integer.parseInt(getNextArgRequired());
+                pw.println("connect on Secondary station ssid=" + netId);
+                mSecCmd.connectNetwork(netId);
+                break;
+            }
+            case "disconnect": {
+                pw.println("disconnect on Secondary station");
+                mSecCmd.disconnect();
+                break;
+            }
+            case "forget-network": {
+                int netId = Integer.parseInt(getNextArgRequired());
+                pw.println("forget network on Secondary station id=" + netId);
+                mSecCmd.forgetNetwork(netId);
+                break;
+            }
+            case "save-network": {
+                String ssid = getNextArgRequired();
+                String password = getNextArg();
+                pw.println("save network on Secondary station. ssid="+ssid+ " password="+password);
+                mSecCmd.saveNetwork(ssid, password);
+                break;
+            }
+            case "enable-network": {
+                int netId = Integer.parseInt(getNextArgRequired());
+                pw.println("enable network on Secondary station id=" + netId);
+                mSecCmd.enableNetwork(netId);
+                break;
+            }
+            case "disable-network": {
+                int netId = Integer.parseInt(getNextArgRequired());
+                pw.println("disable network on Secondary station id=" + netId);
+                mSecCmd.disableNetwork(netId);
+                break;
+            }
+            case "list-network": {
+                mSecCmd.listNetwork(pw);
+                break;
+            }
+            case "status": {
+                mSecCmd.status(pw);
+                break;
+            }
+/*
+            case "": {
+                break;
+            }
+            case "": {
+                break;
+            }
+*/
+            case "help":
+            default:
+                return printSecHelp(pw);
+        }
+        return 0;
+    }
+
+    private int printSecHelp(PrintWriter pw) throws InterruptedException {
+        pw.println("Secondary Wi-Fi (wifi) commands:");
+        pw.println("  help");
+        pw.println("    Print this help text for secondary inteface.");
+        pw.println("  enable");
+        pw.println("    enable's secondary station through wifi controller");
+        pw.println("  disable");
+        pw.println("    disable's secondary station through wifi controller");
+        pw.println("  add-network <SSID> <PSK>");
+        pw.println("     add a new network with SSID and PSK(optional)");
+        pw.println("  save-network <SSID> <PSK>");
+        pw.println("     similar to 'add' but uses SAVE_NETWORK command");
+        pw.println("  remove-network <NET-ID>");
+        pw.println("     remove existing network with id NET-ID");
+        pw.println("  forget-network <NET-ID>");
+        pw.println("     similar to 'remove' but uses FORGET_NETWORK command");
+        pw.println("  connect-netId <NET-ID>");
+        pw.println("     connect to a network with NET-ID");
+        pw.println("  connect <SSID> <PSK>");
+        pw.println("     connect to a network with given ssid and password");
+        pw.println("  disconnect");
+        pw.println("     discconnect existing network");
+        pw.println("  enable-network <NET-ID>");
+        pw.println("     enable a network for connection");
+        pw.println("  disable-network <NET-ID>");
+        pw.println("     disconnect and disable a network for connection");
+        pw.println("  list-network");
+        pw.println("     list saved network for secondary");
+        pw.println("  status");
+        pw.println("     get current status of secondary station");
+        pw.println();
+
+        return 0;
     }
 
     private boolean getNextArgRequiredTrueOrFalse(String trueString, String falseString)

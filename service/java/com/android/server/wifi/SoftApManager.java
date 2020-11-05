@@ -225,16 +225,7 @@ public class SoftApManager implements ActiveModeManager {
     public void stop() {
         Log.d(TAG, " currentstate: " + getCurrentStateName());
         mTargetRole = ROLE_UNSPECIFIED;
-        if (mApInterfaceName != null) {
-            if (mIfaceIsUp) {
-                updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
-                        WifiManager.WIFI_AP_STATE_ENABLED, 0);
-            } else {
-                updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
-                        WifiManager.WIFI_AP_STATE_ENABLING, 0);
-            }
-        }
-        mStateMachine.quitNow();
+        mStateMachine.sendMessage(SoftApStateMachine.CMD_STOP);
     }
 
     @Override
@@ -457,7 +448,7 @@ public class SoftApManager implements ActiveModeManager {
      * This is usually done just before stopSoftAp().
      */
     private void disconnectAllClients() {
-        for (WifiClient client : mConnectedClients) {
+/*        for (WifiClient client : mConnectedClients) {
             if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
                 if (! mWifiNative.forceClientDisconnect(mdualApInterfaces[0], client.getMacAddress(),
                             SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED))
@@ -467,6 +458,19 @@ public class SoftApManager implements ActiveModeManager {
                 mWifiNative.forceClientDisconnect(mApInterfaceName, client.getMacAddress(),
                         SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
             }
+        }
+*/
+        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
+            mWifiNative.forceClientDisconnect(mdualApInterfaces[0],
+                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+            mWifiNative.forceClientDisconnect(mdualApInterfaces[1],
+                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
+        } else {
+            mWifiNative.forceClientDisconnect(mApInterfaceName,
+                    MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                    SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
         }
     }
 
@@ -533,6 +537,7 @@ public class SoftApManager implements ActiveModeManager {
     private class SoftApStateMachine extends StateMachine {
         // Commands for the state machine.
         public static final int CMD_START = 0;
+        public static final int CMD_STOP = 1;
         public static final int CMD_FAILURE = 2;
         public static final int CMD_INTERFACE_STATUS_CHANGED = 3;
         public static final int CMD_ASSOCIATED_STATIONS_CHANGED = 4;
@@ -742,6 +747,9 @@ public class SoftApManager implements ActiveModeManager {
             @Override
             public boolean processMessage(Message message) {
                 switch (message.what) {
+                    case CMD_STOP:
+                        mStateMachine.quitNow();
+                        break;
                     case CMD_START:
                         SoftApConfiguration config = (SoftApConfiguration) message.obj;
                         if (config == null)
@@ -1101,6 +1109,16 @@ public class SoftApManager implements ActiveModeManager {
                     case CMD_INTERFACE_STATUS_CHANGED:
                         boolean isUp = message.arg1 == 1;
                         onUpChanged(isUp);
+                        break;
+                    case CMD_STOP:
+                        if (mIfaceIsUp) {
+                            updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
+                                    WifiManager.WIFI_AP_STATE_ENABLED, 0);
+                        } else {
+                            updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
+                                    WifiManager.WIFI_AP_STATE_ENABLING, 0);
+                        }
+                        transitionTo(mIdleState);
                         break;
                     case CMD_START:
                         // Already started, ignore this command.
