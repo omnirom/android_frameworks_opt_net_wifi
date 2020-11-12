@@ -375,18 +375,23 @@ abstract class SupplicantStaIfaceCallbackV1_3Impl extends
         mStateIsFourwayV13 =
                 (newState == ISupplicantStaIfaceCallback.State.FOURWAY_HANDSHAKE);
 
-        if (id != mStaIfaceHal.getCurrentNetworkRemoteId(mIfaceName)) {
+        int currentNetworkId = mStaIfaceHal.getCurrentNetworkRemoteId(mIfaceName);
+        if (currentNetworkId != WifiConfiguration.INVALID_NETWORK_ID
+                && id != WifiConfiguration.INVALID_NETWORK_ID
+                && id != currentNetworkId) {
             Log.i(TAG, "Network id changed, newState = " + newState
                         + ", SSID = " + wifiSsid + ", bssid = " + bssidStr
-                        + ", networkId = " + id);
+                        + ", reported networkId = " + id
+                        + ", current networkId = " + currentNetworkId);
             ArrayList<Pair<SupplicantStaNetworkHal, WifiConfiguration>> linkedNetworkHandles =
                     mStaIfaceHal.getLinkedNetworksHandles(mIfaceName);
+            if (linkedNetworkHandles != null) {
+                for (Pair<SupplicantStaNetworkHal, WifiConfiguration> pair : linkedNetworkHandles) {
+                    if (pair.first.getNetworkId() != id) continue;
 
-            for (Pair<SupplicantStaNetworkHal, WifiConfiguration> pair : linkedNetworkHandles) {
-                if (pair.first.getNetworkId() != id) continue;
-
-                Log.i(TAG, "make linked network as current network");
-                mStaIfaceHal.updateCurrentNetworkHandles(mIfaceName, pair);
+                    Log.i(TAG, "make linked network as current network");
+                    mStaIfaceHal.updateCurrentNetworkHandles(mIfaceName, pair);
+                }
             }
         }
 
