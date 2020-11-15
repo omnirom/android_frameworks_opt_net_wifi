@@ -4040,13 +4040,13 @@ public class WifiNative {
         public static final int BAND_5G = 2;
     }
 
-    public void qtiUpdateConnectedBand(boolean set, int wifiId, int band) {
+    public void qtiUpdateConnectedBand(int wifiId, int band) {
         if (band < 0 || band > ConnectedBand.BAND_5G) {
             Log.e(TAG, "Unknown band option: " + band);
             return;
         }
 
-        if (set)
+        if (band != ConnectedBand.BAND_NONE)
             mIfaceBands.put(wifiId, band);
         else
             mIfaceBands.remove(wifiId);
