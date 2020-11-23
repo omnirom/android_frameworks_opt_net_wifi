@@ -66,8 +66,8 @@ import java.util.List;
  * Manager WiFi in Client Mode where we connect to configured networks.
  */
 public class ClientModeManager implements ActiveModeManager {
-    private static final String TAG = "WifiClientModeManager";
-
+    private static String TAG = "WifiClientModeManager";
+    private static int TAG_COUNT = 0;
     private final ClientModeStateMachine mStateMachine;
 
     private final Context mContext;
@@ -99,6 +99,7 @@ public class ClientModeManager implements ActiveModeManager {
         mClientModeImpl = clientModeImpl;
         mStateMachine = new ClientModeStateMachine(looper);
         mDeferStopHandler = new DeferStopHandler(TAG, looper);
+        TAG = "WifiClientModeManager" + TAG_COUNT++;
     }
 
     /**
@@ -106,6 +107,8 @@ public class ClientModeManager implements ActiveModeManager {
      */
     @Override
     public void start() {
+        Log.d(TAG, "Starting with role ROLE_CLIENT_SCAN_ONLY");
+        mRole = ROLE_CLIENT_SCAN_ONLY;
         mTargetRole = ROLE_CLIENT_SCAN_ONLY;
         mStateMachine.sendMessage(ClientModeStateMachine.CMD_START);
     }
