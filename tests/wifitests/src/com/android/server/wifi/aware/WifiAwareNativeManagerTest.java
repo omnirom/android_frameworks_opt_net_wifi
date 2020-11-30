@@ -127,7 +127,6 @@ public class WifiAwareNativeManagerTest extends WifiBaseTest {
 
         // 1. onStatusChange (ready/started)
         mManagerStatusListenerCaptor.getValue().onStatusChanged();
-        mInOrder.verify(mWifiAwareStateManagerMock).tryToGetAwareCapability();
         mInOrder.verify(mHalDeviceManager).registerInterfaceAvailableForRequestListener(
                 eq(IfaceType.NAN), mAvailListenerCaptor.capture(), any(Handler.class));
 
@@ -144,7 +143,8 @@ public class WifiAwareNativeManagerTest extends WifiBaseTest {
         // 4. onStatusChange (ready/started) + available -> enableUsage
         when(mHalDeviceManager.isStarted()).thenReturn(true);
         mManagerStatusListenerCaptor.getValue().onStatusChanged();
-        mInOrder.verify(mWifiAwareStateManagerMock).tryToGetAwareCapability();
+
+        mManagerStatusListenerCaptor.getValue().onStatusChanged();
         mInOrder.verify(mHalDeviceManager).registerInterfaceAvailableForRequestListener(
                 eq(IfaceType.NAN), mAvailListenerCaptor.capture(), any(Handler.class));
         mAvailListenerCaptor.getValue().onAvailabilityChanged(true);
@@ -175,7 +175,6 @@ public class WifiAwareNativeManagerTest extends WifiBaseTest {
 
         // 1. onStatusChange (ready/started)
         mManagerStatusListenerCaptor.getValue().onStatusChanged();
-        mInOrder.verify(mWifiAwareStateManagerMock).tryToGetAwareCapability();
         mInOrder.verify(mHalDeviceManager).registerInterfaceAvailableForRequestListener(
                 eq(IfaceType.NAN), mAvailListenerCaptor.capture(), any(Handler.class));
         assertNull("Interface non-null!", mDut.getWifiNanIface());
@@ -237,7 +236,6 @@ public class WifiAwareNativeManagerTest extends WifiBaseTest {
 
         // 1. onStatusChange (ready/started)
         mManagerStatusListenerCaptor.getValue().onStatusChanged();
-        mInOrder.verify(mWifiAwareStateManagerMock).tryToGetAwareCapability();
         mInOrder.verify(mHalDeviceManager).registerInterfaceAvailableForRequestListener(
                 eq(IfaceType.NAN), mAvailListenerCaptor.capture(), any(Handler.class));
         assertNull("Interface non-null!", mDut.getWifiNanIface());
@@ -280,7 +278,6 @@ public class WifiAwareNativeManagerTest extends WifiBaseTest {
 
         // 1. onStatusChange (ready/started)
         mManagerStatusListenerCaptor.getValue().onStatusChanged();
-        mInOrder.verify(mWifiAwareStateManagerMock).tryToGetAwareCapability();
         mInOrder.verify(mHalDeviceManager).registerInterfaceAvailableForRequestListener(
                 eq(IfaceType.NAN), mAvailListenerCaptor.capture(), any(Handler.class));
         assertNull("Interface non-null!", mDut.getWifiNanIface());
