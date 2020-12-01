@@ -2746,6 +2746,20 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
+     * See {@link android.net.wifi.WifiManager#allowConnectOnPartialScanResults(boolean)}
+     * @param
+     */
+    @Override
+    public void allowConnectOnPartialScanResults(boolean enable) {
+        enforceNetworkSettingsPermission();
+
+        int callingUid = Binder.getCallingUid();
+        mLog.info("allowConnectOnPartialScanResults=% uid=%").c(enable).c(callingUid).flush();
+
+        mWifiThreadRunner.post(() -> mClientModeImpl.allowConnectOnPartialScanResults(enable));
+    }
+
+    /**
      * See {@link android.net.wifi.WifiManager#allowAutojoin(int, boolean)}
      * @param netId the integer that identifies the network configuration
      * @param choice the user's choice to allow auto-join
