@@ -112,6 +112,7 @@ public class ScanRequestProxy {
     private final RemoteCallbackList<IScanResultsCallback> mRegisteredScanResultsCallbacks;
     // Global scan listener for listening to all scan requests.
     private class GlobalScanListener implements WifiScanner.ScanListener {
+        private boolean mPartialScanResults;
         @Override
         public void onSuccess() {
             // Ignore. These will be processed from the scan request listener.
@@ -143,9 +144,21 @@ public class ScanRequestProxy {
                 // Store the last scan results & send out the scan completion broadcast.
                 mLastScanResults.clear();
                 mLastScanResults.addAll(Arrays.asList(scanResults));
+                if (mPartialScanResults) {
+                    sendPartialScanResultBroadcast(true);
+                    return;
+	        }
                 sendScanResultBroadcast(true);
                 sendScanResultsAvailableToCallbacks();
             }
+        }
+
+        @Override
+        public void onPartialScanResults(WifiScanner.ScanData[] scanDatas) {
+            Log.d(TAG, "onPartialScanResults invoked");
+            mPartialScanResults = true;
+            onResults(scanDatas);
+            mPartialScanResults = false;
         }
 
         @Override
@@ -286,6 +299,16 @@ public class ScanRequestProxy {
      */
     private void sendScanResultBroadcast(boolean scanSucceeded) {
         Intent intent = new Intent(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        intent.putExtra(WifiManager.EXTRA_RESULTS_UPDATED, scanSucceeded);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
+    /**
+     * Helper method to send the partial scan request status broadcast.
+     */
+    private void sendPartialScanResultBroadcast(boolean scanSucceeded) {
+        Intent intent = new Intent(WifiManager.PARTIAL_SCAN_RESULTS_AVAILABLE_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_RESULTS_UPDATED, scanSucceeded);
         mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
