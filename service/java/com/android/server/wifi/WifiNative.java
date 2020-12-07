@@ -391,9 +391,6 @@ public class WifiNative {
         }
     }
 
-    public void triggerBroadcastForPartialScan(String mIfaceNameforPartialScanResult) {
-        mWifiMonitor.broadcastPartialScanResultEvent(mIfaceNameforPartialScanResult);
-    }
     private class NormalScanEventCallback implements WifiNl80211Manager.ScanEventCallback {
         private String mIfaceName;
 
@@ -1673,13 +1670,14 @@ public class WifiNative {
             }
         }
         mIfaceNameforPartialScanResult = ifaceName;
-        boolean mScanDoneFlag = mWifiCondManager.startScan(ifaceName, scanType, freqs, hiddenNetworkSsidsArrays);
-        if (mScanDoneFlag &&
+        boolean scanRequested = mWifiCondManager.startScan(ifaceName, scanType, freqs,
+                                hiddenNetworkSsidsArrays);
+        if (scanRequested &&
             ((mWifiInjector.getClientModeImpl().isDisconnected()) ||
              mAllowConnectionOnPartialScanResults)) {
               schedulePeriodicPartialScanResult();
         }
-        return mScanDoneFlag;
+        return scanRequested;
     }
 
     Handler mPartialScanResultsHandler = new Handler() {
