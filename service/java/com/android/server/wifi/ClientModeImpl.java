@@ -6267,6 +6267,16 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
+     * Allow quick connect on partial scan results
+     *
+     * @param choice true-enable; false-disable
+     */
+    public void allowConnectOnPartialScanResults(boolean enable) {
+        mWifiConnectivityManager.allowConnectOnPartialScanResults(enable);
+        mWifiNative.allowConnectOnPartialScanResults(enable);
+    }
+
+    /**
      * @param reason reason code from supplicant on network disconnected event
      * @return true if this is a suspicious disconnect
      */

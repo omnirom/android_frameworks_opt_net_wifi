@@ -442,9 +442,29 @@ public class WifiCarrierInfoManager {
         return matchSubId;
     }
 
+
+    private int getMatchingSubIdFromSimSlotIndex(int simSlotIndex) {
+        List<SubscriptionInfo> subInfoList = mSubscriptionManager.getActiveSubscriptionInfoList();
+        if (subInfoList == null || subInfoList.isEmpty()) {
+            return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+        }
+
+        for (SubscriptionInfo subInfo : subInfoList) {
+            if (subInfo.getSimSlotIndex() == simSlotIndex)
+                return subInfo.getSubscriptionId();
+        }
+
+        return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+    }
+
     private int getBestMatchSubscriptionIdForEnterprise(WifiConfiguration config) {
         if (config.carrierId != TelephonyManager.UNKNOWN_CARRIER_ID) {
             return getMatchingSubId(config.carrierId);
+        } else if (config.enterpriseConfig != null
+                   && config.enterpriseConfig.getSimNum() != null
+                   && !config.enterpriseConfig.getSimNum().isEmpty()) {
+            int simSlotIndex = Integer.parseInt(config.enterpriseConfig.getSimNum());
+            return getMatchingSubIdFromSimSlotIndex(simSlotIndex - 1);
         }
         // Legacy WifiConfiguration without carrier ID
         if (config.enterpriseConfig == null

@@ -2004,8 +2004,13 @@ public class WifiServiceImpl extends BaseWifiService {
     @NonNull
     @Override
     public SoftApConfiguration getSoftApConfiguration() {
-        enforceNetworkSettingsPermission();
         int uid = Binder.getCallingUid();
+        if (!mWifiPermissionsUtil.checkConfigOverridePermission(uid)
+                && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
+            // random apps should not be allowed to read the user specified config
+            throw new SecurityException("App not allowed to read or update stored WiFi Ap config "
+                    + "(uid = " + uid + ")");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getSoftApConfiguration uid=%").c(uid).flush();
         }
@@ -2058,9 +2063,14 @@ public class WifiServiceImpl extends BaseWifiService {
     @Override
     public boolean setSoftApConfiguration(
             @NonNull SoftApConfiguration softApConfig, @NonNull String packageName) {
-        enforceNetworkSettingsPermission();
         int uid = Binder.getCallingUid();
         boolean privileged = mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
+        if (!mWifiPermissionsUtil.checkConfigOverridePermission(uid)
+                && !privileged) {
+            // random apps should not be allowed to read the user specified config
+            throw new SecurityException("App not allowed to read or update stored WiFi Ap config "
+                    + "(uid = " + uid + ")");
+        }
         mLog.info("setSoftApConfiguration uid=%").c(uid).flush();
         if (softApConfig == null) return false;
         if (WifiApConfigStore.validateApWifiConfiguration(softApConfig, privileged)) {
@@ -2733,6 +2743,20 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("allowAutojoin=% uid=%").c(choice).c(callingUid).flush();
 
         mWifiThreadRunner.post(() -> mClientModeImpl.allowAutoJoinGlobal(choice));
+    }
+
+    /**
+     * See {@link android.net.wifi.WifiManager#allowConnectOnPartialScanResults(boolean)}
+     * @param
+     */
+    @Override
+    public void allowConnectOnPartialScanResults(boolean enable) {
+        enforceNetworkSettingsPermission();
+
+        int callingUid = Binder.getCallingUid();
+        mLog.info("allowConnectOnPartialScanResults=% uid=%").c(enable).c(callingUid).flush();
+
+        mWifiThreadRunner.post(() -> mClientModeImpl.allowConnectOnPartialScanResults(enable));
     }
 
     /**
