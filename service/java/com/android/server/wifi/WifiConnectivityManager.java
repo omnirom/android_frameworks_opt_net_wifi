@@ -1200,6 +1200,13 @@ public class WifiConnectivityManager {
                     setInitialScanState(INITIAL_SCAN_STATE_AWAITING_RESPONSE);
                     mWifiMetrics.incrementInitialPartialScanCount();
                 }
+
+                // Scheduling for scan if initial scan skipped
+                if (mInitialScanState == INITIAL_SCAN_STATE_COMPLETE) {
+                    schedulePeriodicScanTimer(
+                        getScheduledSingleScanIntervalMs(mCurrentSingleScanScheduleIndex));
+                }
+
                 // No scheduling for another scan (until we get the results)
                 return;
             }
