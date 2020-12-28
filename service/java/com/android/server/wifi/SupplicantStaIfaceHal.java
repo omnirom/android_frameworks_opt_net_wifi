@@ -3812,6 +3812,11 @@ public class SupplicantStaIfaceHal {
             final String methodStr = "dppBootstrapGenerate";
             final MutableInt handle = new MutableInt(-1);
 
+            if (config == null) {
+                logd(methodStr + ": null config received.");
+                return -1;
+            }
+
             String chan_list = (TextUtils.isEmpty(config.chan_list)) ? "" : config.chan_list;
             String mac_addr = (TextUtils.isEmpty(config.mac_addr)) ? "00:00:00:00:00:00" : config.mac_addr;
             String info = (TextUtils.isEmpty(config.info)) ? "" : config.info;
@@ -4031,6 +4036,12 @@ public class SupplicantStaIfaceHal {
         synchronized (mLock) {
             final String methodStr = "dppStartAuth";
             final MutableInt Status = new MutableInt(-1);
+
+            if (config == null) {
+                logd(methodStr + ": null config received.");
+                return -1;
+            }
+
             ISupplicantVendorStaIface iface =
                    checkSupplicantVendorStaIfaceAndLogFailure(ifaceName, methodStr);
             if (iface == null) return -1;
