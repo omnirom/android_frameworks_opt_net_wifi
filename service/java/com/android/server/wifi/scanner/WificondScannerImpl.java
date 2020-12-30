@@ -384,7 +384,6 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             if (numFilteredScanResults != 0) {
                 Log.d(TAG, "Filtering out " + numFilteredScanResults + " scan results.");
             }
-            WifiGbk.ageBssCache(); // wifigbk++
 
             if (mLastScanSettings.singleScanEventHandler != null) {
                 if (mLastScanSettings.reportSingleScanFullResults) {
@@ -407,6 +406,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                 }
             }
             if (!isPartial) {
+                WifiGbk.ageBssCache(); // wifigbk++
                 mLastScanSettings = null;
             }
         }
