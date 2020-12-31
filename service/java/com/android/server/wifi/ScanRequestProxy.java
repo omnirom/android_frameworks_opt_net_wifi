@@ -487,7 +487,8 @@ public class ScanRequestProxy {
      * @return the list of results
      */
     public List<ScanResult> getScanResults() {
-        return mLastScanResults;
+        // return a copy to prevent external modification
+        return new ArrayList<>(mLastScanResults);
     }
 
     /**

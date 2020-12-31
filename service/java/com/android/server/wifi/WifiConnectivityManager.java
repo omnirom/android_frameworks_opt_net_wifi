@@ -309,7 +309,9 @@ public class WifiConnectivityManager {
         updateUserDisabledList(scanDetails);
 
         // Check if any blocklisted BSSIDs can be freed.
-        Set<String> bssidBlocklist = mBssidBlocklistMonitor.updateAndGetBssidBlocklist();
+        mBssidBlocklistMonitor.tryEnablingBlockedBssids(scanDetails);
+        Set<String> bssidBlocklist = mBssidBlocklistMonitor.updateAndGetBssidBlocklistForSsid(
+                mWifiInfo.getSSID());
 
         if (mStateMachine.isSupplicantTransientState()) {
             localLog(listenerName
@@ -1827,7 +1829,8 @@ public class WifiConnectivityManager {
                 // Make sure that the failed BSSID is blocked for at least TEMP_BSSID_BLOCK_DURATION
                 // to prevent the supplicant from trying it again.
                 mBssidBlocklistMonitor.blockBssidForDurationMs(bssid, ssid,
-                        TEMP_BSSID_BLOCK_DURATION);
+                        TEMP_BSSID_BLOCK_DURATION,
+                        BssidBlocklistMonitor.REASON_FRAMEWORK_DISCONNECT_FAST_RECONNECT, 0);
                 connectToNetwork(candidate);
             }
         } catch (IllegalArgumentException e) {
