@@ -3107,10 +3107,8 @@ public class WifiConfigManager {
         } catch (IOException | IllegalStateException e) {
             Log.wtf(TAG, "Reading from new store failed. All saved networks are lost!", e);
             return false;
-        } catch (XmlPullParserException e) {
-            Log.wtf(TAG, "XML deserialization of store failed. All saved networks are lost!", e);
-            return false;
-        }
+        } // XmlPullParserException is handled by config store file itself.
+
         loadInternalData(mNetworkListSharedStoreData.getConfigurations(),
                 mNetworkListUserStoreData.getConfigurations(),
                 mRandomizedMacStoreData.getMacMapping());
@@ -3142,11 +3140,8 @@ public class WifiConfigManager {
         } catch (IOException | IllegalStateException e) {
             Log.wtf(TAG, "Reading from new store failed. All saved private networks are lost!", e);
             return false;
-        } catch (XmlPullParserException e) {
-            Log.wtf(TAG, "XML deserialization of store failed. All saved private networks are "
-                    + "lost!", e);
-            return false;
-        }
+        } // XmlPullParserException is handled by config store file itself.
+
         loadInternalDataFromUserStore(mNetworkListUserStoreData.getConfigurations());
         return true;
     }
