@@ -120,7 +120,7 @@
           <item type="integer" name="config_wifiBssidBlocklistMonitorDhcpFailureThreshold" />
           <item type="integer" name="config_wifiBssidBlocklistMonitorAbnormalDisconnectThreshold" />
           <item type="integer" name="config_wifiBssidBlocklistMonitorBaseBlockDurationMs" />
-          <item type="integer" name="config_wifiBssidBlocklistMonitorBaseLowRssiBlockDurationMs" />
+          <item type="integer" name="config_wifiBssidBlocklistMonitorConnectedScoreBaseBlockDurationMs" />
           <item type="integer" name="config_wifiBssidBlocklistMonitorFailureStreakCap" />
           <item type="integer" name="config_wifiBssidBlocklistAbnormalDisconnectTimeWindowMs" />
           <item type="bool" name="config_wifiScanHiddenNetworksScanOnlyMode" />
@@ -150,6 +150,7 @@
           <item type="integer" name="config_wifiMovingPnoScanIntervalMillis" />
           <item type="integer" name="config_wifiStationaryPnoScanIntervalMillis" />
           <item type="integer" name="config_wifiDelayDisconnectOnImsLostMs" />
+          <item type="bool" name="config_wifiMinConfirmationDurationSendNetworkScoreEnabled" />
           <item type="bool" name="config_vendorWifi11axReadySupport" />
           <!-- Params from config.xml that can be overlayed -->
 
