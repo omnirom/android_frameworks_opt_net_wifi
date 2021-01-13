@@ -967,6 +967,7 @@ public class SupplicantStaIfaceHal {
             linkToSupplicantDeath((cookie) -> {
                 Log.d(TAG, "ISupplicant died: cookie=" + cookie);
                 if (cookie != waitForDeathCookie) return;
+                supplicantServiceDiedHandler(mDeathRecipientCookie);
                 waitForDeathLatch.countDown();
             }, waitForDeathCookie);
 
