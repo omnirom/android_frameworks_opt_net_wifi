@@ -3286,7 +3286,6 @@ public class WifiNative {
      * @return true for success
      */
     public boolean setCountryCodeHal(@NonNull String ifaceName, String countryCode) {
-        mHostapdHal.setCountryCode(countryCode);
         return mWifiVendorHal.setCountryCodeHal(ifaceName, countryCode);
     }
 
