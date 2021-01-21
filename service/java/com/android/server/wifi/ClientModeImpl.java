@@ -7272,6 +7272,17 @@ public class ClientModeImpl extends StateMachine {
             return;
         }
 
+        // check for FT/PSK or PSK-SHA256
+        ScanDetail scanDetail = getScanDetailForBssid(mLastBssid);
+        if (scanDetail != null) {
+            ScanResult scanResult = scanDetail.getScanResult();
+            String caps = (scanResult != null) ? scanResult.capabilities : "";
+            if (caps.contains("FT/PSK") || caps.contains("PSK-SHA256")) {
+                Log.i(TAG, "Linked network - return as current connection is FT-PSK/PSK-SHA256");
+                return;
+            }
+        }
+
         HashMap<String, Integer>  linkedConfigurations =
                 mWifiConfigManager.updateAndGetLinkedConfiguration(currentConfig.networkId);
 	if (linkedConfigurations != null) {
