@@ -414,6 +414,7 @@ public class ActiveModeWarden {
         listener.setActiveModeManager(manager);
         manager.start();
         if (!switchClientModeManagerRole(manager)) {
+            manager.stop();
             return false;
         }
         mActiveModeManagers.add(manager);
