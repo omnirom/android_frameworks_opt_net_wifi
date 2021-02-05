@@ -661,10 +661,9 @@ public class WifiConfigStore {
 
     /**
      * Helper method to read from the shared store files.
-     * @throws XmlPullParserException
      * @throws IOException
      */
-    private void readFromSharedStoreFiles() throws XmlPullParserException, IOException {
+    private void readFromSharedStoreFiles() throws IOException {
         for (StoreFile sharedStoreFile : mSharedStores) {
             byte[] sharedDataBytes =
                     readDataFromMigrationSharedStoreFile(sharedStoreFile.getFileId());
@@ -683,16 +682,23 @@ public class WifiConfigStore {
                 WifiMigration.removeSharedConfigStoreFile(
                         getMigrationStoreFileId(sharedStoreFile.getFileId()));
             }
-            deserializeData(sharedDataBytes, sharedStoreFile);
+
+            try {
+                deserializeData(sharedDataBytes, sharedStoreFile);
+            } catch (XmlPullParserException e) {
+                Log.wtf(TAG, "XML deserialization of shared store file "
+                        + sharedStoreFile.getName()
+                        + " failed. All saved networks are lost!", e);
+                sharedStoreFile.recovery();
+            }
         }
     }
 
     /**
      * Helper method to read from the user store files.
-     * @throws XmlPullParserException
      * @throws IOException
      */
-    private void readFromUserStoreFiles() throws XmlPullParserException, IOException {
+    private void readFromUserStoreFiles() throws IOException {
         for (StoreFile userStoreFile : mUserStores) {
             byte[] userDataBytes = readDataFromMigrationUserStoreFile(
                     userStoreFile.getFileId(), userStoreFile.mUserHandle);
@@ -712,7 +718,15 @@ public class WifiConfigStore {
                         getMigrationStoreFileId(userStoreFile.getFileId()),
                         userStoreFile.mUserHandle);
             }
-            deserializeData(userDataBytes, userStoreFile);
+
+            try {
+                deserializeData(userDataBytes, userStoreFile);
+            } catch (XmlPullParserException e) {
+                Log.wtf(TAG, "XML deserialization of shared store file "
+                        + userStoreFile.getName()
+                        + " failed. All saved networks are lost!", e);
+                userStoreFile.recovery();
+            }
         }
     }
 
@@ -721,7 +735,7 @@ public class WifiConfigStore {
      * The method reads the user specific configurations from user specific config store and the
      * shared configurations from the shared config store.
      */
-    public void read() throws XmlPullParserException, IOException {
+    public void read() throws IOException {
         // Reset both share and user store data.
         for (StoreFile sharedStoreFile : mSharedStores) {
             resetStoreData(sharedStoreFile);
@@ -752,7 +766,7 @@ public class WifiConfigStore {
      * @param userStores List of {@link StoreFile} created using {@link #createUserFiles(int)}.
      */
     public void switchUserStoresAndRead(@NonNull List<StoreFile> userStores)
-            throws XmlPullParserException, IOException {
+            throws IOException {
         Preconditions.checkNotNull(userStores);
         // Reset user store data.
         if (mUserStores != null) {
@@ -953,6 +967,11 @@ public class WifiConfigStore {
             mFileId = fileId;
             mUserHandle = userHandle;
             mEncryptionUtil = encryptionUtil;
+        }
+
+        public void recovery() {
+            File savedErrorFile = new File(mAtomicFile.getBaseFile().getPath() + ".err");
+            FileUtils.rename(mAtomicFile.getBaseFile(), savedErrorFile);
         }
 
         public String getName() {

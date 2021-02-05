@@ -20,6 +20,7 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -46,6 +47,17 @@ public final class FileUtils {
         } catch (ErrnoException e) {
             Log.w(TAG, "Failed to chmod(" + path + ", " + mode + "): ", e);
             return e.errno;
+        }
+    }
+
+    public static void rename(File source, File target) {
+        if (target.isDirectory()) {
+            if (!target.delete()) {
+                Log.e(TAG, "Failed to delete file which is a directory " + target);
+            }
+        }
+        if (!source.renameTo(target)) {
+            Log.e(TAG, "Failed to rename " + source + " to " + target);
         }
     }
 
