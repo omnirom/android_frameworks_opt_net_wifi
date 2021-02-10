@@ -2664,6 +2664,7 @@ public class QtiClientModeImpl extends StateMachine {
             ssid = getTargetSsid();
         }
         if (level2FailureCode != WifiMetrics.ConnectionEvent.FAILURE_NONE) {
+            updateConnectedBand(mWifiInfo.getFrequency(), false);
             int blocklistReason = convertToBssidBlocklistMonitorFailureReason(
                     level2FailureCode, level2FailureReason);
             if (blocklistReason != -1) {
@@ -3290,7 +3291,7 @@ public class QtiClientModeImpl extends StateMachine {
         mWifiNative.setConcurrencyPriority(true);
 
         // Reset Connected band entries
-        mWifiNative.qtiUpdateConnectedBand(false, mIdentity, WifiNative.ConnectedBand.BAND_NONE);
+        mWifiNative.qtiUpdateConnectedBand(mIdentity, WifiNative.ConnectedBand.BAND_NONE);
     }
 
     /**
@@ -3311,7 +3312,7 @@ public class QtiClientModeImpl extends StateMachine {
         // TODO: b/79504296 This broadcast has been deprecated and should be removed
 
         mWifiConfigManager.clearUserTemporarilyDisabledList();
-        mWifiNative.qtiUpdateConnectedBand(false, mIdentity, WifiNative.ConnectedBand.BAND_NONE);
+        mWifiNative.qtiUpdateConnectedBand(mIdentity, WifiNative.ConnectedBand.BAND_NONE);
     }
 
     void registerConnected() {
@@ -5890,14 +5891,19 @@ public class QtiClientModeImpl extends StateMachine {
     }
 
     private void updateConnectedBand(int freq, boolean set) {
-        if (set) mWifiInfo.setFrequency(freq);
         if (mVerboseLoggingEnabled)
             Log.d(TAG, "updateConnectedBand freq="+freq+" set="+set);
 
-        if (ScanResult.is24GHz(freq)) {
-            mWifiNative.qtiUpdateConnectedBand(set, mIdentity, WifiNative.ConnectedBand.BAND_2G);
-        } else if (ScanResult.is5GHz(freq)) {
-            mWifiNative.qtiUpdateConnectedBand(set, mIdentity, WifiNative.ConnectedBand.BAND_5G);
+        if (set) {
+            mWifiInfo.setFrequency(freq);
+
+            if (ScanResult.is24GHz(freq)) {
+                mWifiNative.qtiUpdateConnectedBand(mIdentity, WifiNative.ConnectedBand.BAND_2G);
+            } else if (ScanResult.is5GHz(freq) || ScanResult.is6GHz(freq)) {
+                mWifiNative.qtiUpdateConnectedBand(mIdentity, WifiNative.ConnectedBand.BAND_5G);
+            }
+        } else {
+            mWifiNative.qtiUpdateConnectedBand(mIdentity, WifiNative.ConnectedBand.BAND_NONE);
         }
     }
 

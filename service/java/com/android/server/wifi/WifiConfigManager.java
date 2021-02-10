@@ -478,23 +478,11 @@ public class WifiConfigManager {
      * @return persistent MAC address for this WifiConfiguration
      */
     private MacAddress getPersistentMacAddress(WifiConfiguration config) {
-        // mRandomizedMacAddressMapping had been the location to save randomized MAC addresses.
-        String persistentMacString = mRandomizedMacAddressMapping.get(
-                config.getKey());
-        // Use the MAC address stored in the storage if it exists and is valid. Otherwise
-        // use the MAC address calculated from a hash function as the persistent MAC.
-        if (persistentMacString != null) {
-            try {
-                return MacAddress.fromString(persistentMacString);
-            } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Error creating randomized MAC address from stored value.");
-                mRandomizedMacAddressMapping.remove(config.getKey());
-            }
-        }
-        MacAddress result = mMacAddressUtil.calculatePersistentMac(config.getKey(),
+        String key = config.getKey() + "-staId-" + config.staId;
+        MacAddress result = mMacAddressUtil.calculatePersistentMac(key,
                 mMacAddressUtil.obtainMacRandHashFunction(Process.WIFI_UID));
         if (result == null) {
-            result = mMacAddressUtil.calculatePersistentMac(config.getKey(),
+            result = mMacAddressUtil.calculatePersistentMac(key,
                     mMacAddressUtil.obtainMacRandHashFunction(Process.WIFI_UID));
         }
         if (result == null) {
@@ -505,6 +493,7 @@ public class WifiConfigManager {
                 result = MacAddressUtils.createRandomUnicastAddress();
             }
         }
+        Log.d(TAG, "Got persistent mac address for config=" + key + " mac=" + result);
         return result;
     }
 

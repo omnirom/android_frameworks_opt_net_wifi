@@ -269,8 +269,9 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                 pollLatestScanDataForPno();
                 break;
             case WifiMonitor.SCAN_RESULTS_EVENT:
+                boolean isPartialScanResults = (msg.arg1 == WifiScanner.ON_PARTIAL_SCAN_RESULTS);
                 cancelScanTimeout();
-                pollLatestScanData();
+                pollLatestScanData(isPartialScanResults);
                 break;
             default:
                 // ignore unknown event
@@ -357,7 +358,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
         return bandScanned;
     }
 
-    private void pollLatestScanData() {
+    private void pollLatestScanData(boolean isPartial) {
         synchronized (mSettingsLock) {
             if (mLastScanSettings == null) {
                  // got a scan before we started scanning or after scan was canceled
@@ -383,7 +384,6 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             if (numFilteredScanResults != 0) {
                 Log.d(TAG, "Filtering out " + numFilteredScanResults + " scan results.");
             }
-            WifiGbk.ageBssCache(); // wifigbk++
 
             if (mLastScanSettings.singleScanEventHandler != null) {
                 if (mLastScanSettings.reportSingleScanFullResults) {
@@ -397,11 +397,18 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                 mLatestSingleScanResult = new WifiScanner.ScanData(0, 0, 0,
                         getBandScanned(mLastScanSettings.singleScanFreqs),
                         singleScanResults.toArray(new ScanResult[singleScanResults.size()]));
-                mLastScanSettings.singleScanEventHandler
-                        .onScanStatus(WifiNative.WIFI_SCAN_RESULTS_AVAILABLE);
+                if (isPartial) {
+                    mLastScanSettings.singleScanEventHandler
+                            .onScanStatus(WifiNative.WIFI_SCAN_PARTIAL_RESULTS_AVAILABLE);
+                } else {
+                    mLastScanSettings.singleScanEventHandler
+                            .onScanStatus(WifiNative.WIFI_SCAN_RESULTS_AVAILABLE);
+                }
             }
-
-            mLastScanSettings = null;
+            if (!isPartial) {
+                WifiGbk.ageBssCache(); // wifigbk++
+                mLastScanSettings = null;
+            }
         }
     }
 

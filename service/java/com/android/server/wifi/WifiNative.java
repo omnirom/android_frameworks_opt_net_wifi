@@ -49,6 +49,7 @@ import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.NetdWrapper;
 import com.android.server.wifi.util.NetdWrapper.NetdEventObserver;
+import com.android.wifi.resources.R;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -70,6 +71,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.BitSet;
+import android.os.Message;
 
 /**
  * Native calls for bring up/shut down of the supplicant daemon and for
@@ -92,6 +94,10 @@ public class WifiNative {
     private final WifiInjector mWifiInjector;
     private NetdWrapper mNetdWrapper;
     private boolean mVerboseLoggingEnabled = false;
+    /* Trigger periodic partial scan results*/
+    private static final int PERIODIC_PARTIAL_SCAN_RESULT_EVENT = 1;
+    private static String mIfaceNameforPartialScanResult;
+    private boolean mAllowConnectionOnPartialScanResults = false;
 
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
@@ -134,6 +140,9 @@ public class WifiNative {
         mHostapdHal.enableSoftApBeaconProtFeature(enable);
     }
 
+    public void allowConnectOnPartialScanResults(boolean enable) {
+        mAllowConnectionOnPartialScanResults = enable;
+    }
     public static class WifiGenerationStatus {
 
         public int generation;
@@ -392,12 +401,14 @@ public class WifiNative {
         @Override
         public void onScanResultReady() {
             Log.d(TAG, "Scan result ready event");
+            mPartialScanResultsHandler.removeMessages(PERIODIC_PARTIAL_SCAN_RESULT_EVENT);
             mWifiMonitor.broadcastScanResultEvent(mIfaceName);
         }
 
         @Override
         public void onScanFailed() {
             Log.d(TAG, "Scan failed event");
+            mPartialScanResultsHandler.removeMessages(PERIODIC_PARTIAL_SCAN_RESULT_EVENT);
             mWifiMonitor.broadcastScanFailedEvent(mIfaceName);
         }
     }
@@ -1499,6 +1510,7 @@ public class WifiNative {
     public void teardownInterface(@NonNull String ifaceName) {
         synchronized (mLock) {
             final Iface iface = mIfaceMgr.getIface(ifaceName);
+            mPartialScanResultsHandler.removeMessages(PERIODIC_PARTIAL_SCAN_RESULT_EVENT);
             if (iface == null) {
                 Log.e(TAG, "Trying to teardown an invalid iface=" + ifaceName);
                 return;
@@ -1641,6 +1653,7 @@ public class WifiNative {
     public boolean scan(
             @NonNull String ifaceName, @WifiAnnotations.ScanType int scanType, Set<Integer> freqs,
             List<String> hiddenNetworkSSIDs) {
+        Log.d(TAG, "Scan trigered from WifiNative");
         List<byte[]> hiddenNetworkSsidsArrays = new ArrayList<>();
         for (String hiddenNetworkSsid : hiddenNetworkSSIDs) {
             try {
@@ -1656,7 +1669,40 @@ public class WifiNative {
                 continue;
             }
         }
-        return mWifiCondManager.startScan(ifaceName, scanType, freqs, hiddenNetworkSsidsArrays);
+        mIfaceNameforPartialScanResult = ifaceName;
+        boolean scanRequested = mWifiCondManager.startScan(ifaceName, scanType, freqs,
+                                hiddenNetworkSsidsArrays);
+        if (scanRequested &&
+            ((mWifiInjector.getClientModeImpl().isDisconnected()) ||
+             mAllowConnectionOnPartialScanResults)) {
+              schedulePeriodicPartialScanResult();
+        }
+        return scanRequested;
+    }
+
+    Handler mPartialScanResultsHandler = new Handler() {
+       @Override
+       public void handleMessage(Message msg) {
+           switch (msg.what) {
+           case PERIODIC_PARTIAL_SCAN_RESULT_EVENT:
+               Log.d(TAG,"Broadcast partial scan results event");
+               mWifiMonitor.broadcastPartialScanResultEvent(mIfaceNameforPartialScanResult);
+               schedulePeriodicPartialScanResult();
+               break;
+           default:
+               break;
+           }
+       }
+    };
+
+    private void schedulePeriodicPartialScanResult() {
+        Message msg = mPartialScanResultsHandler.obtainMessage(PERIODIC_PARTIAL_SCAN_RESULT_EVENT);
+        int wifiPartialScanResultsFetchingPeriod = mWifiInjector.getContext().getResources().getInteger(
+                                                   R.integer.config_wifi_partial_scan_results_fetching_period_ms);
+        if (wifiPartialScanResultsFetchingPeriod == 0)
+            return;
+        mPartialScanResultsHandler.sendMessageDelayed(msg,
+            wifiPartialScanResultsFetchingPeriod);
     }
 
     /**
@@ -3074,6 +3120,7 @@ public class WifiNative {
     public static final int WIFI_SCAN_THRESHOLD_NUM_SCANS = 1;
     public static final int WIFI_SCAN_THRESHOLD_PERCENT = 2;
     public static final int WIFI_SCAN_FAILED = 3;
+    public static final int WIFI_SCAN_PARTIAL_RESULTS_AVAILABLE = 4;
 
     /**
      * Starts a background scan.
@@ -4040,13 +4087,13 @@ public class WifiNative {
         public static final int BAND_5G = 2;
     }
 
-    public void qtiUpdateConnectedBand(boolean set, int wifiId, int band) {
+    public void qtiUpdateConnectedBand(int wifiId, int band) {
         if (band < 0 || band > ConnectedBand.BAND_5G) {
             Log.e(TAG, "Unknown band option: " + band);
             return;
         }
 
-        if (set)
+        if (band != ConnectedBand.BAND_NONE)
             mIfaceBands.put(wifiId, band);
         else
             mIfaceBands.remove(wifiId);
