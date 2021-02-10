@@ -16,6 +16,8 @@
 
 package com.android.wifitrackerlib;
 
+import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
+import static android.net.NetworkCapabilities.TRANSPORT_CELLULAR;
 import static android.net.NetworkCapabilities.TRANSPORT_WIFI;
 
 import static java.util.stream.Collectors.toList;
@@ -139,6 +141,9 @@ public class BaseWifiTracker implements LifecycleObserver {
     protected final long mScanIntervalMillis;
     protected final ScanResultUpdater mScanResultUpdater;
     protected final WifiNetworkScoreCache mWifiNetworkScoreCache;
+    protected boolean mIsWifiValidated;
+    protected boolean mIsWifiDefaultRoute;
+    protected boolean mIsCellDefaultRoute;
     private final Set<NetworkKey> mRequestedScoreKeys = new HashSet<>();
 
     // Network request for listening on changes to Wifi link properties and network capabilities
@@ -149,14 +154,55 @@ public class BaseWifiTracker implements LifecycleObserver {
     private final ConnectivityManager.NetworkCallback mNetworkCallback =
             new ConnectivityManager.NetworkCallback() {
                 @Override
-                public void onLinkPropertiesChanged(Network network, LinkProperties lp) {
+                public void onLinkPropertiesChanged(@NonNull Network network,
+                        @NonNull LinkProperties lp) {
                     handleLinkPropertiesChanged(lp);
                 }
 
                 @Override
-                public void onCapabilitiesChanged(Network network,
-                        NetworkCapabilities networkCapabilities) {
+                public void onCapabilitiesChanged(@NonNull Network network,
+                        @NonNull NetworkCapabilities networkCapabilities) {
+                    final boolean oldWifiValidated = mIsWifiValidated;
+                    mIsWifiValidated = networkCapabilities.hasCapability(NET_CAPABILITY_VALIDATED);
+                    if (isVerboseLoggingEnabled() && mIsWifiValidated != oldWifiValidated) {
+                        Log.v(mTag, "Is Wifi validated: " + mIsWifiValidated);
+                    }
                     handleNetworkCapabilitiesChanged(networkCapabilities);
+                }
+
+                @Override
+                public void onLost(@NonNull Network network) {
+                    mIsWifiValidated = false;
+                }
+            };
+
+    private final ConnectivityManager.NetworkCallback mDefaultNetworkCallback =
+            new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onCapabilitiesChanged(@NonNull Network network,
+                        @NonNull NetworkCapabilities networkCapabilities) {
+                    final boolean oldWifiDefault = mIsWifiDefaultRoute;
+                    final boolean oldCellDefault = mIsCellDefaultRoute;
+                    mIsWifiDefaultRoute = networkCapabilities.hasTransport(TRANSPORT_WIFI);
+                    mIsCellDefaultRoute = networkCapabilities.hasTransport(TRANSPORT_CELLULAR);
+                    if (mIsWifiDefaultRoute != oldWifiDefault
+                            || mIsCellDefaultRoute != oldCellDefault) {
+                        if (isVerboseLoggingEnabled()) {
+                            Log.v(mTag, "Wifi is the default route: " + mIsWifiDefaultRoute);
+                            Log.v(mTag, "Cell is the default route: " + mIsCellDefaultRoute);
+                        }
+                        handleDefaultRouteChanged();
+                    }
+                }
+
+                public void onLost(@NonNull Network network) {
+                    mIsWifiDefaultRoute = false;
+                    mIsCellDefaultRoute = false;
+                    if (isVerboseLoggingEnabled()) {
+                        Log.v(mTag, "Wifi is the default route: false");
+                        Log.v(mTag, "Cell is the default route: false");
+                    }
+                    handleDefaultRouteChanged();
                 }
             };
 
@@ -227,6 +273,22 @@ public class BaseWifiTracker implements LifecycleObserver {
                 /* broadcastPermission */ null, mWorkerHandler);
         mConnectivityManager.registerNetworkCallback(mNetworkRequest, mNetworkCallback,
                 mWorkerHandler);
+        mConnectivityManager.registerDefaultNetworkCallback(mDefaultNetworkCallback,
+                mWorkerHandler);
+        final NetworkCapabilities defaultNetworkCapabilities = mConnectivityManager
+                .getNetworkCapabilities(mConnectivityManager.getActiveNetwork());
+        if (defaultNetworkCapabilities != null) {
+            mIsWifiDefaultRoute = defaultNetworkCapabilities.hasTransport(TRANSPORT_WIFI);
+            mIsCellDefaultRoute = defaultNetworkCapabilities.hasTransport(TRANSPORT_CELLULAR);
+        } else {
+            mIsWifiDefaultRoute = false;
+            mIsCellDefaultRoute = false;
+        }
+        if (isVerboseLoggingEnabled()) {
+            Log.v(mTag, "Wifi is the default route: " + mIsWifiDefaultRoute);
+            Log.v(mTag, "Cell is the default route: " + mIsCellDefaultRoute);
+        }
+
         mNetworkScoreManager.registerNetworkScoreCache(
                 NetworkKey.TYPE_WIFI,
                 mWifiNetworkScoreCache,
@@ -248,6 +310,7 @@ public class BaseWifiTracker implements LifecycleObserver {
         mWorkerHandler.post(mScanner::stop);
         mContext.unregisterReceiver(mBroadcastReceiver);
         mConnectivityManager.unregisterNetworkCallback(mNetworkCallback);
+        mConnectivityManager.unregisterNetworkCallback(mDefaultNetworkCallback);
         mNetworkScoreManager.unregisterNetworkScoreCache(NetworkKey.TYPE_WIFI,
                 mWifiNetworkScoreCache);
         mWorkerHandler.post(mRequestedScoreKeys::clear);
@@ -333,6 +396,15 @@ public class BaseWifiTracker implements LifecycleObserver {
     }
 
     /**
+     * Handle when the default route changes. Whether Wifi is the default route is stored in
+     * mIsWifiDefaultRoute.
+     */
+    @WorkerThread
+    protected void handleDefaultRouteChanged() {
+        // Do nothing.
+    }
+
+    /**
      * Handle updates to the Wifi network score cache, which is stored in mWifiNetworkScoreCache
      */
     @WorkerThread
@@ -400,8 +472,7 @@ public class BaseWifiTracker implements LifecycleObserver {
      */
     protected interface BaseWifiTrackerCallback {
         /**
-         * Called when the state of Wi-Fi has changed. The new value can be read through
-         * {@link #getWifiState()}
+         * Called when the value for {@link #getWifiState() has changed.
          */
         @MainThread
         void onWifiStateChanged();

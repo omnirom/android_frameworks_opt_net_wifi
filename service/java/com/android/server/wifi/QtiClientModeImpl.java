@@ -195,10 +195,10 @@ public class QtiClientModeImpl extends StateMachine {
     private boolean mVerboseLoggingEnabled = false;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
 
-    /* debug flag, indicating if handling of ASSOCIATION_REJECT ended up blacklisting
+    /* debug flag, indicating if handling of ASSOCIATION_REJECT ended up blocklisting
      * the corresponding BSSID.
      */
-    private boolean mDidBlackListBSSID = false;
+    private boolean mDidBlockListBSSID = false;
 
     /**
      * Log with error attribute
@@ -714,7 +714,8 @@ public class QtiClientModeImpl extends StateMachine {
                             WifiCarrierInfoManager wifiCarrierInfoManager,
                             EapFailureNotifier eapFailureNotifier,
                             SimRequiredNotifier simRequiredNotifier,
-                            QtiClientModeManager.Listener listener, WifiConfigManager wifiConfigManager) {
+                            QtiClientModeManager.Listener listener, WifiConfigManager wifiConfigManager,
+                            DeviceConfigFacade deviceConfigFacade) {
         super(TAG, looper);
         mWifiInjector = wifiInjector;
         mWifiMetrics = mWifiInjector.getWifiMetrics();
@@ -766,7 +767,8 @@ public class QtiClientModeImpl extends StateMachine {
 
         mWifiScoreReport = new WifiScoreReport(mWifiInjector.getScoringParams(), mClock,
                 mWifiMetrics, mWifiInfo, mWifiNative, mBssidBlocklistMonitor,
-                mWifiInjector.getWifiThreadRunner());
+                mWifiInjector.getWifiThreadRunner(), deviceConfigFacade, context,
+                getHandler().getLooper(), mFacade);
 
         mNetworkCapabilitiesFilter = new NetworkCapabilities.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -1804,7 +1806,7 @@ public class QtiClientModeImpl extends StateMachine {
                     sb.append(" ");
                     sb.append(bssid);
                 }
-                sb.append(" blacklist=" + Boolean.toString(mDidBlackListBSSID));
+                sb.append(" blocklist=" + Boolean.toString(mDidBlockListBSSID));
                 break;
             case WifiMonitor.NETWORK_CONNECTION_EVENT:
                 sb.append(" ");
@@ -2075,9 +2077,6 @@ public class QtiClientModeImpl extends StateMachine {
                 break;
             case WifiMonitor.NETWORK_CONNECTION_EVENT:
                 s = "NETWORK_CONNECTION_EVENT";
-                break;
-            case WifiMonitor.FILS_NETWORK_CONNECTION_EVENT:
-                s = "FILS_NETWORK_CONNECTION_EVENT";
                 break;
             case WifiMonitor.NETWORK_DISCONNECTION_EVENT:
                 s = "NETWORK_DISCONNECTION_EVENT";
@@ -3470,7 +3469,7 @@ public class QtiClientModeImpl extends StateMachine {
             switch (message.what) {
                 case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
                     stopIpClient();
-                    mDidBlackListBSSID = false;
+                    mDidBlockListBSSID = false;
                     bssid = (String) message.obj;
                     timedOut = message.arg1 > 0;
                     reasonCode = message.arg2;
@@ -4910,13 +4909,10 @@ public class QtiClientModeImpl extends StateMachine {
                                             DISABLED_NO_INTERNET_TEMPORARY);
                                 }
                                 int rssi = mWifiInfo.getRssi();
-                                int sufficientRssi = mWifiInjector.getScoringParams()
-                                        .getSufficientRssi(mWifiInfo.getFrequency());
-                                boolean isLowRssi = rssi < sufficientRssi;
                                 mBssidBlocklistMonitor.handleBssidConnectionFailure(
                                         mLastBssid, config.SSID,
                                         BssidBlocklistMonitor.REASON_NETWORK_VALIDATION_FAILURE,
-                                        isLowRssi);
+                                        rssi);
                                 mWifiScoreCard.noteValidationFailure(mWifiInfo);
                             }
                         }
@@ -4965,12 +4961,9 @@ public class QtiClientModeImpl extends StateMachine {
                     if (!localGen) { // ignore disconnects initiated by wpa_supplicant.
                         mWifiScoreCard.noteNonlocalDisconnect(message.arg2);
                         int rssi = mWifiInfo.getRssi();
-                        int sufficientRssi = mWifiInjector.getScoringParams()
-                                .getSufficientRssi(mWifiInfo.getFrequency());
-                        boolean isLowRssi = rssi < sufficientRssi;
                         mBssidBlocklistMonitor.handleBssidConnectionFailure(mWifiInfo.getBSSID(),
                                 mWifiInfo.getSSID(),
-                                BssidBlocklistMonitor.REASON_ABNORMAL_DISCONNECT, isLowRssi);
+                                BssidBlocklistMonitor.REASON_ABNORMAL_DISCONNECT, rssi);
                     }
                     config = getCurrentWifiConfiguration();
 
@@ -5607,17 +5600,18 @@ public class QtiClientModeImpl extends StateMachine {
         if ((frameData.mBssTmDataFlagsMask
                 & MboOceConstants.BTM_DATA_FLAG_MBO_ASSOC_RETRY_DELAY_INCLUDED)
                 != 0) {
-            long duration = frameData.mBlackListDurationMs;
+            long duration = frameData.mBlockListDurationMs;
             mWifiMetrics.incrementSteeringRequestCountIncludingMboAssocRetryDelay();
             if (duration == 0) {
                 /*
                  * When MBO assoc retry delay is set to zero(reserved as per spec),
-                 * blacklist the BSS for sometime to avoid AP rejecting the re-connect request.
+                 * blocklist the BSS for sometime to avoid AP rejecting the re-connect request.
                  */
-                duration = MboOceConstants.DEFAULT_BLACKLIST_DURATION_MS;
+                duration = MboOceConstants.DEFAULT_BLOCKLIST_DURATION_MS;
             }
-            // Blacklist the current BSS
-            mBssidBlocklistMonitor.blockBssidForDurationMs(bssid, ssid, duration);
+            // Blocklist the current BSS
+            mBssidBlocklistMonitor.blockBssidForDurationMs(bssid, ssid, duration,
+                    BssidBlocklistMonitor.REASON_FRAMEWORK_DISCONNECT_MBO_OCE, 0);
         }
 
         if (frameData.mStatus != MboOceConstants.BTM_RESPONSE_STATUS_ACCEPT) {
