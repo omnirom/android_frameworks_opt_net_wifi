@@ -74,7 +74,6 @@ public class HostapdHal {
     private boolean mSoftApBeaconProtFeatureEnabled = false;
     private final Context mContext;
     private final Handler mEventHandler;
-    private String mCountryCode = null;
     private boolean mForceApChannel = false;
     private int mForcedApBand;
     private int mForcedApChannel;
@@ -1249,7 +1248,6 @@ public class HostapdHal {
             ifaceParams.hwModeParams.enable80211AC =
                     mContext.getResources().getBoolean(
                             R.bool.config_wifi_softap_ieee80211ac_supported);
-            vendorIfaceParams.countryCode = (mCountryCode == null) ? "" : mCountryCode;
             vendorIfaceParams.bridgeIfaceName = "";
 
             int band = config.getBand();
@@ -1478,13 +1476,6 @@ public class HostapdHal {
             acsChannelRanges.add(acsChannelRange);
         }
         return acsChannelRanges;
-    }
-
-    /**
-     * set country code for vendor hostapd.
-     */
-    public void setCountryCode(String countryCode) {
-        mCountryCode = countryCode;
     }
 
     /**
