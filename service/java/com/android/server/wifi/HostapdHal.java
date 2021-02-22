@@ -1276,19 +1276,30 @@ public class HostapdHal {
                 ifaceParams.channelParams.band = getHalBand(band);
 
                 if (!isVendorV1_1() && !isVendorV1_2()) {
-                    HostapdStatus status = mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams, nwParamsV1_2.V1_0);
-                    if (checkVendorStatusAndLogFailure(status, methodStr) && (mIHostapdVendor != null)) {
-                        IHostapdVendorIfaceCallback vendorcallback = new HostapdVendorIfaceHalCallback(ifaceName, listener);
-                        if (vendorcallback != null) {
-                            if (!registerVendorCallback(ifaceParams.ifaceName, mIHostapdVendor, vendorcallback)) {
-                                Log.e(TAG, "Failed to register Hostapd Vendor callback");
-                                return false;
-                            }
-                        } else {
-                            Log.e(TAG, "Failed to create vendorcallback instance");
-                        }
-                        return true;
+                    if (mIHostapdVendor == null) {
+                        Log.e(TAG, "Failed to get mIHostapdVendor");
+                        return false;
                     }
+
+                    IHostapdVendorIfaceCallback vendorcallback =
+                        new HostapdVendorIfaceHalCallback(ifaceName, listener);
+                    if (vendorcallback == null) {
+                        Log.e(TAG, "Failed to create vendorcallback instance");
+                        return false;
+                    }
+
+                    if (!registerVendorCallback(ifaceParams.ifaceName,
+                                                mIHostapdVendor,
+                                                vendorcallback)) {
+                        Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                        return false;
+                    }
+
+                    HostapdStatus status =
+                        mIHostapdVendor.addVendorAccessPoint(vendorIfaceParams,
+                                                             nwParamsV1_2.V1_0);
+                    if (checkVendorStatusAndLogFailure(status, methodStr))
+                        return true;
                 } else {
                     HostapdStatus status;
                     vendor.qti.hardware.wifi.hostapd.V1_1.IHostapdVendor.VendorIfaceParams
@@ -1309,6 +1320,19 @@ public class HostapdHal {
                                     toVendorAcsChannelRanges(mContext.getResources().getString(
                                         R.string.config_wifiSoftap5gChannelList)));
                         }
+                    }
+
+                    HostapdVendorIfaceHalCallbackV1_1 vendorcallback_1_1 =
+                        new HostapdVendorIfaceHalCallbackV1_1(ifaceName, listener);
+                    if (vendorcallback_1_1 == null) {
+                        Log.e(TAG, "Failed to create vendorcallback instance");
+                        return false;
+                    }
+
+                    if (!registerVendorCallback_1_1(ifaceParams.ifaceName,
+                                                    vendorcallback_1_1)) {
+                        Log.e(TAG, "Failed to register Hostapd Vendor callback");
+                        return false;
                     }
 
                     if (isVendorV1_2()) {
@@ -1380,19 +1404,8 @@ public class HostapdHal {
                         status = iHostapdVendorV1_1.addVendorAccessPoint_1_1(vendorIfaceParams1_1, nwParamsV1_2.V1_0);
                     }
 
-                    if (checkVendorStatusAndLogFailure(status, methodStr)) {
-                        HostapdVendorIfaceHalCallbackV1_1 vendorcallback_1_1 =
-                            new HostapdVendorIfaceHalCallbackV1_1(ifaceName, listener);
-                        if (vendorcallback_1_1 != null) {
-                            if (!registerVendorCallback_1_1(ifaceParams.ifaceName, vendorcallback_1_1)) {
-                                Log.e(TAG, "Failed to register Hostapd Vendor callback");
-                                return false;
-                            }
-                        } else {
-                            Log.e(TAG, "Failed to create vendorcallback instance");
-                        }
+                    if (checkVendorStatusAndLogFailure(status, methodStr))
                         return true;
-                    }
                 }
             } catch (IllegalArgumentException e) {
                 Log.e(TAG, "Unrecognized apBand: " + band);
