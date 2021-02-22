@@ -455,7 +455,22 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * ClientMode stop properly cleans up state
+     * ClientMode stop before start has been processed properly cleans up state & invokes the
+     * onStopped callback.
+     */
+    @Test
+    public void clientModeStopBeforeStartCleansUpState() throws Exception {
+        // Invoke stop before the inernal start is processed by the state machine.
+        mClientModeManager.stop();
+        mLooper.dispatchAll();
+        verify(mListener).onStopped();
+
+        // Don't initiate wifi native setup.
+        verifyNoMoreInteractions(mListener, mWifiNative);
+    }
+
+    /**
+     * ClientMode stop properly cleans up state & invokes the onStopped callback.
      */
     @Test
     public void clientModeStopCleansUpState() throws Exception {
