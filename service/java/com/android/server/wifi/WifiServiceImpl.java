@@ -4292,13 +4292,17 @@ public class WifiServiceImpl extends BaseWifiService {
         WifiConfiguration config = mWifiInjector.getWifiConfigManager().getConfiguredNetwork(netId);
         if (config == null) {
             for(int i = STA_SECONDARY; i <= getNumConcurrentStaSupported();i++) {
-                config = mActiveModeWarden.getQtiClientModeImpl(i).getConfiguredNetwork(netId);
+                QtiClientModeImpl impl = mActiveModeWarden.getQtiClientModeImpl(i);
+                if (impl != null) {
+                    config = impl.getConfiguredNetwork(netId);
+                }
                 if (config != null) {
                     break;
                 }
             }
-            if (config == null)
+            if (config == null) {
                 return -1;
+            }
         }
         return config.staId;
     }
