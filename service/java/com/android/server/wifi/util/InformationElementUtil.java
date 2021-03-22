@@ -1252,8 +1252,9 @@ public class InformationElementUtil {
                     }
                 }
 
-                if (ie.id == InformationElement.EID_VHT_CAPABILITIES && ie.bytes != null &&
-                    ie.bytes.length > 0 && ((ie.bytes[1] & CAP_VHT_8SS_OFFSET) == CAP_VHT_8SS_OFFSET)) {
+                if (ie.id == InformationElement.EID_VHT_CAPABILITIES && ie.bytes != null
+                        && ie.bytes.length > 1
+                        && ((ie.bytes[1] & CAP_VHT_8SS_OFFSET) == CAP_VHT_8SS_OFFSET)) {
                     isVht8ss = true;
                 } else if (ie.id == InformationElement.EID_EXTENSION_PRESENT
                                && ie.idExt == InformationElement.EID_EXT_HE_CAPABILITIES) {
