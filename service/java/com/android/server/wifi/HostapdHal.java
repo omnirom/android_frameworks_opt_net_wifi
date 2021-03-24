@@ -426,7 +426,7 @@ public class HostapdHal {
             mConfig6gChannelList =
                 mContext.getResources().getString(R.string.config_wifiSoftap6gChannelList);
             if (TextUtils.isEmpty(mConfig6gChannelList)) {
-                mConfig6gChannelList = "1-254";
+                mConfig6gChannelList = "1-233";
             } else {
                 retVal = true;
             }
