@@ -374,7 +374,7 @@ public class WifiLockManager {
         updateOpMode();
     }
 
-    private void setBlameHiPerfLocks(boolean shouldBlame) {
+    private synchronized void setBlameHiPerfLocks(boolean shouldBlame) {
         for (WifiLock lock : mWifiLocks) {
             if (lock.mMode == WifiManager.WIFI_MODE_FULL_HIGH_PERF) {
                 setBlameHiPerfWs(lock.getWorkSource(), shouldBlame);
