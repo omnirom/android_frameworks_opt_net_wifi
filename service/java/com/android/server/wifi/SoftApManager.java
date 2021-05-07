@@ -444,28 +444,37 @@ public class SoftApManager implements ActiveModeManager {
     }
 
     /**
+     * Disconnect a client with specified mac address.
+     * Using broadcast mac to disconnect all clients.
+     */
+    private void forceClientDisconnect(@NonNull String ifaceName,
+            @NonNull MacAddress client, int reasonCode) {
+        if (mWifiApConfigStore.getDualSapStatus()) {
+            if (!mDualSapIfacesDestroyed) {
+                if(!TextUtils.isEmpty(mdualApInterfaces[0])) {
+                    mWifiNative.forceClientDisconnect(
+                            mdualApInterfaces[0], client, reasonCode);
+                }
+                if(!TextUtils.isEmpty(mdualApInterfaces[1])) {
+                    mWifiNative.forceClientDisconnect(
+                            mdualApInterfaces[1], client, reasonCode);
+                }
+            }
+        } else {
+            if (!TextUtils.isEmpty(ifaceName)) {
+                mWifiNative.forceClientDisconnect(ifaceName, client, reasonCode);
+            }
+        }
+    }
+
+    /**
      * Disconnect all connected clients on active softap interface(s).
      * This is usually done just before stopSoftAp().
      */
     private void disconnectAllClients() {
-        if (mWifiApConfigStore.getDualSapStatus() && !mDualSapIfacesDestroyed) {
-            if(!TextUtils.isEmpty(mdualApInterfaces[0])) {
-                mWifiNative.forceClientDisconnect(mdualApInterfaces[0],
-                        MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
-                        SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
-            }
-            if(!TextUtils.isEmpty(mdualApInterfaces[1])) {
-                mWifiNative.forceClientDisconnect(mdualApInterfaces[1],
-                        MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
-                        SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
-            }
-        } else {
-            if(!TextUtils.isEmpty(mApInterfaceName)) {
-                mWifiNative.forceClientDisconnect(mApInterfaceName,
-                        MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
-                        SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
-            }
-        }
+        forceClientDisconnect(mApInterfaceName,
+                MacAddress.fromString("ff:ff:ff:ff:ff:ff"),
+                SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
     }
 
     /**
@@ -491,7 +500,7 @@ public class SoftApManager implements ActiveModeManager {
 
         if (mBlockedClientList.contains(newClient.getMacAddress())) {
             Log.d(TAG, "Force disconnect for client: " + newClient + "in blocked list");
-            mWifiNative.forceClientDisconnect(
+            forceClientDisconnect(
                     mApInterfaceName, newClient.getMacAddress(),
                     WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
             return false;
@@ -501,7 +510,7 @@ public class SoftApManager implements ActiveModeManager {
             mSoftApCallback.onBlockedClientConnecting(newClient,
                     WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
             Log.d(TAG, "Force disconnect for unauthorized client: " + newClient);
-            mWifiNative.forceClientDisconnect(
+            forceClientDisconnect(
                     mApInterfaceName, newClient.getMacAddress(),
                     WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
             return false;
@@ -513,7 +522,7 @@ public class SoftApManager implements ActiveModeManager {
 
         if (mConnectedClients.size() >= maxConfig) {
             Log.i(TAG, "No more room for new client:" + newClient);
-            mWifiNative.forceClientDisconnect(
+            forceClientDisconnect(
                     mApInterfaceName, newClient.getMacAddress(),
                     WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
             mSoftApCallback.onBlockedClientConnecting(newClient,
@@ -659,6 +668,7 @@ public class SoftApManager implements ActiveModeManager {
             SoftApConfiguration localConfig;
             SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder(config);
             String bridgeIfacename = mApInterfaceName;
+            SoftApModeConfiguration savedApConfig = mApConfig;
 
             mApInterfaceName = mdualApInterfaces[0];
             localConfig = configBuilder.setBand(SoftApConfiguration.BAND_2GHZ).build();
@@ -675,6 +685,7 @@ public class SoftApManager implements ActiveModeManager {
             }
 
             mApInterfaceName = bridgeIfacename;
+            mApConfig = savedApConfig;
 
             return validateDualSapSetupResult(result);
         }
@@ -690,6 +701,7 @@ public class SoftApManager implements ActiveModeManager {
             SoftApConfiguration.Builder openConfigBuilder = new SoftApConfiguration.Builder(config);
 
             String bridgeIfacename = mApInterfaceName;
+            SoftApModeConfiguration savedApConfig = mApConfig;
 
             mApInterfaceName = mdualApInterfaces[0];
             oweConfigBuilder.setOweTransIfaceName(mdualApInterfaces[1]);
@@ -715,6 +727,7 @@ public class SoftApManager implements ActiveModeManager {
             }
 
             mApInterfaceName = bridgeIfacename;
+            mApConfig = savedApConfig;
 
             return validateDualSapSetupResult(result);
         }
@@ -722,8 +735,10 @@ public class SoftApManager implements ActiveModeManager {
         SoftApStateMachine(Looper looper) {
             super(TAG, looper);
 
+            // CHECKSTYLE:OFF IndentationCheck
             addState(mIdleState);
-            addState(mStartedState);
+                addState(mStartedState, mIdleState);
+            // CHECKSTYLE:ON IndentationCheck
 
             setInitialState(mIdleState);
             start();
@@ -736,6 +751,11 @@ public class SoftApManager implements ActiveModeManager {
                 mDataInterfaceName = null;
                 mIfaceIsUp = false;
                 mIfaceIsDestroyed = false;
+            }
+
+            @Override
+            public void exit() {
+                mModeListener.onStopped();
             }
 
             @Override
@@ -879,7 +899,7 @@ public class SoftApManager implements ActiveModeManager {
                               || (mApConfig.getSoftApConfiguration().isClientControlByUserEnabled()
                               && !mAllowedClientList.contains(client.getMacAddress()))) {
                         Log.d(TAG, "Force disconnect for not allowed client: " + client);
-                        mWifiNative.forceClientDisconnect(
+                        forceClientDisconnect(
                                 mApInterfaceName, client.getMacAddress(),
                                 WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_BLOCKED_BY_USER);
                         targetDisconnectClientNumber--;
@@ -895,7 +915,7 @@ public class SoftApManager implements ActiveModeManager {
                         WifiClient allowedClient = allowedClientIterator.next();
                         Log.d(TAG, "Force disconnect for client due to no more room: "
                                 + allowedClient);
-                        mWifiNative.forceClientDisconnect(
+                        forceClientDisconnect(
                                 mApInterfaceName, allowedClient.getMacAddress(),
                                 WifiManager.SAP_CLIENT_BLOCK_REASON_CODE_NO_MORE_STAS);
                         targetDisconnectClientNumber--;
@@ -1049,8 +1069,6 @@ public class SoftApManager implements ActiveModeManager {
                 mIfaceIsUp = false;
                 mIfaceIsDestroyed = false;
                 mRole = ROLE_UNSPECIFIED;
-                mStateMachine.quitNow();
-                mModeListener.onStopped();
                 setSoftApChannel(0, SoftApInfo.CHANNEL_WIDTH_INVALID);
             }
 
@@ -1131,7 +1149,7 @@ public class SoftApManager implements ActiveModeManager {
                         Log.i(TAG, "Timeout message received. Stopping soft AP.");
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
-                        transitionTo(mIdleState);
+                        quitNow();
                         break;
                     case CMD_INTERFACE_DESTROYED:
                         //teardown Dual SAP interfaces if required
@@ -1145,7 +1163,7 @@ public class SoftApManager implements ActiveModeManager {
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
                         mIfaceIsDestroyed = true;
-                        transitionTo(mIdleState);
+                        quitNow();
                         break;
                     case CMD_DUAL_SAP_INTERFACE_DESTROYED:
                         // one of the dual interface is destroyed by native layers. trigger full cleanup.
@@ -1172,7 +1190,7 @@ public class SoftApManager implements ActiveModeManager {
                                 WifiManager.SAP_START_FAILURE_GENERAL);
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_FAILED, 0);
-                        transitionTo(mIdleState);
+                        quitNow();
                         break;
                     case CMD_UPDATE_CAPABILITY:
                         // Capability should only changed by carrier requirement. Only apply to
@@ -1221,7 +1239,8 @@ public class SoftApManager implements ActiveModeManager {
                                     mApConfig.getTargetMode());
                         } else {
                             Log.d(TAG, "Ignore the config: " + newConfig
-                                    + " update since it requires restart");
+                                    + " update since it requires restart"
+                                    + " \n CurrentConfig: " + currentConfig);
                         }
                         break;
                     default:
