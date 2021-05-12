@@ -151,6 +151,25 @@ public class WifiGbk {
         return null;
     }
 
+    public static boolean isMixedGbkUtf(WifiConfiguration config) {
+        int gbkCount = 0;
+        int utfCount = 0;
+        String SSID = config.SSID;
+        int security = BssCache.getSecurity(config);
+
+        for (BssCache bss : mBssCacheList) {
+            if (bss.matches(SSID, security)) {
+                if (bss.isGbk) {
+                    gbkCount ++;
+                } else {
+                    utfCount ++;
+                }
+            }
+        }
+
+        return (gbkCount != 0 && utfCount != 0);
+    }
+
     /**
      * Get preferred Bss Cache - readable UTF SSID and security
      */
