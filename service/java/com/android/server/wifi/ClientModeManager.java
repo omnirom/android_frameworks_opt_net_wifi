@@ -485,9 +485,9 @@ public class ClientModeManager implements ActiveModeManager {
 
             // CHECKSTYLE:OFF IndentationCheck
             addState(mIdleState);
-            addState(mStartedState);
-                addState(mScanOnlyModeState, mStartedState);
-                addState(mConnectModeState, mStartedState);
+                addState(mStartedState, mIdleState);
+                    addState(mScanOnlyModeState, mStartedState);
+                    addState(mConnectModeState, mStartedState);
             // CHECKSTYLE:ON IndentationCheck
 
             setInitialState(mIdleState);
@@ -500,6 +500,11 @@ public class ClientModeManager implements ActiveModeManager {
                 Log.d(TAG, "entering IdleState");
                 mClientInterfaceName = null;
                 mIfaceIsUp = false;
+            }
+
+            @Override
+            public void exit() {
+                mModeListener.onStopped();
             }
 
             @Override
@@ -579,16 +584,18 @@ public class ClientModeManager implements ActiveModeManager {
                         Log.e(TAG, "Detected an interface down, reporting failure to "
                                 + "SelfRecovery");
                         mClientModeImpl.failureDetected(SelfRecovery.REASON_STA_IFACE_DOWN);
-                        transitionTo(mIdleState);
+                        // once interface down, nothing else to do...  stop the state machine
+                        quitNow();
                         break;
                     case CMD_INTERFACE_STATUS_CHANGED:
                         boolean isUp = message.arg1 == 1;
                         onUpChanged(isUp);
                         break;
                     case CMD_INTERFACE_DESTROYED:
-                        Log.d(TAG, "interface destroyed - client mode stopping");
+                        Log.e(TAG, "interface destroyed - client mode stopping");
                         mClientInterfaceName = null;
-                        transitionTo(mIdleState);
+                        // once interface destroyed, nothing else to do...  stop the state machine
+                        quitNow();
                         break;
                     default:
                         return NOT_HANDLED;
@@ -609,10 +616,7 @@ public class ClientModeManager implements ActiveModeManager {
                     mIfaceIsUp = false;
                 }
 
-                // once we leave started, nothing else to do...  stop the state machine
                 mRole = ROLE_UNSPECIFIED;
-                mStateMachine.quitNow();
-                mModeListener.onStopped();
             }
         }
 
