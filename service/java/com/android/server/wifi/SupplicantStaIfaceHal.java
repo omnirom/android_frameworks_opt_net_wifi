@@ -1238,10 +1238,10 @@ public class SupplicantStaIfaceHal {
      */
     public boolean connectToNetwork(@NonNull String ifaceName, @NonNull WifiConfiguration config) {
         synchronized (mLock) {
-            boolean isAscii = WifiGbk.isAllAscii(WifiGbk.getSsidBytes(config.SSID, "UTF-8")); // wifigbk++
-            logd("connectToNetwork " + config.getKey() + " isAscii=" + isAscii);
+            boolean isMixedGbkUtf = WifiGbk.isMixedGbkUtf(config); // wifigbk++
+            logd("connectToNetwork " + config.getKey() + " isMixedGbkUtf=" + isMixedGbkUtf);
             WifiConfiguration currentConfig = getCurrentNetworkLocalConfig(ifaceName);
-            if (WifiConfigurationUtil.isSameNetwork(config, currentConfig) && isAscii) {
+            if (WifiConfigurationUtil.isSameNetwork(config, currentConfig) && !isMixedGbkUtf) {
                 String networkSelectionBSSID = config.getNetworkSelectionStatus()
                         .getNetworkSelectionBSSID();
                 String networkSelectionBSSIDCurrent =
