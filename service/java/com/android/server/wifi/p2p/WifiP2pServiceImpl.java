@@ -245,6 +245,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     public static final int ENABLED                         = 1;
     public static final int DISABLED                        = 0;
 
+    private static final int P2P_CONNECT_TRIGGER_GROUP_NEG_REQ      = 1;
+    private static final int P2P_CONNECT_TRIGGER_INVITATION_REQ     = 2;
+    private static final int P2P_CONNECT_TRIGGER_OTHER              = 3;
+
     static final int P2P_BLUETOOTH_COEXISTENCE_MODE_DISABLED    = 1;
     static final int P2P_BLUETOOTH_COEXISTENCE_MODE_SENSE       = 2;
 
@@ -2321,7 +2325,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 switch (message.what) {
                     case PEER_CONNECTION_USER_ACCEPT:
                         mWifiNative.p2pStopFind();
-                        p2pConnectWithPinDisplay(mSavedPeerConfig);
+                        p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_GROUP_NEG_REQ);
                         mPeers.updateStatus(mSavedPeerConfig.deviceAddress, WifiP2pDevice.INVITED);
                         sendPeersChangedBroadcast();
                         transitionTo(mGroupNegotiationState);
@@ -2367,7 +2371,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         mWifiNative.p2pStopFind();
                         if (!reinvokePersistentGroup(mSavedPeerConfig)) {
                             // Do negotiation when persistence fails
-                            p2pConnectWithPinDisplay(mSavedPeerConfig);
+                            p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_INVITATION_REQ);
                         }
                         mPeers.updateStatus(mSavedPeerConfig.deviceAddress, WifiP2pDevice.INVITED);
                         sendPeersChangedBroadcast();
@@ -2417,7 +2421,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         }
                         if (mSavedPeerConfig.wps.setup == WpsInfo.PBC) {
                             if (mVerboseLoggingEnabled) logd("Found a match " + mSavedPeerConfig);
-                            p2pConnectWithPinDisplay(mSavedPeerConfig);
+                            p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_OTHER);
                             transitionTo(mGroupNegotiationState);
                         }
                         break;
@@ -2436,7 +2440,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             if (mVerboseLoggingEnabled) logd("Found a match " + mSavedPeerConfig);
                             // we already have the pin
                             if (!TextUtils.isEmpty(mSavedPeerConfig.wps.pin)) {
-                                p2pConnectWithPinDisplay(mSavedPeerConfig);
+                                p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_OTHER);
                                 transitionTo(mGroupNegotiationState);
                             } else {
                                 mJoinExistingGroup = false;
@@ -2461,7 +2465,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         if (mSavedPeerConfig.wps.setup == WpsInfo.DISPLAY) {
                             if (mVerboseLoggingEnabled) logd("Found a match " + mSavedPeerConfig);
                             mSavedPeerConfig.wps.pin = provDisc.pin;
-                            p2pConnectWithPinDisplay(mSavedPeerConfig);
+                            p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_OTHER);
                             notifyInvitationSent(provDisc.pin, device.deviceAddress);
                             transitionTo(mGroupNegotiationState);
                         }
@@ -2619,7 +2623,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
                             // Reinvocation has failed, try group negotiation
                             mSavedPeerConfig.netId = WifiP2pGroup.NETWORK_ID_PERSISTENT;
-                            p2pConnectWithPinDisplay(mSavedPeerConfig);
+                            p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_OTHER);
                         } else if (status == P2pStatus.INFORMATION_IS_CURRENTLY_UNAVAILABLE) {
 
                             // Devices setting persistent_reconnect to 0 in wpa_supplicant
@@ -2627,7 +2631,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             // "information is currently unavailable" error.
                             // So, try another way to connect for interoperability.
                             mSavedPeerConfig.netId = WifiP2pGroup.NETWORK_ID_PERSISTENT;
-                            p2pConnectWithPinDisplay(mSavedPeerConfig);
+                            p2pConnectWithPinDisplay(mSavedPeerConfig, P2P_CONNECT_TRIGGER_OTHER);
                         } else if (status == P2pStatus.NO_COMMON_CHANNEL) {
                             transitionTo(mFrequencyConflictState);
                         } else {
@@ -3640,7 +3644,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
          * Start a p2p group negotiation and display pin if necessary
          * @param config for the peer
          */
-        private void p2pConnectWithPinDisplay(WifiP2pConfig config) {
+        private void p2pConnectWithPinDisplay(WifiP2pConfig config, int triggerType) {
             if (config == null) {
                 Log.e(TAG, "Illegal argument(s)");
                 return;
@@ -3650,8 +3654,16 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 Log.e(TAG, "Invalid device");
                 return;
             }
+
+            boolean joinExistingGroup = dev.isGroupOwner();
+            if (triggerType == P2P_CONNECT_TRIGGER_GROUP_NEG_REQ) {
+                joinExistingGroup = false;
+            } else if (triggerType == P2P_CONNECT_TRIGGER_INVITATION_REQ) {
+                joinExistingGroup = true;
+            }
+
             config.groupOwnerIntent = selectGroupOwnerIntentIfNecessary(config);
-            String pin = mWifiNative.p2pConnect(config, dev.isGroupOwner());
+            String pin = mWifiNative.p2pConnect(config, joinExistingGroup);
             try {
                 Integer.parseInt(pin);
                 notifyInvitationSent(pin, config.deviceAddress);
