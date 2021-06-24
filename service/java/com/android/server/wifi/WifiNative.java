@@ -3060,14 +3060,14 @@ public class WifiNative {
                         }
                         //wifigbk++
                         if (!WifiGbk.isAllAscii(nativeNetwork.getSsid())) {
-                            android.net.wifi.nl80211.PnoNetwork nativeNetwork2 =
-                                new android.net.wifi.nl80211.PnoNetwork();
-                            nativeNetwork2.setHidden(nativeNetwork.isHidden());
-                            nativeNetwork2.setSsid(WifiGbk.toGbk(nativeNetwork.getSsid()));
-                            nativeNetwork2.setFrequenciesMhz(nativeNetwork.getFrequenciesMhz());
-                            if (nativeNetwork2.getSsid() != null) {
-                                pnoNetworks.add(nativeNetwork2);
-                                Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for " + nativeNetwork.getSsid());
+                            byte gbkBytes[] = WifiGbk.toGbk(nativeNetwork.getSsid());
+                            if (gbkBytes != null) {
+                                android.net.wifi.nl80211.PnoNetwork gbkNetwork =
+                                    network.toNativePnoNetwork();
+                                gbkNetwork.setSsid(gbkBytes);
+                                pnoNetworks.add(gbkNetwork);
+                                Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for "
+                                      + nativeNetwork.getSsid());
                             }
                         }
                         //wifigbk--
